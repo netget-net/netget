@@ -1,0 +1,1547 @@
+{
+  "schema": "netget.eval.v1",
+  "generated_at": "1793991736",
+  "model": "llama3.1:8b",
+  "runs_per_case": 1,
+  "seed": 43,
+  "temperature": null,
+  "determinism": "pass-rate over N independent runs with a pinned sampler seed; the seed makes an identical prompt answer identically, but each run's prompt carries its own ports and ids, so agreement is measured (totals.cases_*_agree) rather than assumed",
+  "totals": {
+    "cases_total": 34,
+    "cases_attempted": 34,
+    "cases_skipped": 0,
+    "runs_total": 34,
+    "runs_passed": 28,
+    "pass_rate": 0.8235294117647058,
+    "runs_recoverable": 0,
+    "pass_rate_with_lenient_parse": 0.8235294117647058,
+    "cases_with_repeats": 0,
+    "cases_verdicts_agree": 0,
+    "cases_actions_agree": 0
+  },
+  "protocols": [
+    {
+      "protocol": "bolt",
+      "client": "cypher-shell",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 1,
+      "runs": 3,
+      "runs_passed": 1,
+      "pass_rate": 0.3333333333333333,
+      "dominant_failures": [
+        "event_never_reached_model"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "coap",
+      "client": "coap-client",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 2,
+      "runs_passed": 2,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "dict",
+      "client": "dict",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 3,
+      "runs_passed": 3,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "gemini",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 3,
+      "runs_passed": 3,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "gopher",
+      "client": "curl",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 3,
+      "runs_passed": 3,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "ldap",
+      "client": "ldapsearch",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 3,
+      "runs_passed": 3,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "lmtp",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 2,
+      "runs_passed": 2,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "nostr",
+      "client": "nak",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 1,
+      "runs": 3,
+      "runs_passed": 1,
+      "pass_rate": 0.3333333333333333,
+      "dominant_failures": [
+        "client_left_before_model_answered"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "pop3",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 2,
+      "runs_passed": 2,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "prometheus",
+      "client": "sh",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 2,
+      "runs": 3,
+      "runs_passed": 2,
+      "pass_rate": 0.6666666666666666,
+      "dominant_failures": [
+        "executor_rejected_action"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "rsync",
+      "client": "rsync",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 2,
+      "runs_passed": 2,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "vault",
+      "client": "vault",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 3,
+      "runs_passed": 3,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "websocket",
+      "client": "websocat",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 1,
+      "runs": 2,
+      "runs_passed": 1,
+      "pass_rate": 0.5,
+      "dominant_failures": [
+        "wrong_content"
+      ],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    }
+  ],
+  "failure_modes": [
+    {
+      "mode": "client_left_before_model_answered",
+      "runs": 2,
+      "cases": [
+        "nostr/serve-notes",
+        "nostr/accept-film-note"
+      ],
+      "explanation": "The model was asked and the client hung up before it answered, so the call was abandoned with the connection. A probe problem — a client whose own timeout is shorter than a model call, or a harness that cut it off — not a prompt problem."
+    },
+    {
+      "mode": "event_never_reached_model",
+      "runs": 2,
+      "cases": [
+        "bolt/people-by-name",
+        "bolt/count"
+      ],
+      "explanation": "No model call happened. The request did not reach the LLM path — a harness or protocol wiring problem, not a prompt problem."
+    },
+    {
+      "mode": "executor_rejected_action",
+      "runs": 1,
+      "cases": [
+        "prometheus/latency-histogram"
+      ],
+      "explanation": "The protocol's own executor refused the action the model built. The description and the executor disagree about what the action accepts."
+    },
+    {
+      "mode": "wrong_content",
+      "runs": 1,
+      "cases": [
+        "websocket/echo"
+      ],
+      "explanation": "The model produced a valid, executable action whose content does not satisfy the instruction. This is the honest 'the model did not understand the task' bucket."
+    }
+  ],
+  "cases": [
+    {
+      "id": "gopher/welcome-menu",
+      "protocol": "gopher",
+      "instruction": "Serve a menu whose first item is labelled Welcome to NetGet.",
+      "client": "curl -sS --max-time 230 gopher://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Welcome to NetGet\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:55:40.191868Z DEBUG Executing action 0: Object {\"type\": String(\"send_gopher_menu\"), \"items\": Array [Object {\"type\": String(\"i\"), \"display\": String(\"Welcome to NetGet\")}, Object {\"type\": String(\"0\"), \"display\": String(\"About this server\"), \"selector\": String(\"/about.txt\")}, Object {\"type\": String(\"1\"), \"display\": String(\"Files\"), \"selector\": String(\"/files\")}, Object {\"type\": String(\"7\"), \"display\": String(\"Search the archive\"), \"selector\": String(\"/search\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gopher_menu\"), \"items\": Array [Object {\"type\": String(\"i\"), \"display\": String(\"Welcome to NetGet\")}, Object {\"type\": String(\"0\"), \"display\": String(\"About this server\"), \"selector\": String(\"/about.txt\")}, Object {\"type\": String(\"1\"), \"display\": String(\"Files\"), \"selector\": String(\"/files\")}, Object {\"type\": String(\"7\"), \"display\": String(\"Search the archive\"), \"selector\": String(\"/search\")}]}"
+          ],
+          "client_command": "curl -sS --max-time 230 gopher://127.0.0.1:59055/",
+          "client_output": "iWelcome to NetGet\tfake\t(NULL)\t0\r\n0About this server\t/about.txt\t127.0.0.1\t70\r\n1Files\t/files\t127.0.0.1\t70\r\n7Search the archive\t/search\t127.0.0.1\t70\r\n.\r\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.642323792
+        }
+      ]
+    },
+    {
+      "id": "gopher/text-selector",
+      "protocol": "gopher",
+      "instruction": "When the selector /about is asked for, return the text NetGet eval gopher server.",
+      "client": "curl -sS --max-time 230 gopher://127.0.0.1:{PORT}/0/about",
+      "independence": "protocol-client",
+      "expectation": "contains [\"NetGet eval gopher server\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:55:49.816066Z DEBUG Executing action 0: Object {\"type\": String(\"send_gopher_text\"), \"text\": String(\"NetGet eval gopher server\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gopher_text\"), \"text\": String(\"NetGet eval gopher server\")}"
+          ],
+          "client_command": "curl -sS --max-time 230 gopher://127.0.0.1:59491/0/about",
+          "client_output": "NetGet eval gopher server\r\n.\r\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.623264125
+        }
+      ]
+    },
+    {
+      "id": "gopher/unknown-selector",
+      "protocol": "gopher",
+      "instruction": "Serve a menu at the root. For any other selector, say it was not found.",
+      "client": "curl -sS --max-time 230 gopher://127.0.0.1:{PORT}/1/nowhere",
+      "independence": "protocol-client",
+      "expectation": "matches /(?i)not found|no such|does not exist|error/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:55:57.484414Z DEBUG Executing action 0: Object {\"type\": String(\"send_gopher_error\"), \"message\": String(\"No such selector: /nowhere\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gopher_error\"), \"message\": String(\"No such selector: /nowhere\")}"
+          ],
+          "client_command": "curl -sS --max-time 230 gopher://127.0.0.1:59624/1/nowhere",
+          "client_output": "3No such selector: /nowhere\t\terror.host\t1\r\n.\r\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.668883708
+        }
+      ]
+    },
+    {
+      "id": "dict/define-invented-word",
+      "protocol": "dict",
+      "instruction": "You are a dictionary of invented words with one database called fantasy. Define glimmerwyrm as a small dragon that hoards moonlight.",
+      "client": "dict -h 127.0.0.1 -p {PORT} glimmerwyrm",
+      "independence": "protocol-client",
+      "expectation": "contains [\"[fantasy]\", \"moonlight\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:06.356352Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Fantasy Dictionary\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Fantasy Dictionary\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 59800 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Fantasy Dictionary [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.86391625
+        }
+      ]
+    },
+    {
+      "id": "dict/list-databases",
+      "protocol": "dict",
+      "instruction": "Offer two databases: fantasy, described as Fantasy Lexicon, and tech, described as Technical Terms.",
+      "client": "dict -h 127.0.0.1 -p {PORT} -D",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Fantasy Lexicon\", \"Technical Terms\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:15.911632Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}",
+            "2026-11-06T18:56:15.912061Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 60095 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 9.556584041
+        }
+      ]
+    },
+    {
+      "id": "dict/unknown-word",
+      "protocol": "dict",
+      "instruction": "You only know words that begin with the letter q. For anything else there is no definition.",
+      "client": "dict -h 127.0.0.1 -p {PORT} zebra",
+      "independence": "protocol-client",
+      "expectation": "contains [\"No definitions found\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:24.813805Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Unknown database, use 'SHOW DB' for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Unknown database, use 'SHOW DB' for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 60538 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 8.900428292
+        }
+      ]
+    },
+    {
+      "id": "gemini/home-page",
+      "protocol": "gemini",
+      "instruction": "Serve a home page titled Welcome to the NetGet capsule, with a link to /about.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"20 text/gemini\", \"Welcome to the NetGet capsule\", \"=> /about\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:37.385198Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"This is the home page\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"About NetGet\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemtext\"), \"lines\": Array [Object {\"type\": String(\"heading1\"), \"text\": String(\"Welcome to the NetGet capsule\")}, Object {\"type\": String(\"text\"), \"text\": String(\"This is the home page\")}, Object {\"type\": String(\"link\"), \"url\": String(\"/about\"), \"text\": String(\"About NetGet\")}]}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:61397/",
+          "client_output": "20 text/gemini; charset=utf-8\n# Welcome to the NetGet capsule\nThis is the home page\n=> /about About NetGet\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.587193667
+        }
+      ]
+    },
+    {
+      "id": "gemini/ask-for-input",
+      "protocol": "gemini",
+      "instruction": "The page /guestbook asks the visitor for their name before showing anything.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/guestbook",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^1[01] /",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:46.114776Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_input\"), \"prompt\": String(\"What is your name?\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:61540/guestbook",
+          "client_output": "10 What is your name?\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.724306292
+        }
+      ]
+    },
+    {
+      "id": "gemini/not-found",
+      "protocol": "gemini",
+      "instruction": "Only the home page exists. Every other page does not exist.",
+      "client": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:{PORT}/nowhere",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^51 /",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:56:57.128166Z DEBUG Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gemini_response\"), \"status\": Number(51), \"meta\": String(\"Not found\")}"
+          ],
+          "client_command": "python3 -c import os, sys, tempfile, ignition\nignition.set_default_hosts_file(os.path.join(tempfile.mkdtemp(), 'known_hosts'))\nr = ignition.request(sys.argv[1], timeout=230)\nprint(r.status, r.meta)\nprint(r.raw_body.decode('utf-8', 'replace') if r.status.startswith('2') else '')\n gemini://127.0.0.1:61823/nowhere",
+          "client_output": "51 Not found\n\n\n/opt/homebrew/lib/python3.10/site-packages/ignition/ssl/cert_wrapper.py:34: CryptographyDeprecationWarning: Properties that return a naïve datetime object have been deprecated. Please switch to not_valid_after_utc.\n  return self.certificate.not_valid_after\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.009094125
+        }
+      ]
+    },
+    {
+      "id": "ldap/single-person",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. A search under dc=example,dc=com finds one person, Alice Liddell, whose mail address is alice@example.com.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Alice Liddell\", \"alice@example.com\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:57:11.316800Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"mail\": Array [String(\"alice@example.com\")], \"cn\": Array [String(\"Alice Liddell\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=Alice Liddell,dc=example,dc=com\"), \"attributes\": Object {\"mail\": Array [String(\"alice@example.com\")], \"cn\": Array [String(\"Alice Liddell\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:62251 -b dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# Alice Liddell, example.com\ndn: cn=Alice Liddell,dc=example,dc=com\nmail: alice@example.com\ncn: Alice Liddell\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 2\n# numEntries: 1\n\nldap_bind: Success (0)\n\tadditional info: Anonymous bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 14.174920167
+        }
+      ]
+    },
+    {
+      "id": "ldap/two-people",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. Under ou=people,dc=example,dc=com there are two users, alice and bob.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "contains [\"alice\", \"bob\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:57:33.568048Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [Object {\"dn\": String(\"cn=alice,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"alice\")], \"mail\": Array [String(\"alice@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}, Object {\"dn\": String(\"cn=bob,ou=people,dc=example,dc=com\"), \"attributes\": Object {\"cn\": Array [String(\"bob\")], \"mail\": Array [String(\"bob@example.com\")], \"objectClass\": Array [String(\"person\"), String(\"inetOrgPerson\")]}}], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:63015 -b ou=people,dc=example,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <ou=people,dc=example,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# alice, people, example.com\ndn: cn=alice,ou=people,dc=example,dc=com\ncn: alice\nmail: alice@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# bob, people, example.com\ndn: cn=bob,ou=people,dc=example,dc=com\ncn: bob\nmail: bob@example.com\nobjectClass: person\nobjectClass: inetOrgPerson\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 3\n# numEntries: 2\n\nldap_bind: Success (0)\n\tadditional info: Anonymous bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 22.249759208
+        }
+      ]
+    },
+    {
+      "id": "ldap/empty-result",
+      "protocol": "ldap",
+      "instruction": "Accept anonymous connections. There is nothing at all under dc=other,dc=com — searches there succeed and find no one.",
+      "client": "ldapsearch -x -H ldap://127.0.0.1:{PORT} -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+      "independence": "protocol-client",
+      "expectation": "lacks [\"Alice\", \"cn=\"] and matches /(?i)result:\\s*0\\s+success/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:57:50.778108Z DEBUG Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"ldap_search_response\"), \"message_id\": Number(2), \"entries\": Array [], \"result_code\": Number(0)}"
+          ],
+          "client_command": "ldapsearch -x -H ldap://127.0.0.1:63714 -b dc=other,dc=com -s sub -o nettimeout=230 -l 230 (objectClass=*)",
+          "client_output": "# extended LDIF\n#\n# LDAPv3\n# base <dc=other,dc=com> with scope subtree\n# filter: (objectClass=*)\n# requesting: ALL\n#\n\n# search result\nsearch: 2\nresult: 0 Success\n\n# numResponses: 1\n\nldap_bind: Success (0)\n\tadditional info: Anonymous bind successful\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 17.211594042
+        }
+      ]
+    },
+    {
+      "id": "prometheus/queue-depth-gauge",
+      "protocol": "prometheus",
+      "instruction": "Expose a gauge named netget_eval_queue_depth whose value is 17.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"netget_eval_queue_depth 17\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:58:02.787853Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"labels\": Object {}, \"value\": Number(17), \"suffix\": String(\"\")}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"labels\": Object {}, \"value\": Number(17), \"suffix\": String(\"\")}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:64065/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.009220167
+        }
+      ]
+    },
+    {
+      "id": "prometheus/requests-by-status",
+      "protocol": "prometheus",
+      "instruction": "Count HTTP requests by status code: 1500 requests answered 200 and 12 answered 404 so far.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"PROMTOOL-OK\"] and matches /(?i)=\"?200\"?[,}][^\\n]* 1500/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:58:13.755115Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:64572/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.963426792
+        }
+      ]
+    },
+    {
+      "id": "prometheus/latency-histogram",
+      "protocol": "prometheus",
+      "instruction": "Report request latency in seconds as a histogram with buckets at 0.1, 0.5 and 1 second; 40 requests so far, 30 of them under 0.1s.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"_bucket\", \"le=\\\"+Inf\\\"\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "executor_rejected_action",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "executor_rejected_action",
+          "detail": "the protocol executor refused the action the model built",
+          "model_output": [
+            "2026-11-06T18:58:29.472475Z ERROR Action 0 'send_metrics' failed on protocol Prometheus: send_metrics refused: histogram 'http_request_latency_seconds' _count is 30 but its +Inf bucket is 1030; they are the same number by definition — the peer receives the protocol default instead (action: {\"type\":\"send_metrics\",\"metrics\":[{\"name\":\"http_request_latency_seconds\",\"type\":\"histogram\",\"help\":\"Request latency.\",\"samples\":[{\"labels\":{\"le\":\"0.1\"},\"value\":900,\"suffix\":\"_bucket\"},{\"labels\":{\"le\":\"0.5\"},\"value\":1010,\"suffix\":\"_bucket\"},{\"labels\":{\"le\":\"+Inf\"},\"value\":1030,\"suffix\":\"_bucket\"},{\"suffix\":\"_sum\",\"value\":81.4},{\"suffix\":\"_count\",\"value\":30}]}]})"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}, Object {\"suffix\": String(\"_sum\"), \"value\": Number(81.4)}, Object {\"suffix\": String(\"_count\"), \"value\": Number(30)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:65457/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "netget: the handler returned no usable metrics\nerror while linting: text format parsing error in line 1: expected float as value, got \"the\"\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 15.708599833
+        }
+      ]
+    },
+    {
+      "id": "vault/read-a-field",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server. The secret at app/db in the secret mount holds the username payments and the password NETGET-EVAL-PW.",
+      "client": "vault kv get -field=password secret/app/db",
+      "independence": "protocol-client",
+      "expectation": "contains [\"NETGET-EVAL-PW\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:58:39.542853Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"username\": String(\"payments\"), \"password\": String(\"<redacted>\")}, \"version\": Number(1)}"
+          ],
+          "client_command": "vault kv get -field=password secret/app/db",
+          "client_output": "NETGET-EVAL-PW",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.069429042
+        }
+      ]
+    },
+    {
+      "id": "vault/list-keys",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server whose secret mount has three secrets under app: db, stripe and smtp.",
+      "client": "vault kv list secret/app",
+      "independence": "protocol-client",
+      "expectation": "contains [\"db\", \"stripe\", \"smtp\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:58:49.700055Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_list\"), \"keys\": Array [String(\"db\"), String(\"stripe\"), String(\"smtp\")]}"
+          ],
+          "client_command": "vault kv list secret/app",
+          "client_output": "Keys\n----\ndb\nsmtp\nstripe\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.153385542
+        }
+      ]
+    },
+    {
+      "id": "vault/missing-secret",
+      "protocol": "vault",
+      "instruction": "Act as a Vault server with an empty secret mount.",
+      "client": "vault kv get secret/app/nothing",
+      "independence": "protocol-client",
+      "expectation": "matches /(?i)no value found/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:58:58.451778Z DEBUG Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"app/nothing\": String(\"no value found\")}, \"version\": Number(1), \"custom_metadata\": Object {}}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_vault_secret\"), \"data\": Object {\"app/nothing\": String(\"no value found\")}, \"version\": Number(1), \"custom_metadata\": Object {}}"
+          ],
+          "client_command": "vault kv get secret/app/nothing",
+          "client_output": "===== Secret Path =====\nsecret/data/app/nothing\n\n======= Metadata =======\nKey                Value\n---                -----\ncreated_time       2026-11-06T18:58:58.000000Z\ncustom_metadata    map[]\ndeletion_time      n/a\ndestroyed          false\nversion            1\n\n======= Data =======\nKey            Value\n---            -----\napp/nothing    no value found\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.750568916
+        }
+      ]
+    },
+    {
+      "id": "bolt/people-by-name",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. The graph has three Person nodes, named Ada, Grace and Linus.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+      "independence": "protocol-client",
+      "expectation": "contains [\"name\", \"Ada\", \"Grace\", \"Linus\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "event_never_reached_model",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:50088 -u neo4j -p netget-eval --non-interactive --format plain MATCH (p:Person) RETURN p.name AS name",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe client is unauthorized due to authentication failure.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 11.435195667
+        }
+      ]
+    },
+    {
+      "id": "bolt/count",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. It holds exactly 42 Movie nodes and nothing else.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+      "independence": "protocol-client",
+      "expectation": "contains [\"movies\", \"42\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "event_never_reached_model",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "event_never_reached_model",
+          "detail": "no model call was made for this request — the event did not reach the LLM path",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:51018 -u neo4j -p netget-eval --non-interactive --format plain MATCH (m:Movie) RETURN count(m) AS movies",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nThe database is unavailable: the query could not be answered.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 10.196944167
+        }
+      ]
+    },
+    {
+      "id": "bolt/syntax-error",
+      "protocol": "bolt",
+      "instruction": "Act as a Neo4j graph database that accepts any login. Reject any query that is not valid Cypher with Neo4j's syntax error.",
+      "client": "cypher-shell -a bolt://127.0.0.1:{PORT} -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+      "independence": "protocol-client",
+      "expectation": "matches /(?i)(invalid|syntax|unexpected|expected)/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:59:36.787822Z DEBUG Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Statement.SyntaxError\"), \"message\": String(\"Invalid Cypher query: 'mode' is only the access mode the client asked for, not a reason to refuse. Please use a Cypher clause.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_bolt_failure\"), \"code\": String(\"Neo.ClientError.Statement.SyntaxError\"), \"message\": String(\"Invalid Cypher query: 'mode' is only the access mode the client asked for, not a reason to refuse. Please use a Cypher clause.\")}"
+          ],
+          "client_command": "cypher-shell -a bolt://127.0.0.1:51190 -u neo4j -p netget-eval --non-interactive --format plain SELECT name FROM people",
+          "client_output": "Picked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nPicked up JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/Users/matus/.local/share/emudhra-mitigation/java-cacerts.jks -Djavax.net.ssl.trustStoreType=JKS -Djavax.net.ssl.trustStorePassword=changeit\nInvalid Cypher query: 'mode' is only the access mode the client asked for, not a reason to refuse. Please use a Cypher clause.\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 16.96209975
+        }
+      ]
+    },
+    {
+      "id": "pop3/message-count",
+      "protocol": "pop3",
+      "instruction": "Accept any login. The mailbox holds 7 messages.",
+      "client": "python3 -c import sys, poplib\nport, mode = int(sys.argv[1]), sys.argv[2]\ndef text(b):\n    return b.decode('utf-8', 'replace')\ntry:\n    p = poplib.POP3('127.0.0.1', port, timeout=230)\n    print('GREETING', text(p.getwelcome()))\n    print('USER', text(p.user('eval')))\n    print('PASS', text(p.pass_('eval-password')))\n    if mode == 'stat':\n        count, size = p.stat()\n        print('STAT', count, size)\n    else:\n        resp, lines, octets = p.retr(1)\n        print('RETR', text(resp))\n        for line in lines:\n            print(text(line))\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} stat",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^STAT 7 \\d+/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T18:59:46.965592Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_greeting\"), \"message\": String(\"POP3 server ready\")}",
+            "2026-11-06T18:59:50.408344Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "2026-11-06T18:59:50.408561Z DEBUG Executing action 1: Object {\"type\": String(\"set_memory\"), \"value\": String(\"login_count: 1\\nmessages: 7\")}",
+            "2026-11-06T18:59:50.408616Z DEBUG Executing action 2: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(7), \"total_size\": Number(1024)}",
+            "2026-11-06T18:59:53.289346Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "2026-11-06T18:59:53.289527Z DEBUG Executing action 1: Object {\"type\": String(\"set_memory\"), \"value\": String(\"login_count: 2\\nmessages: 7\")}",
+            "2026-11-06T18:59:55.840526Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(7), \"total_size\": Number(1024)}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_pop3_greeting\"), \"message\": String(\"POP3 server ready\")}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "Executing action 1: Object {\"type\": String(\"set_memory\"), \"value\": String(\"login_count: 1\\nmessages: 7\")}",
+            "Executing action 2: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(7), \"total_size\": Number(1024)}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "Executing action 1: Object {\"type\": String(\"set_memory\"), \"value\": String(\"login_count: 2\\nmessages: 7\")}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(7), \"total_size\": Number(1024)}"
+          ],
+          "client_command": "python3 -c import sys, poplib\nport, mode = int(sys.argv[1]), sys.argv[2]\ndef text(b):\n    return b.decode('utf-8', 'replace')\ntry:\n    p = poplib.POP3('127.0.0.1', port, timeout=230)\n    print('GREETING', text(p.getwelcome()))\n    print('USER', text(p.user('eval')))\n    print('PASS', text(p.pass_('eval-password')))\n    if mode == 'stat':\n        count, size = p.stat()\n        print('STAT', count, size)\n    else:\n        resp, lines, octets = p.retr(1)\n        print('RETR', text(resp))\n        for line in lines:\n            print(text(line))\nexcept Exception as e:\n    print(type(e).__name__, e)\n 51587 stat",
+          "client_output": "GREETING +OK POP3 server ready\nUSER +OK User accepted\nPASS +OK User accepted\nSTAT 7 1024\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 18.786034542
+        }
+      ]
+    },
+    {
+      "id": "pop3/message-subject",
+      "protocol": "pop3",
+      "instruction": "Accept any login. The mailbox holds one message, from alice@example.com, with the subject Quarterly figures are in.",
+      "client": "python3 -c import sys, poplib\nport, mode = int(sys.argv[1]), sys.argv[2]\ndef text(b):\n    return b.decode('utf-8', 'replace')\ntry:\n    p = poplib.POP3('127.0.0.1', port, timeout=230)\n    print('GREETING', text(p.getwelcome()))\n    print('USER', text(p.user('eval')))\n    print('PASS', text(p.pass_('eval-password')))\n    if mode == 'stat':\n        count, size = p.stat()\n        print('STAT', count, size)\n    else:\n        resp, lines, octets = p.retr(1)\n        print('RETR', text(resp))\n        for line in lines:\n            print(text(line))\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} retr",
+      "independence": "protocol-client",
+      "expectation": "contains [\"RETR +OK\", \"Subject: Quarterly figures are in\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:00:08.036755Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_greeting\"), \"message\": String(\"POP3 server ready\")}",
+            "2026-11-06T19:00:11.705663Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "2026-11-06T19:00:17.796034Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "2026-11-06T19:00:17.796412Z DEBUG Executing action 1: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(1), \"total_size\": Number(0)}",
+            "2026-11-06T19:00:17.796719Z DEBUG Executing action 2: Object {\"type\": String(\"send_pop3_list\"), \"messages\": Array [Object {\"id\": Number(1), \"size\": Number(0)}]}",
+            "2026-11-06T19:00:17.796967Z DEBUG Executing action 3: Object {\"type\": String(\"send_pop3_uidl\"), \"messages\": Array [Object {\"id\": Number(1), \"uidl\": String(\"msg-123\")}]}",
+            "2026-11-06T19:00:17.797188Z DEBUG Executing action 4: Object {\"type\": String(\"send_pop3_message\"), \"message\": String(\"+OK 1 message (0 octets)\")}",
+            "2026-11-06T19:00:17.797434Z DEBUG Executing action 5: Object {\"type\": String(\"send_pop3_retr\"), \"from\": String(\"alice@example.com\"), \"to\": String(\"\"), \"subject\": String(\"Quarterly figures are in\"), \"body\": String(\"See attached file.\")}",
+            "2026-11-06T19:00:20.260399Z DEBUG Executing action 0: Object {\"type\": String(\"send_pop3_retr\"), \"from\": String(\"alice@example.com\"), \"to\": String(\"\"), \"subject\": String(\"Quarterly figures are in\"), \"body\": String(\"See attached file.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_pop3_greeting\"), \"message\": String(\"POP3 server ready\")}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_ok\"), \"message\": String(\"User accepted\")}",
+            "Executing action 1: Object {\"type\": String(\"send_pop3_stat\"), \"message_count\": Number(1), \"total_size\": Number(0)}",
+            "Executing action 2: Object {\"type\": String(\"send_pop3_list\"), \"messages\": Array [Object {\"id\": Number(1), \"size\": Number(0)}]}",
+            "Executing action 3: Object {\"type\": String(\"send_pop3_uidl\"), \"messages\": Array [Object {\"id\": Number(1), \"uidl\": String(\"msg-123\")}]}",
+            "Executing action 4: Object {\"type\": String(\"send_pop3_message\"), \"message\": String(\"+OK 1 message (0 octets)\")}",
+            "Executing action 5: Object {\"type\": String(\"send_pop3_retr\"), \"from\": String(\"alice@example.com\"), \"to\": String(\"\"), \"subject\": String(\"Quarterly figures are in\"), \"body\": String(\"See attached file.\")}",
+            "Executing action 0: Object {\"type\": String(\"send_pop3_retr\"), \"from\": String(\"alice@example.com\"), \"to\": String(\"\"), \"subject\": String(\"Quarterly figures are in\"), \"body\": String(\"See attached file.\")}"
+          ],
+          "client_command": "python3 -c import sys, poplib\nport, mode = int(sys.argv[1]), sys.argv[2]\ndef text(b):\n    return b.decode('utf-8', 'replace')\ntry:\n    p = poplib.POP3('127.0.0.1', port, timeout=230)\n    print('GREETING', text(p.getwelcome()))\n    print('USER', text(p.user('eval')))\n    print('PASS', text(p.pass_('eval-password')))\n    if mode == 'stat':\n        count, size = p.stat()\n        print('STAT', count, size)\n    else:\n        resp, lines, octets = p.retr(1)\n        print('RETR', text(resp))\n        for line in lines:\n            print(text(line))\nexcept Exception as e:\n    print(type(e).__name__, e)\n 52405 retr",
+          "client_output": "GREETING +OK POP3 server ready\nUSER +OK User accepted\nPASS +OK User accepted\nRETR +OK 88 octets\nFrom: alice@example.com\nTo: \nSubject: Quarterly figures are in\n\nSee attached file.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 24.409088583
+        }
+      ]
+    },
+    {
+      "id": "coap/text-resource",
+      "protocol": "coap",
+      "instruction": "You are a greenhouse sensor. The resource /temperature returns the text 19.5 C.",
+      "client": "coap-client -N -B 230 -m get coap://127.0.0.1:{PORT}/temperature",
+      "independence": "protocol-client",
+      "expectation": "contains [\"19.5 C\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:00:33.148337Z DEBUG Executing action 0: Object {\"type\": String(\"send_coap_response\"), \"code\": String(\"2.05\"), \"payload\": String(\"19.5 C\"), \"content_format\": String(\"text/plain\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_coap_response\"), \"code\": String(\"2.05\"), \"payload\": String(\"19.5 C\"), \"content_format\": String(\"text/plain\")}"
+          ],
+          "client_command": "coap-client -N -B 230 -m get coap://127.0.0.1:62063/temperature",
+          "client_output": "19.5 C\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.8361305
+        }
+      ]
+    },
+    {
+      "id": "coap/not-found",
+      "protocol": "coap",
+      "instruction": "You are a greenhouse sensor whose only resource is /temperature. Every other path does not exist.",
+      "client": "coap-client -N -B 230 -m get coap://127.0.0.1:{PORT}/humidity",
+      "independence": "protocol-client",
+      "expectation": "contains [\"4.04\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:00:44.655026Z DEBUG Executing action 0: Object {\"type\": String(\"send_coap_response\"), \"code\": String(\"4.04\"), \"payload\": String(\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_coap_response\"), \"code\": String(\"4.04\"), \"payload\": String(\"\")}"
+          ],
+          "client_command": "coap-client -N -B 230 -m get coap://127.0.0.1:57885/humidity",
+          "client_output": "4.04\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.635211083
+        }
+      ]
+    },
+    {
+      "id": "websocket/echo",
+      "protocol": "websocket",
+      "instruction": "Echo every message a client sends straight back to it, unchanged.",
+      "client": "websocat ws://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"netget-eval-ws-ping\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "wrong_content",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "wrong_content",
+          "detail": "valid actions executed, but client output does not contain \"netget-eval-ws-ping\"",
+          "model_output": [
+            "2026-11-06T19:00:53.619223Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Hello, client!\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Hello, client!\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:53170/",
+          "client_output": "Hello, client!\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 10.834637458
+        }
+      ]
+    },
+    {
+      "id": "websocket/greeting",
+      "protocol": "websocket",
+      "instruction": "Greet every client with the message Welcome to NetGet Eval as soon as it connects.",
+      "client": "websocat ws://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Welcome to NetGet Eval\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:01:06.797723Z DEBUG Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"accept_websocket\"), \"greeting\": String(\"Welcome to NetGet Eval\")}"
+          ],
+          "client_command": "websocat ws://127.0.0.1:53245/",
+          "client_output": "Welcome to NetGet Eval\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 13.189611667
+        }
+      ]
+    },
+    {
+      "id": "nostr/serve-notes",
+      "protocol": "nostr",
+      "instruction": "When someone subscribes to short text notes, give them two notes: Stalker is a masterpiece, and Solaris is slower but worth it.",
+      "client": "nak req -k 1 ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Stalker is a masterpiece\", \"Solaris is slower but worth it\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "client_left_before_model_answered",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 7.6s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak req -k 1 ws://127.0.0.1:53373",
+          "client_output": "connecting to 127.0.0.1:53373... ok.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.682487834
+        }
+      ]
+    },
+    {
+      "id": "nostr/refuse-adverts",
+      "protocol": "nostr",
+      "instruction": "Take notes from anyone, but refuse any note that advertises something for sale, telling the author that adverts are not allowed.",
+      "client": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"adverts are not allowed\"] and lacks [\"success\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:01:26.604396Z DEBUG Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: adverts are not allowed\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"reject_nostr_event\"), \"reason\": String(\"blocked: adverts are not allowed\")}"
+          ],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Buy cheap watches now, 50% off ws://127.0.0.1:53556",
+          "client_output": "{\"kind\":1,\"id\":\"0453baee069f899e5831f870dc070c3590bdd75274b18ab4625f0a68097992a5\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793991678,\"tags\":[],\"content\":\"Buy cheap watches now, 50% off\",\"sig\":\"57e55c72fda0cdc68626b9e4c5e89c67432113f6f9f43130ca6cb47b9c59d6cba20a39207681c6bd8fd62d5d46bd6697833ddc923e37cbf7165f91d44b3b090c\"}\n\nconnecting to 127.0.0.1:53556... ok.\npublishing to ws://127.0.0.1:53556... failed: msg: blocked: adverts are not allowed\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 9.091619834
+        }
+      ]
+    },
+    {
+      "id": "nostr/accept-film-note",
+      "protocol": "nostr",
+      "instruction": "This relay is for notes about films. Accept them.",
+      "client": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:{PORT}",
+      "independence": "protocol-client",
+      "expectation": "contains [\"success\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 0,
+      "pass_rate": 0.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": "client_left_before_model_answered",
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "fail",
+          "failure_mode": "client_left_before_model_answered",
+          "detail": "the model was asked, the client closed the connection after 10.3s without waiting for the answer, and the call was abandoned",
+          "model_output": [],
+          "recovered_actions": [],
+          "executed_actions": [],
+          "client_command": "nak event --sec 7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a -c Stalker is a masterpiece of slow cinema ws://127.0.0.1:53723",
+          "client_output": "{\"kind\":1,\"id\":\"b1259147581989e996ac58b23e0103a9375fd3579967c9db38f3e26fa06e66af\",\"pubkey\":\"17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917\",\"created_at\":1793991687,\"tags\":[],\"content\":\"Stalker is a masterpiece of slow cinema\",\"sig\":\"3e97f44d672b12f78f72b8b149c2c7a6f1c82ed417fb2cb6a35993b265cb060c5c35a580aa958e90609d74521e62af64524431eca53243417538f02a617c57ab\"}\n\nconnecting to 127.0.0.1:53723... ok.\npublishing to ws://127.0.0.1:53723... failed: publish: context deadline exceeded\nfailed to publish to any of the relays\n",
+          "client_exit": 123,
+          "client_timed_out": false,
+          "elapsed_secs": 11.245552333
+        }
+      ]
+    },
+    {
+      "id": "lmtp/deliver-local",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} alice@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 25[01]\\b(?s:.*)^DATA 250\\b/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:01:44.967055Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"Mailbox accepted\")}",
+            "2026-11-06T19:01:50.285713Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"Mailbox accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 53899 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 Mailbox accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.440447084
+        }
+      ]
+    },
+    {
+      "id": "lmtp/refuse-unknown",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} bob@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 5\\d\\d\\b/",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:01:54.465807Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"reason\": String(\"Recipient not found on this server.\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false), \"reason\": String(\"Recipient not found on this server.\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 54180 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 Recipient not found on this server.\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.172920625
+        }
+      ]
+    },
+    {
+      "id": "rsync/list-modules",
+      "protocol": "rsync",
+      "instruction": "Offer two modules: backups, described as Nightly backups, and media, described as Photo library.",
+      "client": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:{PORT}/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"backups\", \"Nightly backups\", \"media\", \"Photo library\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:02:04.680814Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}, Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_modules\"), \"modules\": Array [Object {\"name\": String(\"backups\"), \"comment\": String(\"Nightly backups\")}, Object {\"name\": String(\"media\"), \"comment\": String(\"Photo library\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:54250/",
+          "client_output": "backups        \tNightly backups\nmedia          \tPhoto library\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 10.218188959
+        }
+      ]
+    },
+    {
+      "id": "rsync/list-files",
+      "protocol": "rsync",
+      "instruction": "The module docs holds two files, readme.txt and notes.md.",
+      "client": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:{PORT}/docs/",
+      "independence": "protocol-client",
+      "expectation": "contains [\"readme.txt\", \"notes.md\"]",
+      "note": null,
+      "attempts": 1,
+      "passes": 1,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": null,
+      "actions_agree": null,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T19:02:15.882269Z DEBUG Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"rsync_send_entries\"), \"entries\": Array [Object {\"path\": String(\"readme.txt\"), \"type\": String(\"file\")}, Object {\"path\": String(\"notes.md\"), \"type\": String(\"file\")}]}"
+          ],
+          "client_command": "rsync --contimeout=230 --timeout=230 rsync://127.0.0.1:54366/docs/",
+          "client_output": "drwxr-xr-x          4,096 2026/11/06 14:02:05 .\n-rw-r--r--              0 2026/11/06 14:02:05 notes.md\n-rw-r--r--              0 2026/11/06 14:02:05 readme.txt\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.214263792
+        }
+      ]
+    }
+  ]
+}

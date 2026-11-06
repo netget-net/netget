@@ -48,6 +48,12 @@ prompt change does:
 
 Read each against master's prompt changes before attributing it to a description.
 
+**These were one draw each, not regressions.** Every run here passed the same seed and none of
+these prompts varies run to run, so 5/5 → 0/5 is one sample flipping. Replayed over twenty
+seeds, the same prompts score 12 → 11 (dict), 15 → 16 (prometheus) and 6 → 16 (lmtp) of 20
+before and after the merge; the tree before it fails all three at seed 1. See
+`../2026-11-06-seed-bisect/`, where the harness now gives each run its own seed.
+
 **A limit of the client, not the model:** nak 0.21 gives up on a subscription after about 7 s
 and on a publish after about 10 s, with no option to raise either, so a nostr run whose answer
 takes longer scores `client_left_before_model_answered`.

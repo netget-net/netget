@@ -1,0 +1,32 @@
+dict pre 12/20
+dict w3 11/20
+dict w3-rev-actions 14/20
+dict w3-noconn 15/20
+dict w3-protofirst 7/20
+dict w3-noconn-protofirst 12/20
+dict w3-notify seeds=1-20 9/20
+dict w3-rev-instr seeds=1-20 13/20
+dict w3-rev-memdesc seeds=1-20 13/20
+dict w3-rev-partial seeds=1-20 7/20
+prom pre 15/20
+prom w3 16/20
+prom w3-rev-actions 17/20
+prom w3-noconn 19/20
+prom w3-protofirst 13/20
+prom w3-noconn-protofirst 17/20
+prom w3-notify seeds=1-20 19/20
+prom w3-rev-instr seeds=1-20 17/20
+prom w3-rev-memdesc seeds=1-20 16/20
+prom w3-rev-partial seeds=1-20 15/20
+lmtp pre 6/20
+lmtp w3 16/20
+lmtp w3-rev-actions 20/20
+lmtp w3-noconn 8/20
+lmtp w3-protofirst 13/20
+lmtp w3-noconn-protofirst 10/20
+lmtp w3-notify seeds=1-20 19/20
+lmtp w3-rev-instr seeds=1-20 13/20
+lmtp w3-rev-memdesc seeds=1-20 17/20
+lmtp w3-rev-partial seeds=1-20 10/20
+ldap-search w5c898 TALLY variant=none 20/20
+ldap-search w5merged TALLY variant=none 20/20

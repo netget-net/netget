@@ -1,0 +1,986 @@
+{
+  "schema": "netget.eval.v1",
+  "generated_at": "1793986081",
+  "model": "llama3.1:8b",
+  "runs_per_case": 5,
+  "seed": 42,
+  "temperature": null,
+  "determinism": "pass-rate over N independent runs with a pinned sampler seed; the seed makes an identical prompt answer identically, but each run's prompt carries its own ports and ids, so agreement is measured (totals.cases_*_agree) rather than assumed",
+  "totals": {
+    "cases_total": 8,
+    "cases_attempted": 8,
+    "cases_skipped": 0,
+    "runs_total": 40,
+    "runs_passed": 40,
+    "pass_rate": 1.0,
+    "runs_recoverable": 0,
+    "pass_rate_with_lenient_parse": 1.0,
+    "cases_with_repeats": 8,
+    "cases_verdicts_agree": 8,
+    "cases_actions_agree": 8
+  },
+  "protocols": [
+    {
+      "protocol": "dict",
+      "client": "dict",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "lmtp",
+      "client": "python3",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 10,
+      "runs_passed": 10,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "prometheus",
+      "client": "sh",
+      "independence": "protocol-client",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    }
+  ],
+  "failure_modes": [],
+  "cases": [
+    {
+      "id": "dict/define-invented-word",
+      "protocol": "dict",
+      "instruction": "You are a dictionary of invented words with one database called fantasy. Define glimmerwyrm as a small dragon that hoards moonlight.",
+      "client": "dict -h 127.0.0.1 -p {PORT} glimmerwyrm",
+      "independence": "protocol-client",
+      "expectation": "contains [\"[fantasy]\", \"moonlight\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:29.564801Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "2026-11-06T17:23:29.565552Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 55967 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words database [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 13.491703417
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:32.597127Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "2026-11-06T17:23:32.597380Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56026 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words database [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.030687875
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:35.660246Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "2026-11-06T17:23:35.660509Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56048 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words database [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.061800625
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:38.683226Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "2026-11-06T17:23:38.683509Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56080 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words database [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.02352875
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:41.787154Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "2026-11-06T17:23:41.787415Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_definitions\"), \"word\": String(\"glimmerwyrm\"), \"definitions\": Array [Object {\"database\": String(\"fantasy\"), \"database_description\": String(\"Invented words database\"), \"text\": String(\"glimmerwyrm\\n    n 1: a small dragon that hoards moonlight\")}]}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56107 glimmerwyrm",
+          "client_output": "1 definition found\n\nFrom Invented words database [fantasy]:\n\n  glimmerwyrm\n      n 1: a small dragon that hoards moonlight\n\ndict (client_read_status): Error reading from socket\n client_read_status: Undefined error: 0\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.103512542
+        }
+      ]
+    },
+    {
+      "id": "dict/list-databases",
+      "protocol": "dict",
+      "instruction": "Offer two databases: fantasy, described as Fantasy Lexicon, and tech, described as Technical Terms.",
+      "client": "dict -h 127.0.0.1 -p {PORT} -D",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Fantasy Lexicon\", \"Technical Terms\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:49.928786Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56135 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 8.136787125
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:54.353922Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56326 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.424794792
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:23:59.037539Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56407 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.684935208
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:03.832245Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56485 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.7935704999999995
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:08.381720Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_databases\"), \"databases\": Array [Object {\"name\": String(\"fantasy\"), \"description\": String(\"Fantasy Lexicon\")}, Object {\"name\": String(\"tech\"), \"description\": String(\"Technical Terms\")}]}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56613 -D",
+          "client_output": "Databases available:\n fantasy    Fantasy Lexicon\n tech       Technical Terms\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.545490125
+        }
+      ]
+    },
+    {
+      "id": "dict/unknown-word",
+      "protocol": "dict",
+      "instruction": "You only know words that begin with the letter q. For anything else there is no definition.",
+      "client": "dict -h 127.0.0.1 -p {PORT} zebra",
+      "independence": "protocol-client",
+      "expectation": "contains [\"No definitions found\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:16.448290Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56734 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 8.061531833
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:20.568014Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 56976 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 4.119814708
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:24.781655Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 57120 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 4.213816166
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:28.882577Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 57221 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 4.099393917
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:33.349380Z DEBUG Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_dict_error\"), \"code\": Number(550), \"message\": String(\"Invalid database, use \\\"SHOW DB\\\" for list of databases\")}"
+          ],
+          "client_command": "dict -h 127.0.0.1 -p 57333 zebra",
+          "client_output": "* is not a valid database, use -D for a list\nNo definitions found for \"zebra\"\n",
+          "client_exit": 39,
+          "client_timed_out": false,
+          "elapsed_secs": 4.470030084
+        }
+      ]
+    },
+    {
+      "id": "prometheus/queue-depth-gauge",
+      "protocol": "prometheus",
+      "instruction": "Expose a gauge named netget_eval_queue_depth whose value is 17.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"netget_eval_queue_depth 17\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:42.406266Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57399/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.062908167
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:47.501513Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57564/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.105890542
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:53.084037Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57680/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.568303458
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:24:58.215223Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57746/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.130825625
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:03.243122Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"netget_eval_queue_depth\"), \"type\": String(\"gauge\"), \"help\": String(\"NetGet eval queue depth\"), \"samples\": Array [Object {\"value\": Number(17)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57821/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP netget_eval_queue_depth NetGet eval queue depth\n# TYPE netget_eval_queue_depth gauge\nnetget_eval_queue_depth 17\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.025357625
+        }
+      ]
+    },
+    {
+      "id": "prometheus/requests-by-status",
+      "protocol": "prometheus",
+      "instruction": "Count HTTP requests by status code: 1500 requests answered 200 and 12 answered 404 so far.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"PROMTOOL-OK\"] and matches /(?i)=\"?200\"?[,}][^\\n]* 1500/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:14.409550Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:57876/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.172584083
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:21.414433Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58053/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 6.996049875
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:28.756841Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58163/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.344625834
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:36.082531Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58288/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.326834083
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:25:43.919226Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_requests_total\"), \"type\": String(\"counter\"), \"help\": String(\"HTTP requests served, by method and status code.\"), \"samples\": Array [Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"200\")}, \"value\": Number(1500)}, Object {\"labels\": Object {\"method\": String(\"GET\"), \"code\": String(\"404\")}, \"value\": Number(12)}]}]}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58411/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_requests_total HTTP requests served, by method and status code.\n# TYPE http_requests_total counter\nhttp_requests_total{code=\"200\",method=\"GET\"} 1500\nhttp_requests_total{code=\"404\",method=\"GET\"} 12\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.832379208
+        }
+      ]
+    },
+    {
+      "id": "prometheus/latency-histogram",
+      "protocol": "prometheus",
+      "instruction": "Report request latency in seconds as a histogram with buckets at 0.1, 0.5 and 1 second; 40 requests so far, 30 of them under 0.1s.",
+      "client": "sh -c curl -sS --max-time 230 http://127.0.0.1:{PORT}/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+      "independence": "protocol-client",
+      "expectation": "contains [\"_bucket\", \"le=\\\"+Inf\\\"\", \"PROMTOOL-OK\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:00.772513Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "2026-11-06T17:26:00.777834Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58516/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_request_latency_seconds Request latency.\n# TYPE http_request_latency_seconds histogram\nhttp_request_latency_seconds_bucket{le=\"0.1\"} 900\nhttp_request_latency_seconds_bucket{le=\"0.5\"} 1010\nhttp_request_latency_seconds_bucket{le=\"+Inf\"} 1030\nhttp_request_latency_seconds_count 1030\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 16.854178875
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:13.722550Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "2026-11-06T17:26:13.725315Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58750/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_request_latency_seconds Request latency.\n# TYPE http_request_latency_seconds histogram\nhttp_request_latency_seconds_bucket{le=\"0.1\"} 900\nhttp_request_latency_seconds_bucket{le=\"0.5\"} 1010\nhttp_request_latency_seconds_bucket{le=\"+Inf\"} 1030\nhttp_request_latency_seconds_count 1030\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.968710208
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:26.474318Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "2026-11-06T17:26:26.476381Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58868/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_request_latency_seconds Request latency.\n# TYPE http_request_latency_seconds histogram\nhttp_request_latency_seconds_bucket{le=\"0.1\"} 900\nhttp_request_latency_seconds_bucket{le=\"0.5\"} 1010\nhttp_request_latency_seconds_bucket{le=\"+Inf\"} 1030\nhttp_request_latency_seconds_count 1030\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.738251125
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:39.252642Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "2026-11-06T17:26:39.254845Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:58975/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_request_latency_seconds Request latency.\n# TYPE http_request_latency_seconds histogram\nhttp_request_latency_seconds_bucket{le=\"0.1\"} 900\nhttp_request_latency_seconds_bucket{le=\"0.5\"} 1010\nhttp_request_latency_seconds_bucket{le=\"+Inf\"} 1030\nhttp_request_latency_seconds_count 1030\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.769745916
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:52.066316Z DEBUG Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "2026-11-06T17:26:52.068526Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_metrics\"), \"metrics\": Array [Object {\"name\": String(\"http_request_latency_seconds\"), \"type\": String(\"histogram\"), \"help\": String(\"Request latency.\"), \"samples\": Array [Object {\"labels\": Object {\"le\": String(\"0.1\")}, \"value\": Number(900), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"0.5\")}, \"value\": Number(1010), \"suffix\": String(\"_bucket\")}, Object {\"labels\": Object {\"le\": String(\"+Inf\")}, \"value\": Number(1030), \"suffix\": String(\"_bucket\")}]}]}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"requests: 40\\nrequests_under_10ms: 30\")}"
+          ],
+          "client_command": "sh -c curl -sS --max-time 230 http://127.0.0.1:59110/metrics | tee /dev/stderr | promtool check metrics && echo PROMTOOL-OK",
+          "client_output": "PROMTOOL-OK\n\n# HELP http_request_latency_seconds Request latency.\n# TYPE http_request_latency_seconds histogram\nhttp_request_latency_seconds_bucket{le=\"0.1\"} 900\nhttp_request_latency_seconds_bucket{le=\"0.5\"} 1010\nhttp_request_latency_seconds_bucket{le=\"+Inf\"} 1030\nhttp_request_latency_seconds_count 1030\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 12.813847334
+        }
+      ]
+    },
+    {
+      "id": "lmtp/deliver-local",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} alice@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 25[01]\\b(?s:.*)^DATA 250\\b/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:26:59.308699Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-11-06T17:27:03.694556Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59204 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 11.632449208
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:08.824245Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-11-06T17:27:13.148310Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59250 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.448467542
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:17.918891Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-11-06T17:27:22.384419Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59293 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.237635625
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:27.590604Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-11-06T17:27:31.886504Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59363 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.500661292
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:36.911625Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "2026-11-06T17:27:41.216738Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(true), \"reason\": String(\"RCPT TO accepted\")}",
+            "Executing action 0: Object {\"type\": String(\"lmtp_delivery\"), \"deliver_all\": Bool(false), \"results\": Array [Object {\"recipient\": String(\"alice@example.com\"), \"delivered\": Bool(true)}]}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59425 alice@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 250 2.1.5 RCPT TO accepted\nDATA 250 2.0.0 <alice@example.com> delivered\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 9.332391458
+        }
+      ]
+    },
+    {
+      "id": "lmtp/refuse-unknown",
+      "protocol": "lmtp",
+      "instruction": "Only the mailbox alice@example.com exists here; refuse every other recipient.",
+      "client": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n {PORT} bob@example.com",
+      "independence": "protocol-client",
+      "expectation": "matches /(?m)^RCPT 5\\d\\d\\b/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:46.951706Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-11-06T17:27:46.953683Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59500 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 5.729140333
+        },
+        {
+          "run": 2,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:50.463384Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-11-06T17:27:50.465996Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59522 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.520610667
+        },
+        {
+          "run": 3,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:53.960740Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-11-06T17:27:53.963008Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59546 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.49008725
+        },
+        {
+          "run": 4,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:27:57.670295Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-11-06T17:27:57.672588Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59568 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.709936459
+        },
+        {
+          "run": 5,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-06T17:28:01.385627Z DEBUG Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "2026-11-06T17:28:01.387899Z DEBUG Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"lmtp_recipient_reply\"), \"accept\": Bool(false)}",
+            "Executing action 1: Object {\"type\": String(\"append_memory\"), \"value\": String(\"last_refused_recipient: bob@example.com\\n\")}"
+          ],
+          "client_command": "python3 -c import sys, smtplib\nport, rcpt = int(sys.argv[1]), sys.argv[2]\ntry:\n    s = smtplib.LMTP('127.0.0.1', port, timeout=230)\n    code, _ = s.ehlo()\n    print('LHLO', code)\n    code, msg = s.mail('eval@sender.test')\n    print('MAIL', code, msg.decode('utf-8', 'replace'))\n    code, msg = s.rcpt(rcpt)\n    print('RCPT', code, msg.decode('utf-8', 'replace'))\n    if code < 300:\n        code, msg = s.data('Subject: NetGet eval\\r\\n\\r\\nHello.\\r\\n')\n        print('DATA', code, msg.decode('utf-8', 'replace'))\n    s.quit()\nexcept Exception as e:\n    print(type(e).__name__, e)\n 59593 bob@example.com",
+          "client_output": "LHLO 250\nMAIL 250 2.1.0 Sender OK\nRCPT 550 5.1.1 No such user here\n",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.745238959
+        }
+      ]
+    }
+  ]
+}
