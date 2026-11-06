@@ -294,6 +294,9 @@ impl WebSocketClient {
             .await
             .with_context(|| format!("WebSocket TCP connect to {dial} failed"))?;
         let local_addr = tcp.local_addr()?;
+        // Taken before the socket is wrapped: cutting off a server that does not read ends
+        // the connection.
+        let closer = crate::utils::outbox::ConnectionCloser::for_stream(&tcp);
         let config = WebSocketConfig {
             max_message_size: Some(MAX_INBOUND_MESSAGE_BYTES),
             max_frame_size: Some(MAX_INBOUND_FRAME_BYTES),
@@ -338,7 +341,14 @@ impl WebSocketClient {
         // outcome instead of "queued somewhere". A frame is written under the lock, so the
         // two producers can never interleave halves of a frame.
         let sink = Arc::new(Mutex::new(sink));
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<WsOut>();
+        // Bounded: answers to what the server sends are queued here, so a server that sends
+        // without reading is cut off rather than queued for (`utils::outbox`).
+        let (out_tx, mut out_rx) = crate::utils::outbox::channel(
+            format!("WebSocket client {client_id}"),
+            crate::utils::outbox::OutboxLimits::DEFAULT,
+            WsOut::weight,
+        );
+        out_tx.close_on_cut_off(closer);
 
         // One writer for the connection, so frames produced by different handlers cannot
         // interleave and no lock is held across an LLM call.
@@ -515,7 +525,7 @@ impl WebSocketClient {
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
-        out_tx: mpsc::UnboundedSender<WsOut>,
+        out_tx: crate::utils::outbox::OutboxSender<WsOut>,
         data: Arc<Mutex<ClientData>>,
         queued_bytes: Arc<std::sync::atomic::AtomicUsize>,
     ) {
@@ -624,7 +634,7 @@ impl WebSocketClient {
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
-        out_tx: &mpsc::UnboundedSender<WsOut>,
+        out_tx: &crate::utils::outbox::OutboxSender<WsOut>,
         data: &Arc<Mutex<ClientData>>,
     ) {
         let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {
@@ -700,7 +710,11 @@ impl WebSocketClient {
 
         // A private frame channel, drained synchronously below, so `execute_action` produces
         // exactly the frames this command asked for and nothing else can be attributed to it.
-        let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<WsOut>();
+        let (frame_tx, mut frame_rx) = crate::utils::outbox::channel(
+            "WebSocket client command",
+            crate::utils::outbox::OutboxLimits::DEFAULT,
+            WsOut::weight,
+        );
         let protocol = WebSocketClientProtocol::for_connection(frame_tx);
 
         while let Some(command) = command_rx.recv().await {
@@ -808,7 +822,7 @@ impl WebSocketClient {
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
-        out_tx: &mpsc::UnboundedSender<WsOut>,
+        out_tx: &crate::utils::outbox::OutboxSender<WsOut>,
         data: &Arc<Mutex<ClientData>>,
     ) {
         // A message held by `wait_for_websocket_data` is the front of the first one: joined
@@ -906,7 +920,7 @@ impl WebSocketClient {
         llm_client: &OllamaClient,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
-        out_tx: &mpsc::UnboundedSender<WsOut>,
+        out_tx: &crate::utils::outbox::OutboxSender<WsOut>,
         data: &Arc<Mutex<ClientData>>,
     ) {
         let Some(instruction) = app_state.get_instruction_for_client(client_id).await else {

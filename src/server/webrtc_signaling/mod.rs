@@ -434,6 +434,9 @@ impl WebRtcSignalingServer {
             max_frame_size: Some(SIGNALING_MAX_MESSAGE_BYTES),
             ..Default::default()
         };
+        // Taken before the socket is wrapped: cutting off a peer that does not read ends its
+        // connection.
+        let closer = crate::utils::outbox::ConnectionCloser::for_stream(&stream);
         let ws_stream = tokio::time::timeout(
             SIGNALING_HANDSHAKE_TIMEOUT,
             accept_async_with_config(stream, Some(config)),
@@ -461,6 +464,7 @@ impl WebRtcSignalingServer {
             crate::utils::outbox::OutboxLimits::DEFAULT,
             Message::len,
         );
+        out_tx.close_on_cut_off(closer);
         let writer = tokio::spawn(async move {
             while let Some(msg) = out_rx.recv().await {
                 if let Err(e) = ws_tx.send(msg).await {

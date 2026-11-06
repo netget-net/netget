@@ -408,13 +408,15 @@ dependency for exactly that reason.
   subscriber limit, `mqtt_sn` and the datalink/ARP clients by one request in flight, the raw-frame
   injectors by the capture rate); 22 could grow from network input. Bounded since:
   the status channel where it is drained (`logging::status_drain`: dashboard and the three CLI
-  forwarders) and ten writer channels via `utils::outbox` (`mqtt`, `amqp`, `bgp`, `websocket`,
-  `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`, `tor_relay`, the `libp2p` yamux session:
-  4096 frames / 8 MiB, then the peer is cut off). **Still open:** the USB/IP servers
+  forwarders) and twelve writer channels via `utils::outbox` (servers `mqtt`, `amqp`, `bgp`,
+  `websocket`, `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`, `tor_relay`, the `libp2p`
+  yamux session; clients `websocket`, `guacamole`: 4096 frames / 8 MiB, then the peer is cut off
+  and, everywhere but yamux, its connection shut down). **Still open:** the USB/IP servers
   (`usb/smartcard` APDUs, `usb/msc` I/O events, `usb/keyboard` LED reports — a `watch` would do —
-  and `usb/serial` bytes, all fed from synchronous URB callbacks), `can`'s transmit queue, and
-  three clients whose peer is the server the operator pointed them at (`guacamole`,
-  `websocket`, `ssdp`).
+  and `usb/serial` bytes, all fed from synchronous URB callbacks and built only with `libusb`),
+  `can`'s transmit queue, and the `ssdp` client's datagram queue (datagrams want drop-and-count,
+  not a cut-off). The WebSocket server's *inbound* queue (`ConnData::queued`) has no bound of its
+  own either; the outbound cut-off ends a flooding peer only once its answers back up.
 
 ---
 

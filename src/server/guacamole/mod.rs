@@ -487,6 +487,10 @@ async fn session(
         crate::utils::outbox::OutboxLimits::DEFAULT,
         String::len,
     );
+    // Cutting off a client that does not read ends its connection, not just the writer.
+    tx.close_on_cut_off(crate::utils::outbox::ConnectionCloser::for_stream(
+        w.as_ref(),
+    ));
     let _ = tx.send(out);
     let writer_ctx = ctx.clone();
     ctx.state

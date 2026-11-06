@@ -338,6 +338,8 @@ async fn handle_connection(
     offered_heartbeat: u16,
 ) -> Result<()> {
     let connection_id = ConnectionId::new(app_state.get_next_unified_id().await);
+    // Taken before the split: cutting off a peer that does not read ends its connection.
+    let closer = crate::utils::outbox::ConnectionCloser::for_stream(&socket);
     let (mut read_half, write_half) = tokio::io::split(socket);
     // Shared with the dashboard's peer command task: every AMQP action writes its frames
     // through `out_tx` (below), so the only thing the peer task ever does to the write half
@@ -352,6 +354,7 @@ async fn handle_connection(
         format!("AMQP connection {connection_id}"),
         crate::utils::outbox::OutboxLimits::DEFAULT,
     );
+    out_tx.close_on_cut_off(closer);
     let writer_status_tx = status_tx.clone();
     let writer_write_half = write_half.clone();
     let writer_state = app_state.clone();

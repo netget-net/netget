@@ -391,11 +391,14 @@ async fn run_session(
 ) -> Result<()> {
     // Never clone a TcpStream: split it, give the write half to one task, and let everything
     // that needs to send push bytes through a channel.
+    // Taken before the split: cutting off a peer that does not read ends its session.
+    let closer = crate::utils::outbox::ConnectionCloser::for_stream(&stream);
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (out_tx, mut out_rx) = crate::utils::outbox::bytes_channel(
         format!("BGP session {connection_id}"),
         crate::utils::outbox::OutboxLimits::DEFAULT,
     );
+    out_tx.close_on_cut_off(closer);
 
     // Every byte that reaches the wire passes through here, so this is the one place the
     // outbound counters (and `last_activity`) are kept — keepalives, NOTIFICATIONs and injected

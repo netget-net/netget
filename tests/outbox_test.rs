@@ -73,3 +73,31 @@ async fn sends_fail_without_cutting_off_once_the_writer_is_gone() {
     assert!(tx.send(vec![1]).is_err());
     assert!(!tx.overflowed(), "a closed writer is not a slow peer");
 }
+
+#[tokio::test]
+async fn cutting_a_peer_off_shuts_its_socket_down() {
+    use netget::utils::outbox::ConnectionCloser;
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut peer = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let (server_side, _) = listener.accept().await.unwrap();
+
+    let (tx, _rx) = bytes_channel("test", SMALL);
+    tx.close_on_cut_off(ConnectionCloser::for_stream(&server_side));
+    for n in 0..5u8 {
+        let _ = tx.send(vec![n]);
+    }
+    assert!(tx.overflowed());
+
+    // The server still holds its stream; only the cut-off can have ended the connection.
+    let mut buf = [0u8; 16];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), peer.read(&mut buf))
+        .await
+        .expect("the peer was not disconnected when it was cut off")
+        .unwrap_or(0);
+    assert_eq!(n, 0, "the peer reads EOF");
+    drop(server_side);
+}

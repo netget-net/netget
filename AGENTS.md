@@ -1999,12 +1999,17 @@ add per-byte messages — a dropped line is one the operator never sees.
 **Per-connection writer channels are bounded where a peer could grow them.** A stream server
 that funnels a connection's writes through one writer task uses `utils::outbox` (4096 frames or
 8 MiB, Redis's pub/sub client limit): a peer that stops reading while it is answered, broadcast
-to or relayed to is cut off — what is queued is abandoned and nothing more is written to it,
-until it or a read deadline ends the connection — never queued for, and never carried on with
-a frame missing.
-`mqtt`, `amqp`, `bgp`, `websocket`, `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`,
-`tor_relay` and the `libp2p` yamux session use it; `redis` pub/sub has its own 8 MiB limit.
-Use it for any new writer task. The other unbounded channels are operator-paced, startup-only,
+to or relayed to is cut off — never queued for, and never carried on with a frame missing. Give
+the outbox the socket (`OutboxSender::close_on_cut_off` with a `ConnectionCloser` taken before
+the stream is split or wrapped) and the cut-off **ends the connection**: the socket is shut
+down both ways, the blocked writer fails, the reader reads EOF and runs the protocol's own
+close path, and the peer reads EOF — so a client that never reads does not keep a socket and a
+connection slot until its read deadline. `tests/server/{mqtt,websocket}/slow_reader_test.rs`
+assert it from the peer's side. The `mqtt`, `amqp`, `bgp`, `websocket`, `nostr`, `webrtc`,
+`webrtc_signaling`, `guacamole` and `tor_relay` servers and the `websocket` and `guacamole`
+clients do both; the `libp2p` yamux session bounds its queue but has no socket to hand over
+(it runs over the Noise layer), so its cut-off peer waits for its read deadline. `redis` pub/sub
+has its own 8 MiB limit. Use the outbox, with its closer, for any new writer task. The other unbounded channels are operator-paced, startup-only,
 have their receiver dropped, or are limited upstream (a flow-control window, one request in
 flight); `docs/planning/IMPROVEMENTS.md` item 23 has the census and the sites still open.
 

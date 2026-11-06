@@ -505,6 +505,9 @@ async fn session(
         ..Default::default()
     };
     // `from_partially_read`: a client may pipeline its first message behind the request head.
+    // Taken before the socket is wrapped: cutting off a subscriber that does not read ends its
+    // connection.
+    let closer = crate::utils::outbox::ConnectionCloser::for_stream(&socket);
     let ws =
         WebSocketStream::from_partially_read(socket, leftover, Role::Server, Some(ws_config)).await;
     let (sink, stream) = ws.split();
@@ -516,6 +519,7 @@ async fn session(
         crate::utils::outbox::OutboxLimits::DEFAULT,
         Outbound::weight,
     );
+    out_tx.close_on_cut_off(closer);
     let conn = Arc::new(ConnShared::new(connection_id.as_u32(), out_tx.clone()));
     server.relay.add(conn.clone());
     let protocol = Arc::new(NostrProtocol::for_connection(
