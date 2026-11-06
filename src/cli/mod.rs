@@ -665,8 +665,17 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
     // so a downstream pipe receives only the model's payload bytes.
     let (status_tx, mut status_rx) = mpsc::unbounded_channel::<String>();
     let _forwarder = tokio::spawn(async move {
-        while let Some(msg) = status_rx.recv().await {
-            if !msg.starts_with("__") {
+        while let Some(first) = status_rx.recv().await {
+            let batch = crate::logging::status_drain::drain_queued(
+                &mut status_rx,
+                Some(first),
+                non_interactive::FORWARD_LINES_PER_BATCH,
+            );
+            let notice = batch.dropped_notice();
+            for msg in batch.lines.into_iter().chain(notice) {
+                if crate::utils::is_status_control_line(&msg) {
+                    continue;
+                }
                 let clean = msg
                     .strip_prefix("[INFO] ")
                     .or_else(|| msg.strip_prefix("[ERROR] "))

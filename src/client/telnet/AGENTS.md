@@ -82,9 +82,6 @@ genuinely be re-entered. Copying its shape here bought nothing and described a
 concurrency this client does not have. The struct now holds the model's memory and
 nothing else.
 
-(The root `AGENTS.md` records the same shape one level up: `state/machine.rs` defines
-a generic `StateMachine<S>` that nothing uses, and every protocol hand-rolls a copy.)
-
 **Backpressure still works**, because it is TCP's: while an LLM call is in flight this
 task is not reading, so the kernel receive buffer fills and the server is slowed. That
 is what the queue was pretending to do.

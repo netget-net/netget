@@ -247,8 +247,10 @@ Per connection: **Idle → Processing → Accumulating**, in `ConnData`.
 `tokio::io::split` is not used directly: the socket becomes a `WebSocketStream`, which is split
 with `futures::StreamExt::split()` into a `SplitSink` and a `SplitStream` — the same "one owner
 per direction, never clone" shape one level up. A single **writer task** owns the sink and every
-producer (message handlers, async push actions, scheduled tasks) sends `WsOut` down an
-`mpsc::UnboundedSender`, so no lock is ever held across an `.await` that performs I/O.
+producer (message handlers, async push actions, scheduled tasks) sends `WsOut` down a
+`utils::outbox::OutboxSender`, so no lock is ever held across an `.await` that performs I/O. The
+outbox is bounded (4096 frames or 8 MiB): a peer that stops reading while it is answered or
+broadcast to is cut off, Redis's policy for a slow pub/sub client, rather than queued for.
 
 The auto-pong is flushed by the *next* read, which the frame loop performs immediately, so a
 ping is answered even when the handler produces no frame of its own.

@@ -188,7 +188,7 @@ struct PeerConnection {
     #[allow(dead_code)]
     peer_id: PeerId,
     /// Messages queued here are written by this connection's writer task.
-    out_tx: mpsc::UnboundedSender<Message>,
+    out_tx: crate::utils::outbox::OutboxSender<Message>,
     #[allow(dead_code)]
     remote_addr: SocketAddr,
     #[allow(dead_code)]
@@ -218,7 +218,7 @@ impl WebRtcSignalingServerData {
     async fn register_peer(
         &self,
         peer_id: PeerId,
-        out_tx: mpsc::UnboundedSender<Message>,
+        out_tx: crate::utils::outbox::OutboxSender<Message>,
         remote_addr: SocketAddr,
         connection_id: ConnectionId,
     ) -> Result<()> {
@@ -454,7 +454,13 @@ impl WebRtcSignalingServer {
         // and any other peer relaying towards us — queues on `out_tx` instead. Handing the
         // sink itself to the peer registry is what previously forced the read loop to
         // terminate on registration.
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+        // Bounded: other peers relay towards this one, so a peer that stops reading is cut
+        // off rather than queued for (`utils::outbox`).
+        let (out_tx, mut out_rx) = crate::utils::outbox::channel(
+            format!("WebRTC signalling connection {remote_addr}"),
+            crate::utils::outbox::OutboxLimits::DEFAULT,
+            Message::len,
+        );
         let writer = tokio::spawn(async move {
             while let Some(msg) = out_rx.recv().await {
                 if let Err(e) = ws_tx.send(msg).await {
@@ -951,7 +957,10 @@ impl WebRtcSignalingServer {
         }
     }
 
-    fn reply(out_tx: &mpsc::UnboundedSender<Message>, message: &SignalingMessage) -> Result<()> {
+    fn reply(
+        out_tx: &crate::utils::outbox::OutboxSender<Message>,
+        message: &SignalingMessage,
+    ) -> Result<()> {
         out_tx.send(Message::Text(serde_json::to_string(message)?))?;
         Ok(())
     }
@@ -998,7 +1007,7 @@ impl WebRtcSignalingServer {
     fn apply_results(
         result: crate::llm::actions::executor::ExecutionResult,
         subject: &str,
-        out_tx: &mpsc::UnboundedSender<Message>,
+        out_tx: &crate::utils::outbox::OutboxSender<Message>,
         status_tx: &mpsc::UnboundedSender<String>,
     ) -> bool {
         let log = Log::new(Some(status_tx));

@@ -71,7 +71,8 @@ hold timer expires                -> NOTIFICATION 4/0, close
 `Active` never occur — there is no outbound connect and no reconnection.
 
 **Concurrency**: the stream is split with `tokio::io::split`. The write half is owned by a
-dedicated task fed by an unbounded channel, so the keepalive ticker keeps sending while the read
+dedicated task fed by a bounded outbox (`utils::outbox`: 4096 messages or 8 MiB, past which a
+peer that is not reading is cut off), so the keepalive ticker keeps sending while the read
 loop is blocked in an LLM call. Sharing the stream behind a lock would have meant holding that
 lock across the LLM await, which the root CLAUDE.md forbids.
 

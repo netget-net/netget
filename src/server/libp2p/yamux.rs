@@ -47,6 +47,17 @@ enum Cmd {
     GoAway(u32),
 }
 
+impl Cmd {
+    /// Bytes this command puts on the wire, for the session's outbound bound: a 12-byte yamux
+    /// header plus any payload.
+    fn weight(&self) -> usize {
+        match self {
+            Cmd::Data(_, payload) => 12 + payload.len(),
+            _ => 12,
+        }
+    }
+}
+
 struct Inbound {
     tx: mpsc::UnboundedSender<Vec<u8>>,
     /// Bytes the peer may still send before it must wait for a window update.
@@ -71,7 +82,7 @@ pub struct Stream {
 #[derive(Clone)]
 pub struct StreamWriter {
     pub id: u32,
-    cmd: mpsc::UnboundedSender<Cmd>,
+    cmd: crate::utils::outbox::OutboxSender<Cmd>,
 }
 
 impl StreamWriter {
@@ -149,7 +160,7 @@ impl Io for Stream {
 /// Opens outbound streams; cheap to clone.
 #[derive(Clone)]
 pub struct Opener {
-    cmd: mpsc::UnboundedSender<Cmd>,
+    cmd: crate::utils::outbox::OutboxSender<Cmd>,
     next_id: Arc<AtomicU32>,
     table: Table,
 }
@@ -203,7 +214,13 @@ pub struct Session {
 
 /// Start yamux on a secured connection; `client` is the side that dialled it (odd stream ids).
 pub fn session(conn: NoiseConn, client: bool) -> Session {
-    let (cmd, cmd_rx) = mpsc::unbounded_channel();
+    // Bounded: the read loop answers every PING and SYN at once, so a peer that sends without
+    // reading is cut off rather than queued for (`utils::outbox`).
+    let (cmd, cmd_rx) = crate::utils::outbox::channel(
+        "libp2p yamux session",
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+        Cmd::weight,
+    );
     let table: Table = Arc::new(Mutex::new(HashMap::new()));
     let (incoming_tx, incoming) = mpsc::channel(MAX_STREAMS);
     let opener = Opener {
@@ -221,7 +238,7 @@ pub fn session(conn: NoiseConn, client: bool) -> Session {
 
 async fn read_loop(
     mut r: NoiseReader,
-    cmd: mpsc::UnboundedSender<Cmd>,
+    cmd: crate::utils::outbox::OutboxSender<Cmd>,
     table: Table,
     incoming: mpsc::Sender<Stream>,
     client: bool,
@@ -333,7 +350,10 @@ struct Outbound {
     fin: bool,
 }
 
-async fn write_loop(mut w: NoiseWriter, mut cmds: mpsc::UnboundedReceiver<Cmd>) -> Result<()> {
+async fn write_loop(
+    mut w: NoiseWriter,
+    mut cmds: crate::utils::outbox::OutboxReceiver<Cmd>,
+) -> Result<()> {
     let mut streams: HashMap<u32, Outbound> = HashMap::new();
     let fresh = || Outbound {
         window: INITIAL_WINDOW,

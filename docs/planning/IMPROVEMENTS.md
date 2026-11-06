@@ -378,15 +378,43 @@ dependencies inform. Do not turn the informational one into a second hard gate w
 what happens to a protocol whose dependency probe is merely unsure — `DeviceAccess` derives no
 dependency for exactly that reason.
 
-### 23. Architectural ceilings **[static]**
+### 23. Architectural ceilings **[measured]**
 
-- `AppState` is a single `RwLock` over servers, clients, connections, tasks, LLM config, and
-  access logs (`src/state/app_state.rs:261`). No deadlock (no `.await` under the guard), but
-  every per-connection stat update from every server serializes through one writer.
-- All 27 `mpsc` channels are unbounded; there is no backpressure anywhere. A stalled consumer
-  grows memory without bound.
-- `state/machine.rs` defines a generic `StateMachine<S>` that nothing instantiates; every
-  protocol hand-rolls Idle/Processing/Accumulating, so a fix in one does not propagate.
+- **The `AppState` lock.** `tests/app_state_contention_test.rs` (ignored; `--ignored
+  --nocapture`) drives 1/16/64/256 connections through a static-handler TCP server and prints
+  req/s and p50/p99, alone and beside readers. Baseline, debug build: 3 010 req/s at one
+  connection, 5 100–7 000 at 16–256 with p50 growing 2.7 ms → 36 ms; a 10 Hz dashboard changed
+  nothing; one back-to-back `build_snapshot` cut one connection to 546 req/s and four MCP-style
+  pollers to 280. Temporary per-call-site timing showed five write acquisitions and one read per
+  request (`update_connection_stats` ×2, `record_access_log` held 32–37 µs while rendering the
+  history entry, `register_server_task` for the answer task, a `with_server_mut` that only read
+  the peer address); at 64 connections writers waited 77% of the time while the lock was held
+  24% — the queue handoff, not the work, was the ceiling. `list_access_logs` held the read lock
+  ~1 ms copying the ring.
+
+  Done: counters, the access log and the task registry have their own locks
+  (`tests/app_state_off_lock_test.rs`); a request now takes one write and three reads. Re-measured
+  interleaved with the baseline binary under a machine load average of 120–245 (other builds),
+  so absolute numbers are depressed and the no-reader cells are within noise; the reader cells
+  are not: one connection beside a back-to-back dashboard 188–231 → 406–542 req/s, beside four
+  MCP pollers 138–146 → 215–342 req/s with p50 4.5 ms → 1.2 ms. Open: re-measure the no-reader
+  ceiling on a quiet machine; the remaining write (history) could move to a per-connection lock
+  if a protocol with history on ever needs more.
+- **Channels.** 60 tokio `unbounded_channel` sites (plus three `std::sync::mpsc::channel`),
+  classified 1 November 2026 by who sends and whether the consumer can stall: 26 are
+  operator-paced, startup-only or have their receiver dropped (MCP `start_server`'s status
+  receiver is dropped when the tool returns, so later sends fail rather than buffer); 15 are
+  limited upstream (yamux stream data by its flow-control window, `redis` pub/sub by its 8 MiB
+  subscriber limit, `mqtt_sn` and the datalink/ARP clients by one request in flight, the raw-frame
+  injectors by the capture rate); 22 could grow from network input. Bounded since:
+  the status channel where it is drained (`logging::status_drain`: dashboard and the three CLI
+  forwarders) and ten writer channels via `utils::outbox` (`mqtt`, `amqp`, `bgp`, `websocket`,
+  `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`, `tor_relay`, the `libp2p` yamux session:
+  4096 frames / 8 MiB, then the peer is cut off). **Still open:** the USB/IP servers
+  (`usb/smartcard` APDUs, `usb/msc` I/O events, `usb/keyboard` LED reports — a `watch` would do —
+  and `usb/serial` bytes, all fed from synchronous URB callbacks), `can`'s transmit queue, and
+  three clients whose peer is the server the operator pointed them at (`guacamole`,
+  `websocket`, `ssdp`).
 
 ---
 

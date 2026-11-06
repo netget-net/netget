@@ -46,13 +46,24 @@ pub enum WsOut {
     Close { code: u16, reason: String },
 }
 
+impl WsOut {
+    /// Payload size, for the connection's outbound bound (`utils::outbox`).
+    pub fn weight(&self) -> usize {
+        match self {
+            WsOut::Text(t) => t.len(),
+            WsOut::Binary(b) | WsOut::Ping(b) => b.len(),
+            WsOut::Close { reason, .. } => reason.len(),
+        }
+    }
+}
+
 /// A live WebSocket connection, addressable by the model.
 struct WsConnEntry {
     server_id: u32,
     remote_addr: String,
     path: String,
     subprotocol: Option<String>,
-    tx: mpsc::UnboundedSender<WsOut>,
+    tx: crate::utils::outbox::OutboxSender<WsOut>,
 }
 
 /// Directory of *live sockets*, keyed by connection id (globally unique — allocated by
@@ -67,7 +78,7 @@ pub fn register_connection(
     connection_id: ConnectionId,
     remote_addr: String,
     path: String,
-    tx: mpsc::UnboundedSender<WsOut>,
+    tx: crate::utils::outbox::OutboxSender<WsOut>,
 ) {
     if let Ok(mut map) = WS_CONNECTIONS.lock() {
         map.insert(
@@ -245,7 +256,7 @@ pub fn decode_outbound_payload(data: &str, encoding: Option<&str>) -> Result<Vec
 pub struct WebSocketProtocol {
     server_id: Option<ServerId>,
     connection_id: Option<ConnectionId>,
-    out_tx: Option<mpsc::UnboundedSender<WsOut>>,
+    out_tx: Option<crate::utils::outbox::OutboxSender<WsOut>>,
     status_tx: Option<mpsc::UnboundedSender<String>>,
     /// Subprotocols the client offered in `Sec-WebSocket-Protocol`, used to reject an
     /// `accept_websocket` naming one the client never asked for (RFC 6455 §4.2.2 step 5.5).
@@ -298,7 +309,7 @@ impl WebSocketProtocol {
     pub fn for_connection(
         server_id: ServerId,
         connection_id: ConnectionId,
-        out_tx: mpsc::UnboundedSender<WsOut>,
+        out_tx: crate::utils::outbox::OutboxSender<WsOut>,
         status_tx: mpsc::UnboundedSender<String>,
         offered_subprotocols: Vec<String>,
     ) -> Self {
