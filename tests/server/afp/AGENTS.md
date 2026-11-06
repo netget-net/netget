@@ -8,10 +8,13 @@
   decisions, the cleartext password check, fail-closed answers (no model, wrong action, unusable
   answer, no answer), and every bound. tshark reads each recorded session.
 - `real_peer_test.rs` — independent clients through a recording relay: netatalk's `afparg` and
-  `asip-status`, and Nmap's `afp-serverinfo`, `afp-showmount` and `afp-ls`. They fail rather
+  `asip-status`, and Nmap's `afp-serverinfo` and `afp-ls`. They fail rather
   than skip when a peer is missing (`brew install netatalk nmap`; on Ubuntu
   `sh scripts/test-peers/build-netatalk.sh <dir>` plus `apt-get install nmap`).
 
 No LLM calls anywhere: policies, static rules, or a model at `127.0.0.1:1` that never answers.
-Nmap runs its AFP scripts only on port 548 or a port its services file names `afp`, so the test
-hands it a one-line `--servicedb`.
+Nmap runs `afp-serverinfo` and `afp-ls` only on port 548 or a port its services file names
+`afp`, so the test hands it a data directory holding a one-line `nmap-services`.
+`afp-showmount` runs on port 548 alone, so it is not used. The test passes `afp.uam=NoUserAuth`:
+since Nmap 7.99 a login with no user defaults to DHCAST128, which this server refuses, and
+`afp-ls` then prints nothing at all; older Nmaps ignore the argument and log in as a guest.

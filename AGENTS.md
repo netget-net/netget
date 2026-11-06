@@ -280,14 +280,22 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (60 protocols as of 30 September 2026:
-  49 plus nine new servers that each arrived Beta on a real client — `dict`, `gemini`,
-  `prometheus`, `docker`, `vault`, `beanstalkd`, `zabbix`, `gearman`, `bolt` — less `modbus`,
-  which went to Stable, plus `nostr`, a new relay that
-  arrived Beta on nak and rust-nostr's `nostr-sdk`, and `nsq` (`to_nsq`, `nsq_tail`) and `otlp`
-  (`otel-cli`, `telemetrygen`), new servers that arrived Beta the same day. Re-derived
-  31 October 2026 after `redis` went to Stable: 57. Re-derive, the count drifts every pass —
-  `python3 scripts/beta_evidence_table.py --check` prints it).
+- **Beta** — human-reviewed, works against real clients (63 servers as of 6 November 2026, after `redis` went to Stable;
+  re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
+  prints it). The 31 October review promoted six whose evidence was already there and already
+  green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
+  `afp` (netatalk's afparg and Nmap's AFP library), `capnp_rpc` (pycapnp and go-capnp),
+  `iscsi` (libiscsi and the Linux kernel initiator), `srt` (libsrt's srt-live-transmit) and
+  `rsync` (the stock rsync client). What held most of them back was a note saying the pair job
+  "had not run in CI", written when the protocol landed and never revisited after the job
+  passed — check `gh run list --workflow protocol-pairs.yml` before believing one. Two were
+  checked and **not** promoted: `db2` (Derby's JDBC client and IBM's CLI driver both pass, but
+  the server returns no result set, so a SELECT fails — the `openvpn` case below) and
+  `profinet` (profinet-py and pnio_dcp pass in the `profinet` pair job, but the test needs
+  Linux and CAP_NET_RAW, so nobody reviewing on macOS has seen it pass). Running the suites
+  also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
+  guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
+  named, `afp-showmount`, had never run at all on an ephemeral port.
 
   **Do not read the rest of this section as the list. Generate it:**
 

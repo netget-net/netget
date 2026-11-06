@@ -8318,6 +8318,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
 
 [[package]]
+name = "listeners"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "504c4ecfa20498c07ae4ff19b632d212e1fdcef83195b8e9eb2552306c42205f"
+dependencies = [
+ "byteorder",
+ "cc",
+ "libc",
+ "rustix 1.1.2",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "litemap"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9536,6 +9549,7 @@ dependencies = [
  "ldap3_proto",
  "lettre",
  "libc",
+ "listeners",
  "llama-cpp-2",
  "lz4_flex 0.11.5",
  "matchit 0.8.6",

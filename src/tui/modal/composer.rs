@@ -498,6 +498,17 @@ impl ComposerModel {
 pub fn describe(outcome: &ClientSendOutcome) -> String {
     match outcome {
         ClientSendOutcome::Sent { bytes_sent } => format!("sent {bytes_sent} byte(s)"),
+        ClientSendOutcome::Probed { bytes_sent, report } => format!(
+            "sent {bytes_sent} byte(s); {}",
+            report["summary"]
+                .as_array()
+                .map(|lines| lines
+                    .iter()
+                    .filter_map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "))
+                .unwrap_or_default()
+        ),
         ClientSendOutcome::Executed { detail } => format!("executed ({detail})"),
         ClientSendOutcome::Rejected { error } => format!("rejected: {error}"),
         ClientSendOutcome::Disconnected => "disconnected".to_string(),

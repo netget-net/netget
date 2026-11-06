@@ -262,8 +262,12 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "notify_operator",
-      "message": "Handled http_connected"
+      "type": "send_http_request",
+      "method": "GET",
+      "path": "/api/status",
+      "headers": {
+        "Accept": "application/json"
+      }
     }
   ]
 }
@@ -281,8 +285,12 @@ Example handler response:
 {
   "actions": [
     {
-      "type": "notify_operator",
-      "message": "Handled http_response_received"
+      "type": "send_http_request",
+      "method": "GET",
+      "path": "/api/status",
+      "headers": {
+        "Accept": "application/json"
+      }
     }
   ]
 }

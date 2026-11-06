@@ -6,12 +6,15 @@
 
 #[cfg(feature = "mcp-http")]
 pub mod agent_client;
+pub mod activity;
 pub mod control;
 pub mod docs;
 #[cfg(feature = "mcp-stdio")]
 pub mod drain;
 pub mod events;
 pub mod http_guard;
+pub mod local_listeners;
+pub mod protocol_search;
 #[cfg(feature = "mcp-stdio")]
 pub mod stdio;
 pub mod tools;
