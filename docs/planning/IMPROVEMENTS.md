@@ -104,18 +104,18 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    end: BLE needs an adapter, WireGuard needs root and a backend. WireGuard is `Experimental`.
 3. **`pgwire` malformed-query panic (item 77)** — upstream; kills one connection task only.
 4. **`AppState` is one `RwLock` over everything (item 23)** — a throughput ceiling.
-5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
-6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
-   enables; make it a runtime setting or delete it and its state.
-7. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
+5. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
    beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
    next tagged release.
 
-8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
-    (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
-    `grep -L 'Log::new\|crate::logging::Log' src/server/*/mod.rs`.
+6. **Logging long tail.** Server dual logging goes through the `Log` facade
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`). The sites still sending a
+    `[LEVEL]` line by hand are listed, per file, in the baseline of
+    `tests/hand_rolled_dual_logging_ratchet_test.rs`, which may only shrink; nearly all of them
+    are pairs whose file and TUI halves say different things on purpose (error detail in the
+    file, a decision tag or a shortened key on the TUI), so each is a per-protocol decision.
 
-9. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
+7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
 ### Patterns worth auditing for
 
@@ -178,7 +178,8 @@ Delete an entry once its context is no longer useful.
 |---|---|---|
 | 7 — unknown action names silent | (earlier) | `validate_static_action_names` rejects a bogus action at startup |
 | 9 — MCP scheduled-task leak | `82034d3d` | `remove_server()` owns teardown; MCP-surface coverage added so a rewrite cannot silently drop it |
-| 29/50 — dead documentation gate | (earlier) | One gate remains, behind a documented compile-time `false`; the second is gone |
+| 29/50 — dead documentation gate | W18 (November 2026) | `REQUIRE_DOCS_FOR_OPEN_ACTIONS`, both branches it guarded, `ActionExecutionError::DocumentationRequired`, the gated prompt variant and its snapshot, and the mock harness's replay of the retry are deleted. `open_server` / `open_client` are always offered to the operator prompt; the rendered production prompt is byte-identical |
+| 35 — `easy` layer | W18 (November 2026) | Deleted: `src/easy/`, its registry, trait, startup path, AppState instance maps, `prompts/easy_request/`, the `action_helper` hook that ran before deterministic handlers, `--simple` / `--simple-list`, and its tests. It served one protocol (HTTP), had no port or instruction flags, and nothing in scripts, tests, docs or the site invoked it. A saved session that still names an easy wrapper is refused; `"easy": []` still parses |
 | 32 — validator accepted a superset | `272acbc0` | `advertised_user_input_actions()` narrows to what the prompt rendered, mirroring the network-event path |
 | 39 — doc gate broke mocked tests | (earlier) | The retry no longer fires; 35 tests recovered from the `#[ignore]` it caused |
 | 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. `socket_file`, `pty` and `stdio` are gated the same way and their `send_first` and connect-event descriptions say so too. |
@@ -421,7 +422,9 @@ dependency for exactly that reason.
 > The MCP `start_server` tool description actively steers callers toward `event_handlers` with
 > script handlers over the LLM path. This code is therefore on the hot path, not a corner case.
 
-### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[verified]**
+### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[fixed — W18, November 2026]**
+
+> Fixed: the constant, both gated branches and the state only they read are deleted. The text below is the original finding.
 
 `src/events/handler.rs:20` is a hardcoded `const … = false`, so the "model must read the docs
 before it may open a server" gate never engages, while `is_server_docs_read()` /
@@ -441,7 +444,9 @@ what it renders, so e.g. `update_script` is accepted with scripting Off. Permiss
 than broken, but it is the same drift. Clearest at `src/events/handler.rs:611-637` and
 `src/llm/action_helper.rs:143-167`.
 
-### 35. The `easy` layer is a parallel subsystem serving one protocol **[verified]**
+### 35. The `easy` layer is a parallel subsystem serving one protocol **[fixed — W18, November 2026]**
+
+> Fixed: deleted, with `--simple` / `--simple-list`. The text below is the original finding.
 
 `src/easy/` contains exactly one protocol (HTTP, 378 LOC) but carries its own trait, registry
 (`src/protocol/easy_registry.rs`), startup path (`src/cli/easy_startup.rs`), prompt templates
@@ -499,7 +504,7 @@ plumbing cannot substantiate a **Beta** rating, which this project defines as "w
 clients". Suggested rule: no protocol may be rated Beta without at least one test that fails
 when a real off-the-shelf client would reject the output — and that test must assert, not log.
 
-### 48. Library panics reachable from the wire need auditing per dependency **[static]**
+### 48. Library panics reachable from the wire need auditing per dependency **[partly fixed — 31 Oct 2026]**
 
 The dhcproto `chaddr()` panic was found in the DHCP server and then existed unfixed in the
 DHCP client. The general shape — a parsing crate that trusts a length field the wire controls
@@ -507,6 +512,55 @@ DHCP client. The general shape — a parsing crate that trusts a length field th
 `kafka-protocol`, `cassandra-protocol`, `bson`, `pgwire`, `opensrv-mysql`) asking specifically
 which of their accessors panic on malformed input, since all of them run inside a socket task
 where a panic silently kills the server while its status still reads `Running`.
+
+**31 October 2026: four of them audited at the versions in `Cargo.lock`, each finding proved
+from the server's real socket, each guard checked by removing it.** `bson` (`utils::bson_depth`)
+and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
+
+- **`hickory-proto` 0.24.4 — a process-killing stack overflow.** Name decompression follows a
+  pointer by recursing (`rr/domain/name.rs:1203`) with no counter; a chain of pointers each
+  aiming two bytes back overflows a debug build's 2 MiB worker at 1 702 hops, a 3 448-byte UDP
+  datagram, pre-anything, in `dns`, `dot`, `doh`, `doq` and `llmnr` (a release build survives
+  the longest chain the 14-bit offset allows, ~8 180 hops in ~1.3 MiB, with ~0.7 MiB of a 2 MiB
+  worker to spare) (and the DoT/DoH/LLMNR
+  clients and the DNS client's zone transfer). 0.25.2 still recurses; 0.26 is iterative. Fixed by
+  `utils::dns_screen` in front of every decode site (deepest chain ≤ 127 hops; section counts must
+  fit the bytes, which also stops `Message::read`'s `Vec::with_capacity(count)` reserving for
+  65 535 records from a 12-byte header). Not coverable: the DNS client's plain UDP lookups go
+  through `hickory-client`'s `UdpClientStream`, which decodes internally. Everything else read
+  (rdata length arithmetic is `checked_sub` throughout; the one `panic!` in
+  `rr/dnssec/rdata/mod.rs:628` is behind a type dispatch that cannot reach it) is sound.
+- **`cassandra-protocol` 3.3.0 — three panics in `Envelope::from_buffer`, pre-STARTUP.** The
+  tracing flag on a response-direction frame `unwrap`s a 16-byte read (`frame.rs:187`); the
+  warning flag decodes a `[string list]` whose negative `i16` count is a capacity-overflow panic
+  (`types.rs:267`) and whose over-long string is sliced before the length check
+  (`types.rs:485`). Fixed by `cassandra::parse_request_frame`, which refuses both header bits on
+  a request (neither has meaning there) and answers PROTOCOL_ERROR. A negative body length
+  (`frame.rs:157-171`) was already unreachable behind `MAX_FRAME_BODY_BYTES`.
+- **`opensrv-mysql` 0.7.0 — two panics in the handshake.** `set_seq(seq + 1)` on a client
+  sequence id of 255 (`lib.rs:389`, `:502`, `:563`; overflow checks, so debug/test builds only)
+  and `packet()`'s fragment `assert_eq!`s on a misnumbered chain (`packet_reader.rs:252`, `:266`;
+  every build). Fixed in `PacketLimitReader`, which refuses both from the header and answers
+  1156 `ER_NET_PACKETS_OUT_OF_ORDER`. The `ParamParser` panics (`params.rs:86` `split_at`,
+  `:91` `panic!`, `:127` `unwrap`) are unreachable because `ParamParser` is never iterated,
+  and COM_STMT_SEND_LONG_DATA's unbounded append (`lib.rs:663-678`) is bounded beneath the
+  crate by `command_tap::LongDataGate`; see item 77.
+- **`rasn` 0.18.0 (behind `rasn-snmp`) — nothing new reachable.** The one wire-reachable defect,
+  unbounded recursion on constructed OCTET STRINGs (`ber/de/parser.rs:62`), was already behind
+  `check_ber_structure`; integer, OID, bit-string and length decoding were read and are bounded.
+  It does have an upstream panic NetGet cannot reach: `parse_any_generalized_time_string`
+  (`ber/de.rs:202-208`) checks `chars().nth(len - 5)` and slices at *byte* `len - 5`, so the
+  GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") panics on a char boundary. No SNMP type
+  carries a GeneralizedTime.
+
+Tests: `tests/server/dns/compression_chain_test.rs`, `tests/server/cassandra/decoder_panic_test.rs`,
+`tests/server/mysql/sequence_id_test.rs`. Fuzz: `dns_message` now runs the screen first and has a
+pointer-chain seed; `snmp_ber` has a constructed-OCTET-STRING bomb (its old one nested
+SEQUENCEs, not the path that overflowed); `cassandra_envelope` and `mysql_session` are new.
+All four ran 120 s clean on 1 November 2026 (46–61 k executions each, `-s none`, macOS).
+The DNS overflow is not visible to its fuzz target — libFuzzer's 8 MiB main thread and
+optimised frames hold the longest possible chain — so its regression is the wire test against
+the debug server.
 
 ### 50. Two overlapping documentation gates, one of them dead **[fixed — re-verified 26 Sep 2026]**
 
@@ -577,10 +631,31 @@ panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every 
 `tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. It
 should still be reported upstream, and a `[patch]` does not reach `cargo install`, where the
 containment in `src/server/postgresql/mod.rs` remains what stands between the panic and the
-server. `opensrv-mysql`'s `params.rs` cluster (five
-malformed `COM_STMT_EXECUTE` shapes, including an explicit `panic!("bad column type")` on a
-client-chosen byte) and `kafka-protocol`'s unbounded element counts are the same shape and are
-documented in the panic audit.
+server. `kafka-protocol`'s unbounded element counts are the same shape and are documented in
+the panic audit.
+
+`opensrv-mysql`'s `params.rs` cluster (five malformed `COM_STMT_EXECUTE` shapes, including an
+explicit `panic!("bad column type")` on a client-chosen byte) was the same shape and is
+**resolved on NetGet's side**, which shows the wrapping the PostgreSQL fix would need. The
+panics are all in `Params::next`, which runs only when a shim iterates `ParamParser`; the MySQL
+server never does. It used to buy that safety by dropping the parameter values, so the model
+saw `WHERE id = ?` and nothing else. It now copies each execute from beneath the crate
+(`src/server/mysql/command_tap.rs`, a reader wrapper like `packet_limit`'s) and decodes it with
+a bounded parser of its own (`src/server/mysql/stmt_params.rs`): the model gets `params` with
+types and values plus a `query_rendered` for reading, and every malformed shape is answered ERR
+1835 `ER_MALFORMED_PACKET` on a connection that stays up. Covered by
+`tests/server/mysql/prepared_params_test.rs` from a raw socket and by
+`fuzz/fuzz_targets/mysql_stmt_execute.rs`. `COM_STMT_SEND_LONG_DATA`, which the crate appends
+with no bound (`lib.rs:663-678`), is bounded beneath it by `command_tap::LongDataGate` (64 MiB a
+statement, 128 MiB a connection; ERR 1105 at the next execute).
+
+The same work found a **use-after-free** in `opensrv-mysql` 0.7.0, which is worse than any
+panic in this list: `PacketReader::next_async` (`packet_reader.rs:132-141`) returns a packet
+borrowed from `self.bytes` through `slice::from_raw_parts` after `self.bytes = rest.to_vec()`
+has freed that buffer, whenever one read held more than one packet. Two pipelined
+`COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. NetGet
+defends it with `command_tap`, which never lets a read cross a packet boundary; the crate needs
+an upstream fix (return the packet before reassigning, or parse from an owned copy).
 
 ### 78. `tcp_connection_opened` is advertised unconditionally and fires only for `send_first` servers **[verified, fixed: telnet raises it always, tcp/tls document the gate]**
 

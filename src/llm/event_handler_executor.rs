@@ -301,7 +301,14 @@ async fn await_manual_answer(
             Ok(actions)
         }
         Ok(Err(_)) => {
-            // Sender dropped: the operator dismissed it (fail closed, now).
+            // Sender dropped: its connection or instance ended and `AppState` withdrew it, or
+            // the operator refused it. Fail closed, now, saying which.
+            if let Some(why) = state.intercept_target_ended(owner, connection_id).await {
+                anyhow::bail!(
+                    "manual handler: request #{id} for event '{event_type_id}' was withdrawn \
+                     unanswered: its {why}"
+                )
+            }
             anyhow::bail!(
                 "manual handler: the operator dismissed request #{id} for event '{event_type_id}'"
             )

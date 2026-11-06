@@ -62,6 +62,17 @@ impl Protocol for TcpProtocol {
                     example: serde_json::json!(900),
                     default: Some(serde_json::json!(super::IDLE_BETWEEN_MESSAGES_TIMEOUT.as_secs())),
                 },
+                multipath_parameter(
+                    "Listen with Multipath TCP (MPTCP, RFC 8684): the socket is opened with \
+                     IPPROTO_MPTCP, so a peer that speaks MPTCP can spread the connection over \
+                     several paths, and one that does not is served plain TCP by the kernel. \
+                     Every event of a connection then carries `mptcp` (true when MPTCP was \
+                     negotiated, false when the peer fell back), and server_status shows it \
+                     per connection. Linux only (5.6+, net.mptcp.enabled=1): the start fails \
+                     with the reason when the kernel refuses an MPTCP socket, and on macOS or \
+                     any other platform it is refused outright, because macOS does not let a \
+                     third-party process listen with MPTCP.",
+                ),
             ]
     }
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
@@ -92,7 +103,10 @@ impl Protocol for TcpProtocol {
     fn keywords(&self) -> Vec<&'static str> {
         // No "ftp": it was here from before a real FTP protocol existed, and a request for an
         // FTP server resolved to raw TCP. FTP is its own protocol now and owns that keyword.
-        vec!["tcp", "raw", "custom"]
+        vec!["tcp", "raw", "custom", "mptcp", "multipath tcp"]
+    }
+    fn alias_note(&self, alias: &str) -> Option<&'static str> {
+        is_multipath_alias(alias).then_some(MULTIPATH_ALIAS_NOTE)
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
@@ -225,10 +239,17 @@ impl Server for TcpProtocol {
             };
             let first_byte_timeout_secs = secs("first_byte_timeout_secs")?;
             let idle_timeout_secs = secs("idle_timeout_secs")?;
+            let multipath = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_bool("multipath"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(MULTIPATH_DEFAULT);
 
             use crate::server::tcp::TcpServer;
             let listen_addr = ctx.legacy_listen_addr();
-            TcpServer::spawn_with_llm_actions(
+            TcpServer::spawn_with_options(
                 listen_addr,
                 ctx.llm_client,
                 ctx.state,
@@ -237,6 +258,7 @@ impl Server for TcpProtocol {
                 ctx.server_id,
                 first_byte_timeout_secs,
                 idle_timeout_secs,
+                multipath,
             )
             .await
         })
@@ -473,6 +495,7 @@ pub static TCP_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         CLOSE_THIS_CONNECTION_ACTION.clone(),
     ])
     .with_parameters(crate::protocol::event_type::connect_event_parameters())
+    .with_parameter(mptcp_event_parameter())
     .with_log_template(
         LogTemplate::new()
             .with_info("TCP connection from {client_ip}:{client_port}")
@@ -505,6 +528,7 @@ pub static TCP_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             description: "How to read 'data': \"utf8\" means 'data' is the received bytes as literal text, \"hex\" means 'data' is the received bytes hex-encoded (two hex digits per byte, used whenever the bytes are not all printable ASCII). To echo the received bytes back unchanged, pass the same 'data' and 'encoding' to send_tcp_data".to_string(),
             required: true,
         },
+        mptcp_event_parameter(),
     ])
     .with_actions(vec![
         SEND_TCP_DATA_ACTION.clone(),
@@ -535,3 +559,48 @@ pub fn get_tcp_event_types() -> Vec<EventType> {
         TCP_DATA_RECEIVED_EVENT.clone(),
     ]
 }
+
+// ============================================================================
+// Multipath TCP (shared with the tcp client)
+// ============================================================================
+
+/// What `multipath` is when not given: plain TCP.
+pub const MULTIPATH_DEFAULT: bool = false;
+
+/// The `multipath` startup parameter, with the role's own description.
+pub fn multipath_parameter(description: &str) -> crate::llm::actions::ParameterDefinition {
+    crate::llm::actions::ParameterDefinition {
+        name: "multipath".to_string(),
+        type_hint: "boolean".to_string(),
+        description: description.to_string(),
+        required: false,
+        example: serde_json::json!(true),
+        default: Some(serde_json::json!(MULTIPATH_DEFAULT)),
+    }
+}
+
+/// The `mptcp` field a connection's events carry when the instance was started with
+/// `multipath`.
+pub fn mptcp_event_parameter() -> Parameter {
+    Parameter {
+        name: "mptcp".to_string(),
+        type_hint: "boolean".to_string(),
+        description: "Present only when started with multipath: true. true when this \
+                      connection negotiated Multipath TCP, false when the peer fell back to \
+                      plain TCP"
+            .to_string(),
+        required: false,
+    }
+}
+
+/// Whether `alias` is one of the keywords that name MPTCP rather than plain TCP.
+pub fn is_multipath_alias(alias: &str) -> bool {
+    let a = alias.trim().to_ascii_lowercase().replace(['-', '_'], " ");
+    a == "mptcp" || a == "multipath tcp"
+}
+
+/// What the docs say under "`mptcp` is an alias of `tcp`".
+pub const MULTIPATH_ALIAS_NOTE: &str = "MPTCP is not a separate protocol in NetGet: it is `tcp` \
+     started with `startup_params: {\"multipath\": true}`. Without that parameter you get plain \
+     TCP. Linux only; see the `multipath` parameter below for what is reported per connection \
+     and when it is refused.";

@@ -16,6 +16,7 @@
 //! `event_handlers` work here as they do for every other protocol.
 
 pub mod actions;
+pub mod changegroup;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -36,11 +37,15 @@ use tracing::{debug, error, info, trace, warn};
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::server::mercurial::actions::{
-    empty_bundle, MercurialProtocol, HG_BRANCHMAP_EVENT, HG_CAPABILITIES_EVENT, HG_GETBUNDLE_EVENT,
-    HG_HEADS_EVENT, HG_LISTKEYS_EVENT,
+    MercurialProtocol, HG_BRANCHMAP_EVENT, HG_CAPABILITIES_EVENT, HG_GETBUNDLE_EVENT,
+    HG_HEADS_EVENT, HG_KNOWN_EVENT, HG_LISTKEYS_EVENT, HG_LOOKUP_EVENT, REPOSITORY_RESPONSE,
+};
+use crate::server::mercurial::changegroup::{
+    empty_changegroup, hex, parse_node, ChangegroupError, Repository,
 };
 use crate::state::app_state::AppState;
 use crate::utils::WireFailure;
@@ -297,11 +302,8 @@ impl MercurialServer {
                             .await;
                     }
                     Err(e) => {
-                        error!("Failed to accept Mercurial connection: {}", e);
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Failed to accept Mercurial connection: {}",
-                            e
-                        ));
+                        Log::to(&status_tx)
+                            .error(format!("Failed to accept Mercurial connection: {}", e));
                         break;
                     }
                 }
@@ -343,16 +345,17 @@ async fn handle_mercurial_request(
     track_repo_access(&ctx.app_state, ctx.server_id, ctx.connection_id, &repo).await;
 
     match cmd {
-        "capabilities" => Ok(handle_capabilities(&ctx, &repo).await),
-        "heads" => Ok(handle_heads(&ctx, &repo).await),
-        "branchmap" => Ok(handle_branchmap(&ctx, &repo).await),
-        "listkeys" => {
-            let namespace = params
-                .get("namespace")
-                .map(|s| s.as_str())
-                .unwrap_or("bookmarks");
-            Ok(handle_listkeys(&ctx, &repo, namespace).await)
+        "batch" => {
+            let cmds = params.get("cmds").map(|s| s.as_str()).unwrap_or("");
+            Ok(match handle_batch(&ctx, &repo, cmds).await {
+                Ok(body) => text_response(&ctx, &body).await,
+                Err(response) => response,
+            })
         }
+        cmd if BATCHABLE.contains(&cmd) => Ok(match run_command(&ctx, &repo, cmd, &params).await {
+            Ok(body) => text_response(&ctx, &body).await,
+            Err(response) => response,
+        }),
         "getbundle" => {
             // hg sends getbundle as a GET with the arguments in the query string, or as a
             // POST when they are too long for a URL. Accept both.
@@ -415,9 +418,13 @@ fn parse_query_params(query: &str) -> HashMap<String, String> {
         .filter_map(|pair| {
             let mut parts = pair.splitn(2, '=');
             match (parts.next(), parts.next()) {
+                // Form encoding: hg's `urlencode` writes a space as `+`, and the node lists in
+                // `heads`, `common` and `nodes` are space-separated.
                 (Some(key), Some(value)) => Some((
                     key.to_string(),
-                    urlencoding::decode(value).ok()?.to_string(),
+                    urlencoding::decode(&value.replace('+', " "))
+                        .ok()?
+                        .to_string(),
                 )),
                 _ => None,
             }
@@ -425,8 +432,137 @@ fn parse_query_params(query: &str) -> HashMap<String, String> {
         .collect()
 }
 
+/// What answered a command: the command's own action, or a whole-repository description.
+enum Answer {
+    /// The command-specific action's data (`hg_heads`, `hg_branchmap`, ...).
+    Command(Value),
+    /// An `hg_repository` action, with the history already built and validated.
+    Repository(Repository),
+}
+
+/// A batchable command's answer: the response body, or the complete error response.
+type CommandResult = Result<String, Response<Full<Bytes>>>;
+
+/// The commands `batch` may carry, and that are answered with a plain body.
+const BATCHABLE: &[&str] = &[
+    "capabilities",
+    "heads",
+    "branchmap",
+    "listkeys",
+    "known",
+    "lookup",
+];
+
+/// Most commands one `batch` request may carry. hg 7.x batches the two discovery commands
+/// (`heads`, `known`); each sub-command is one event, so the cap bounds model calls per request.
+pub const MAX_BATCH_COMMANDS: usize = 16;
+
+/// Answer one of the [`BATCHABLE`] commands from its arguments.
+async fn run_command(
+    ctx: &RequestContext,
+    repo: &str,
+    cmd: &str,
+    args: &HashMap<String, String>,
+) -> CommandResult {
+    let arg = |name: &str| args.get(name).map(String::as_str).unwrap_or("");
+    match cmd {
+        "capabilities" => handle_capabilities(ctx, repo).await,
+        "heads" => handle_heads(ctx, repo).await,
+        "branchmap" => handle_branchmap(ctx, repo).await,
+        "listkeys" => {
+            let namespace = args
+                .get("namespace")
+                .map(String::as_str)
+                .unwrap_or("bookmarks");
+            handle_listkeys(ctx, repo, namespace).await
+        }
+        "known" => handle_known(ctx, repo, arg("nodes")).await,
+        "lookup" => handle_lookup(ctx, repo, arg("key")).await,
+        other => Err(build_error_response(
+            StatusCode::NOT_FOUND,
+            &format!("Unknown or unimplemented command: {}", other),
+        )),
+    }
+}
+
+/// `?cmd=batch&cmds=<op> <k>=<v>,...;<op> ...` - several commands in one request, answered
+/// with their bodies joined by `;`, each escaped (`wireprototypes.escapebatcharg`).
+///
+/// hg 7.x batches whenever it has more than one batchable command to send, **whether or not
+/// the server advertises `batch`** (`wireprotov1peer.peerexecutor.sendcommands`), so a clone's
+/// discovery always arrives here as `heads ;known nodes=`.
+async fn handle_batch(ctx: &RequestContext, repo: &str, cmds: &str) -> CommandResult {
+    let mut parsed: Vec<(String, HashMap<String, String>)> = Vec::new();
+    for spec in cmds.split(';') {
+        let (op, rest) = spec.split_once(' ').unwrap_or((spec, ""));
+        let op = op.trim();
+        if op.is_empty() {
+            continue;
+        }
+        if !BATCHABLE.contains(&op) {
+            warn!("Mercurial batch decision=refused_bad_request command={op:?}");
+            return Err(build_hg_error_response(
+                "batch carries a command this server cannot batch",
+            ));
+        }
+        let mut args = HashMap::new();
+        for pair in rest.split(',').filter(|p| !p.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            args.insert(unescape_batch_arg(k), unescape_batch_arg(v));
+        }
+        parsed.push((op.to_string(), args));
+    }
+    if parsed.is_empty() || parsed.len() > MAX_BATCH_COMMANDS {
+        warn!(
+            "Mercurial batch decision=refused_bad_request commands={}",
+            parsed.len()
+        );
+        return Err(build_hg_error_response(
+            "batch must carry between one and sixteen commands",
+        ));
+    }
+
+    let mut answers = Vec::with_capacity(parsed.len());
+    for (op, args) in &parsed {
+        answers.push(escape_batch_arg(&run_command(ctx, repo, op, args).await?));
+    }
+    Ok(answers.join(";"))
+}
+
+/// `wireprototypes.escapebatcharg`.
+fn escape_batch_arg(text: &str) -> String {
+    text.replace(':', "::")
+        .replace(',', ":c")
+        .replace(';', ":s")
+        .replace('=', ":e")
+}
+
+/// `wireprototypes.unescapebatcharg`, in one pass so `::e` reads as `:` then `e`.
+fn unescape_batch_arg(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != ':' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(':') => out.push(':'),
+            Some('c') => out.push(','),
+            Some('s') => out.push(';'),
+            Some('e') => out.push('='),
+            Some(other) => {
+                out.push(':');
+                out.push(other);
+            }
+            None => out.push(':'),
+        }
+    }
+    out
+}
+
 /// Handle ?cmd=capabilities
-async fn handle_capabilities(ctx: &RequestContext, repo: &str) -> Response<Full<Bytes>> {
+async fn handle_capabilities(ctx: &RequestContext, repo: &str) -> CommandResult {
     let event = Event::new(
         &HG_CAPABILITIES_EVENT,
         serde_json::json!({
@@ -435,33 +571,34 @@ async fn handle_capabilities(ctx: &RequestContext, repo: &str) -> Response<Full<
         }),
     );
 
-    let data = match resolve(ctx, &event, "hg_capabilities_response").await {
-        Ok(data) => data,
-        Err(response) => return response,
+    let capabilities = match resolve(ctx, &event, "hg_capabilities_response").await {
+        Ok(Answer::Command(data)) => {
+            let requested: Vec<String> = data
+                .get("capabilities")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            actions::sanitize_capabilities(&requested)
+        }
+        Ok(Answer::Repository(_)) => actions::supported_capabilities(),
+        Err(response) => return Err(response),
     };
 
-    let requested: Vec<String> = data
-        .get("capabilities")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let capabilities = actions::sanitize_capabilities(&requested);
     let body = capabilities.join("\n");
     let _ = ctx.status_tx.send(format!(
         "→ hg capabilities for '{}': {}",
         repo,
         capabilities.join(" ")
     ));
-    text_response(ctx, &body).await
+    Ok(body)
 }
 
 /// Handle ?cmd=heads
-async fn handle_heads(ctx: &RequestContext, repo: &str) -> Response<Full<Bytes>> {
+async fn handle_heads(ctx: &RequestContext, repo: &str) -> CommandResult {
     let event = Event::new(
         &HG_HEADS_EVENT,
         serde_json::json!({
@@ -470,13 +607,12 @@ async fn handle_heads(ctx: &RequestContext, repo: &str) -> Response<Full<Bytes>>
         }),
     );
 
-    let data = match resolve(ctx, &event, "hg_heads_response").await {
-        Ok(data) => data,
-        Err(response) => return response,
+    let heads: Vec<String> = match resolve(ctx, &event, "hg_heads_response").await {
+        Ok(Answer::Command(data)) => node_list(data.get("heads")),
+        Ok(Answer::Repository(history)) => history.heads().iter().map(hex).collect(),
+        Err(response) => return Err(response),
     };
-
-    let heads = node_list(data.get("heads"));
-    let body = if heads.is_empty() {
+    let heads = if heads.is_empty() {
         NULL_NODE.to_string()
     } else {
         heads.join(" ")
@@ -484,12 +620,14 @@ async fn handle_heads(ctx: &RequestContext, repo: &str) -> Response<Full<Bytes>>
 
     let _ = ctx
         .status_tx
-        .send(format!("→ hg heads for '{}': {}", repo, body));
-    text_response(ctx, &body).await
+        .send(format!("→ hg heads for '{}': {}", repo, heads));
+    // The client strips the last byte before decoding (`decodelist(d[:-1])`), so the newline
+    // is part of the format, not decoration.
+    Ok(format!("{heads}\n"))
 }
 
 /// Handle ?cmd=branchmap
-async fn handle_branchmap(ctx: &RequestContext, repo: &str) -> Response<Full<Bytes>> {
+async fn handle_branchmap(ctx: &RequestContext, repo: &str) -> CommandResult {
     let event = Event::new(
         &HG_BRANCHMAP_EVENT,
         serde_json::json!({
@@ -498,32 +636,42 @@ async fn handle_branchmap(ctx: &RequestContext, repo: &str) -> Response<Full<Byt
         }),
     );
 
-    let data = match resolve(ctx, &event, "hg_branchmap_response").await {
-        Ok(data) => data,
-        Err(response) => return response,
-    };
-
-    // Format: one line per branch, "<branch> <node> <node> ...".
+    // Format: one line per branch, "<url-quoted branch> <node> <node> ...".
     let mut body = String::new();
-    if let Some(branches) = data.get("branches").and_then(|v| v.as_object()) {
-        for (branch, nodes) in branches {
-            let nodes = node_list(Some(nodes));
-            if nodes.is_empty() {
-                continue;
+    match resolve(ctx, &event, "hg_branchmap_response").await {
+        Ok(Answer::Command(data)) => {
+            if let Some(branches) = data.get("branches").and_then(|v| v.as_object()) {
+                for (branch, nodes) in branches {
+                    let nodes = node_list(Some(nodes));
+                    if nodes.is_empty() {
+                        continue;
+                    }
+                    body.push_str(&format!(
+                        "{} {}\n",
+                        urlencoding::encode(branch),
+                        nodes.join(" ")
+                    ));
+                }
             }
-            body.push_str(&format!("{} {}\n", branch, nodes.join(" ")));
         }
+        Ok(Answer::Repository(history)) => {
+            for (branch, heads) in history.branch_heads() {
+                let heads: Vec<String> = heads.iter().map(hex).collect();
+                body.push_str(&format!(
+                    "{} {}\n",
+                    urlencoding::encode(&branch),
+                    heads.join(" ")
+                ));
+            }
+        }
+        Err(response) => return Err(response),
     }
 
-    text_response(ctx, &body).await
+    Ok(body)
 }
 
 /// Handle ?cmd=listkeys&namespace=...
-async fn handle_listkeys(
-    ctx: &RequestContext,
-    repo: &str,
-    namespace: &str,
-) -> Response<Full<Bytes>> {
+async fn handle_listkeys(ctx: &RequestContext, repo: &str, namespace: &str) -> CommandResult {
     let event = Event::new(
         &HG_LISTKEYS_EVENT,
         serde_json::json!({
@@ -533,24 +681,107 @@ async fn handle_listkeys(
         }),
     );
 
-    let data = match resolve(ctx, &event, "hg_listkeys_response").await {
-        Ok(data) => data,
-        Err(response) => return response,
-    };
-
     // Format: "<key>\t<value>\n" per entry.
     let mut body = String::new();
-    if let Some(keys) = data.get("keys").and_then(|v| v.as_object()) {
-        for (key, value) in keys {
-            let value = match value.as_str() {
-                Some(v) => v.to_string(),
-                None => value.to_string(),
-            };
-            body.push_str(&format!("{}\t{}\n", key, value));
+    match resolve(ctx, &event, "hg_listkeys_response").await {
+        Ok(Answer::Command(data)) => {
+            if let Some(keys) = data.get("keys").and_then(|v| v.as_object()) {
+                for (key, value) in keys {
+                    let value = match value.as_str() {
+                        Some(v) => v.to_string(),
+                        None => value.to_string(),
+                    };
+                    body.push_str(&format!("{}\t{}\n", key, value));
+                }
+            }
         }
+        // A described history has no bookmarks, and every changeset in it is public: a
+        // publishing server says exactly that.
+        Ok(Answer::Repository(_)) => {
+            if namespace == "phases" {
+                body.push_str("publishing\tTrue\n");
+            }
+        }
+        Err(response) => return Err(response),
     }
 
-    text_response(ctx, &body).await
+    Ok(body)
+}
+
+/// Handle ?cmd=known&nodes=... - one `0`/`1` per node, in the order asked.
+async fn handle_known(ctx: &RequestContext, repo: &str, nodes: &str) -> CommandResult {
+    let asked: Vec<&str> = nodes.split_whitespace().collect();
+    if asked.is_empty() {
+        // Every clone into an empty repository asks this. There is nothing to decide, so
+        // nobody is asked.
+        return Ok(String::new());
+    }
+
+    let event = Event::new(
+        &HG_KNOWN_EVENT,
+        serde_json::json!({
+            "repository": repo,
+            "nodes": nodes,
+            "client_ip": ctx.remote_addr.ip().to_string(),
+        }),
+    );
+
+    let history = match resolve(ctx, &event, REPOSITORY_RESPONSE).await {
+        Ok(Answer::Repository(history)) => history,
+        // `resolve` checks the repository answer before the command one, and for this command
+        // they are the same name, so a command answer cannot arrive; fail closed if it does.
+        Ok(Answer::Command(_)) => {
+            return Err(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                WireFailure::Unavailable.text(),
+            ))
+        }
+        Err(response) => return Err(response),
+    };
+    let body: String = asked
+        .iter()
+        .map(|n| match parse_node(n) {
+            Some(node) if history.contains(&node) => '1',
+            _ => '0',
+        })
+        .collect();
+    Ok(body)
+}
+
+/// Handle ?cmd=lookup&key=... - `1 <node>\n` when the symbol resolves, `0 <reason>\n` when not.
+async fn handle_lookup(ctx: &RequestContext, repo: &str, key: &str) -> CommandResult {
+    let event = Event::new(
+        &HG_LOOKUP_EVENT,
+        serde_json::json!({
+            "repository": repo,
+            "key": key,
+            "client_ip": ctx.remote_addr.ip().to_string(),
+        }),
+    );
+
+    let history = match resolve(ctx, &event, REPOSITORY_RESPONSE).await {
+        Ok(Answer::Repository(history)) => history,
+        // `resolve` checks the repository answer before the command one, and for this command
+        // they are the same name, so a command answer cannot arrive; fail closed if it does.
+        Ok(Answer::Command(_)) => {
+            return Err(build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                WireFailure::Unavailable.text(),
+            ))
+        }
+        Err(response) => return Err(response),
+    };
+    let body = match history.lookup(key) {
+        Some(node) => format!("1 {}\n", hex(&node)),
+        None => format!("0 unknown revision '{}'\n", key.escape_default()),
+    };
+    let _ = ctx.status_tx.send(format!(
+        "→ hg lookup '{}' in '{}': {}",
+        key,
+        repo,
+        body.trim_end()
+    ));
+    Ok(body)
 }
 
 /// Handle ?cmd=getbundle
@@ -559,62 +790,101 @@ async fn handle_getbundle(
     repo: &str,
     params: &HashMap<String, String>,
 ) -> Response<Full<Bytes>> {
+    let heads_arg = params.get("heads").cloned().unwrap_or_default();
+    let common_arg = params.get("common").cloned().unwrap_or_default();
     let event = Event::new(
         &HG_GETBUNDLE_EVENT,
         serde_json::json!({
             "repository": repo,
-            "heads": params.get("heads").cloned().unwrap_or_default(),
-            "common": params.get("common").cloned().unwrap_or_default(),
+            "heads": heads_arg,
+            "common": common_arg,
             "client_ip": ctx.remote_addr.ip().to_string(),
         }),
     );
 
-    let data = match resolve(ctx, &event, "hg_bundle_response").await {
-        Ok(data) => data,
+    let changegroup = match resolve(ctx, &event, "hg_bundle_response").await {
+        Ok(Answer::Command(_)) => empty_changegroup(),
+        Ok(Answer::Repository(history)) => {
+            let heads = match parse_node_args(&heads_arg) {
+                Some(nodes) => nodes,
+                None => {
+                    warn!("Mercurial getbundle decision=refused_bad_request heads={heads_arg:?}");
+                    return build_hg_error_response("malformed heads argument");
+                }
+            };
+            let common = parse_node_args(&common_arg).unwrap_or_default();
+            match history.changegroup(&heads, &common) {
+                Ok(cg) => cg,
+                Err(ChangegroupError::UnknownHead(node)) => {
+                    warn!("Mercurial getbundle decision=refused_unknown_head head={node}");
+                    return build_hg_error_response("requested head is not in this repository");
+                }
+            }
+        }
         Err(response) => return response,
     };
 
-    let bundle_type = data
-        .get("bundle_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("HG10UN");
-    let bundle = empty_bundle(bundle_type);
+    // Content-Type application/mercurial-0.1 means the client zlib-decompresses a
+    // compressible command's body (`httppeer.parsev1commandresponse`), and getbundle is one.
+    let body = match zlib(&changegroup) {
+        Ok(body) => body,
+        Err(e) => {
+            error!("Mercurial getbundle decision=fail_closed_compression error={e}");
+            return build_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                WireFailure::Unavailable.text(),
+            );
+        }
+    };
 
     debug!(
-        "Mercurial getbundle for '{}': sending empty {} changegroup ({} bytes)",
+        "Mercurial getbundle for '{}': changegroup of {} bytes ({} compressed)",
         repo,
-        bundle_type,
-        bundle.len()
+        changegroup.len(),
+        body.len()
     );
     let _ = ctx.status_tx.send(format!(
-        "→ hg bundle for '{}': empty changegroup ({} bytes)",
+        "→ hg bundle for '{}': changegroup of {} bytes",
         repo,
-        bundle.len()
+        changegroup.len()
     ));
 
-    record_bytes_sent(ctx, bundle.len()).await;
+    record_bytes_sent(ctx, body.len()).await;
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/mercurial-0.1")
-        .body(Full::new(Bytes::from(bundle)))
+        .body(Full::new(Bytes::from(body)))
         .expect("static header values are valid")
 }
 
-/// Raise the event and pick out the one protocol result this command needs.
+/// A space-separated node list from a request argument; `None` when an entry is not a node.
+fn parse_node_args(arg: &str) -> Option<Vec<changegroup::Node>> {
+    arg.split_whitespace().map(parse_node).collect()
+}
+
+fn zlib(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data)?;
+    encoder.finish()
+}
+
+/// Raise the event and pick out the protocol result this command needs.
 ///
-/// `hg_error` is honoured for every command; anything else (no action, or an action for a
-/// different command) becomes a 500 with a log line naming the event.
+/// `hg_repository` and `hg_error` are honoured for every command; anything else (no action, or
+/// an action for a different command) becomes a 500 with a log line naming the event.
 ///
-/// Three outcomes are kept distinguishable in the log by a `decision=` tag: the model
-/// refused (`model_reject`), the model answered nothing usable (`fail_closed_no_action`),
-/// or the call itself failed (`fail_closed_llm_error` / `fail_closed_overloaded`). The peer
+/// Four outcomes are kept distinguishable in the log by a `decision=` tag: the model
+/// refused (`model_reject`), the model answered nothing usable (`fail_closed_no_action`), the
+/// model described a history the server cannot build (`fail_closed_invalid_repository`), or
+/// the call itself failed (`fail_closed_llm_error` / `fail_closed_overloaded`). The peer
 /// is told only a category — 503 + `Retry-After` when the backend is saturated, 500
-/// otherwise — never the error text.
+/// otherwise, an `application/hg-error` for a refused history — never the error text.
 async fn resolve(
     ctx: &RequestContext,
     event: &Event,
     expected: &str,
-) -> Result<Value, Response<Full<Bytes>>> {
+) -> Result<Answer, Response<Full<Bytes>>> {
     let execution_result = match call_llm(
         &ctx.llm_client,
         &ctx.app_state,
@@ -663,7 +933,32 @@ async fn resolve(
 
     for result in execution_result.protocol_results {
         match result {
-            ActionResult::Custom { name, data } if name == expected => return Ok(data),
+            ActionResult::Custom { name, data } if name == REPOSITORY_RESPONSE => {
+                return match Repository::from_description(&data) {
+                    Ok(history) => Ok(Answer::Repository(history)),
+                    Err(e) => {
+                        // What was wrong names a commit or a path from the description; it is
+                        // for the operator. The client is told only that the history was
+                        // refused.
+                        warn!(
+                            "Mercurial {} decision=fail_closed_invalid_repository reason={}",
+                            event.id(),
+                            e
+                        );
+                        let _ = ctx.status_tx.send(format!(
+                            "✗ Mercurial {} decision=fail_closed_invalid_repository: {}",
+                            event.id(),
+                            e
+                        ));
+                        Err(build_hg_error_response(
+                            "the server could not build this repository's history",
+                        ))
+                    }
+                };
+            }
+            ActionResult::Custom { name, data } if name == expected => {
+                return Ok(Answer::Command(data))
+            }
             ActionResult::Custom { name, data } if name == "hg_error_response" => {
                 let message = data
                     .get("message")
@@ -801,6 +1096,18 @@ async fn record_bytes_received(ctx: &RequestContext, len: usize) {
             None,
         )
         .await;
+}
+
+/// A Mercurial protocol error: `application/hg-error`, which `httppeer` raises as
+/// `OutOfBandError`, so `hg` prints `abort: remote error:` and the message. Served with 200, as
+/// hgweb serves it, because a non-2xx status is reported as a bare HTTP error before the
+/// content type is ever read.
+fn build_hg_error_response(message: &'static str) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/hg-error")
+        .body(Full::new(Bytes::from(format!("{message}\n"))))
+        .expect("static header values are valid")
 }
 
 /// Build an HTTP error response

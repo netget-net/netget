@@ -201,6 +201,33 @@ async fn mocked_model_chooses_scrape_and_shared_memory_reaches_metrics_followup(
     let (_, result) = event(&state, id, "prometheus_metrics", 0).await;
     assert_process_metrics(&result);
     mock.wait_for_expectations(30).await;
+    // Condition 4 from Prometheus's side: its own handler counts the scrapes it has served, and
+    // the client connects without one, so the single 200 it reports is the scrape the model
+    // chose. The counter is incremented after a response is written, so this read is not in it.
+    let own = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::process::Command::new("curl")
+            .args(["-fsS", &format!("http://{}/metrics", server.addr())])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("curl deadline")?;
+    assert!(
+        own.status.success(),
+        "{}",
+        String::from_utf8_lossy(&own.stderr)
+    );
+    let own = String::from_utf8(own.stdout)?;
+    assert!(
+        own.lines()
+            .any(|l| l == "promhttp_metric_handler_requests_total{code=\"200\"} 1"),
+        "Prometheus did not count exactly one scrape served: {}",
+        own.lines()
+            .filter(|l| l.starts_with("promhttp_metric_handler_requests_total"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     assert_eq!(
         state.get_memory_for_client(id).await.as_deref(),
         Some("model chose real exporter scrape")

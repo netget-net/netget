@@ -108,7 +108,11 @@ Answers: `accept_nostr_event {}` → `OK true ""` and delivery to every open sub
 matches, on every connection (the publisher's own included), with the author's own id and
 signature; `reject_nostr_event {reason}` → `OK false <reason>`. The reason keeps a NIP-01 prefix
 (`duplicate: pow: blocked: rate-limited: invalid: restricted: error:`) if it has one, otherwise
-`blocked:` is added.
+`blocked:` is added. The event's `answer_with` and the action's example say that after the
+prefix the reason is the message the instructions give the author, in their exact words: told
+to refuse adverts "telling the author that adverts are not allowed", llama3.1:8b wrote reasons
+of its own ("blocked: advertisement", "blocked: Advert") five runs in five (real-model eval,
+seed 42), and replayed with that sentence five seeds in five used the operator's words.
 
 **`nostr_req`** `{subscription_id, filters (as sent), relay_pubkey, answer_with}`. Answers:
 `send_nostr_events {events: [{kind, content, tags?, created_at?}], subscription_id?}` → NetGet

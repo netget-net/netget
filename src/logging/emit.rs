@@ -113,6 +113,14 @@ impl<'a> Log<'a> {
         }
     }
 
+    /// Bind the facade to a status channel that is always present.
+    ///
+    /// Takes the channel by reference, so `Log::to(&status_tx)` reads the same whether
+    /// `status_tx` is an owned sender, a `&` to one or an `Arc` around one.
+    pub fn to(status_tx: &'a UnboundedSender<String>) -> Self {
+        Self::new(Some(status_tx))
+    }
+
     /// Suppress DEBUG/TRACE previews and bodies for one credential-bearing request.
     /// This is local to the emitter; it does not change shared logging settings.
     pub fn with_payloads(mut self, enabled: bool) -> Self {

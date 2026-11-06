@@ -153,7 +153,7 @@ pub enum Routed {
 
 /// Decide which pane a status line belongs to.
 pub fn route_status_line(line: &str) -> Routed {
-    if line.starts_with("__") {
+    if crate::utils::is_status_control_line(line) {
         return Routed::Control;
     }
     if let Some(rest) = line.strip_prefix("[ERROR] ") {

@@ -96,11 +96,17 @@ fn undeclared_key_is_rejected_by_new() {
         other => panic!("expected Undeclared, got {other:?}"),
     }
 
-    // The message still names the offending key and lists the allowed ones.
+    // The message names the offending key and lists the allowed ones — and, because this is
+    // the caller's mistake and the caller is an MCP user or the model, it speaks about their
+    // input rather than telling them how to write a protocol.
     let msg = err.to_string();
     assert!(msg.contains("undeclared_xyz"), "{msg}");
     assert!(msg.contains("send_first"), "{msg}");
-    assert!(msg.contains("get_startup_parameters()"), "{msg}");
+    assert!(
+        !msg.contains("get_startup_parameters()"),
+        "a caller-supplied unknown key is not a protocol bug; got: {msg}"
+    );
+    assert!(msg.contains("unknown startup parameter"), "{msg}");
 }
 
 #[test]

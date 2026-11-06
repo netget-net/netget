@@ -343,3 +343,121 @@ async fn injected_frame_is_transmitted() {
         state.has_client_handle(client_id).await
     );
 }
+
+// ---------------------------------------------------------------------------
+// Privileged: probe_tcp on loopback
+// ---------------------------------------------------------------------------
+
+/// The one-shot probe end to end on loopback: a hand-built SYN carrying MPTCP MP_CAPABLE to a
+/// port with a listener comes back as a decoded SYN-ACK in the `send_to_client` result itself
+/// (with whether `mp_capable` was echoed), and to a closed port as a decoded RST.
+///
+/// The client is started with neither `promiscuous` nor `capture`: the probe opens its own
+/// capture filtered to the reply flow. Its `remote_addr` names the listener, which is the
+/// default destination — the connect note recorded on the client says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs layer-2 capture access (/dev/bpf* on macOS/BSD, root or CAP_NET_RAW on Linux)"]
+async fn probe_tcp_on_loopback_returns_the_syn_ack_and_the_rst() {
+    require_capture("probe_tcp_on_loopback_returns_the_syn_ack_and_the_rst");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let open_port = listener.local_addr().unwrap().port();
+    let closed_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+
+    let state = new_state().await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let client_id = ClientForm {
+        protocol: "datalink".to_string(),
+        remote_addr: Some(format!("127.0.0.1:{open_port}")),
+        instruction: Some("test client".to_string()),
+        startup_params: Some(serde_json::json!({"interface": loopback()})),
+        ..Default::default()
+    }
+    .create(
+        &state,
+        netget::llm::OllamaClient::new("http://127.0.0.1:1".to_string()),
+        tx,
+    )
+    .await
+    .expect("open loopback");
+    wait_for_client_handle(&state, client_id).await;
+
+    let note = state
+        .get_client(client_id)
+        .await
+        .and_then(|c| c.get_protocol_field("connect_note").cloned())
+        .expect("the client records what it made of remote_addr");
+    let note = note.as_str().unwrap().to_string();
+    assert!(note.contains("capture off"), "{note}");
+    assert!(note.contains(&format!("127.0.0.1:{open_port}")), "{note}");
+    if cfg!(target_os = "macos") {
+        assert!(
+            note.contains("link_type NULL"),
+            "macOS lo0 is DLT_NULL: {note}"
+        );
+    }
+
+    let probe = |port: u16| {
+        serde_json::json!({
+            "type": "probe_tcp",
+            "dst_ip": "127.0.0.1",
+            "dst_port": port,
+            "flags": ["syn"],
+            "options": [
+                {"kind": "mss", "value": 16344},
+                {"kind": "mp_capable", "version": 1, "flags": 1}
+            ],
+            "timeout_ms": 2000
+        })
+    };
+
+    let outcome = state
+        .send_to_client(client_id, probe(open_port), Duration::from_secs(20))
+        .await
+        .expect("probe the open port");
+    let ClientSendOutcome::Probed { bytes_sent, report } = outcome else {
+        panic!("expected Probed, got {outcome:?}");
+    };
+    println!(
+        "open port {open_port}: {}",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+    assert!(bytes_sent > 40);
+    assert_eq!(report["reply_count"], 1, "{report}");
+    let reply = &report["replies"][0];
+    let flags: Vec<&str> = reply["tcp"]["flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    assert!(flags.contains(&"syn") && flags.contains(&"ack"), "{reply}");
+    assert_eq!(reply["tcp"]["src_port"], open_port);
+    let echoed = reply["options_echoed"].as_array().unwrap();
+    let not_echoed = reply["options_not_echoed"].as_array().unwrap();
+    assert!(
+        echoed.iter().chain(not_echoed).any(|k| k == "mp_capable"),
+        "the report says either way whether mp_capable came back: {reply}"
+    );
+
+    let outcome = state
+        .send_to_client(client_id, probe(closed_port), Duration::from_secs(20))
+        .await
+        .expect("probe the closed port");
+    let ClientSendOutcome::Probed { report, .. } = outcome else {
+        panic!("expected Probed, got {outcome:?}");
+    };
+    println!(
+        "closed port {closed_port}: {}",
+        serde_json::to_string_pretty(&report).unwrap()
+    );
+    assert_eq!(report["reply_count"], 1, "{report}");
+    let flags = report["replies"][0]["tcp"]["flags"].as_array().unwrap();
+    assert!(flags.iter().any(|f| f == "rst"), "{report}");
+
+    drop(listener);
+    state.remove_client(client_id).await;
+}

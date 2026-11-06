@@ -14,6 +14,7 @@ use tracing::{debug, error, info, trace};
 use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::irc::wire::{read_irc_line, IrcLine, MAX_IRC_READ_LINE};
 use crate::server::IrcProtocol;
@@ -247,23 +248,17 @@ impl IrcServer {
                                 // i.e. on ordinary non-ASCII chat text - and a panic in this
                                 // task is silent while the server still reads as Running.
                                 let preview = crate::utils::truncate_for_log(&line, 100);
-                                debug!(
+                                Log::to(&status_clone).debug(format!(
                                     "IRC received {} bytes on connection {}: {}",
-                                    n,
-                                    connection_id,
-                                    preview.trim()
-                                );
-                                let _ = status_clone.send(format!(
-                                    "[DEBUG] IRC received {} bytes on connection {}: {}",
                                     n,
                                     connection_id,
                                     preview.trim()
                                 ));
 
                                 // TRACE: Log full text payload
-                                trace!("IRC data (text): {:?}", line.trim());
-                                let _ = status_clone
-                                    .send(format!("[TRACE] IRC data (text): {:?}", line.trim()));
+                                Log::to(&status_clone).trace(format!(
+                                    "IRC data (text): {:?}", line.trim()
+                                ));
 
                                 // With batching on, every other complete line the peer has
                                 // already sent — typically what it sent while the model was
@@ -309,13 +304,8 @@ impl IrcServer {
                                 // decision line and a failure numeric name.
                                 let line = lines.pop().unwrap_or_default();
 
-                                debug!(
+                                Log::to(&status_clone).debug(format!(
                                     "IRC calling LLM for connection {} ({} line(s))",
-                                    connection_id,
-                                    events.len()
-                                );
-                                let _ = status_clone.send(format!(
-                                    "[DEBUG] IRC calling LLM for connection {} ({} line(s))",
                                     connection_id,
                                     events.len()
                                 ));
@@ -337,12 +327,8 @@ impl IrcServer {
                                                 status_clone.send(format!("[INFO] {}", message));
                                         }
 
-                                        debug!(
+                                        Log::to(&status_clone).debug(format!(
                                             "IRC got {} protocol results",
-                                            execution_result.protocol_results.len()
-                                        );
-                                        let _ = status_clone.send(format!(
-                                            "[DEBUG] IRC got {} protocol results",
                                             execution_result.protocol_results.len()
                                         ));
 
@@ -390,22 +376,16 @@ impl IrcServer {
                                                     let preview = crate::utils::truncate_for_log(
                                                         &formatted, 100,
                                                     );
-                                                    debug!(
+                                                    Log::to(&status_clone).debug(format!(
                                                         "IRC sent {} bytes on connection {}: {}",
                                                         formatted.len(),
                                                         connection_id,
                                                         preview.trim()
-                                                    );
-                                                    let _ = status_clone.send(format!("[DEBUG] IRC sent {} bytes on connection {}: {}", formatted.len(), connection_id, preview.trim()));
+                                                    ));
 
                                                     // TRACE: Log full text payload
-                                                    trace!(
-                                                        "IRC sent (text): {:?}",
-                                                        formatted.trim()
-                                                    );
-                                                    let _ = status_clone.send(format!(
-                                                        "[TRACE] IRC sent (text): {:?}",
-                                                        formatted.trim()
+                                                    Log::to(&status_clone).trace(format!(
+                                                        "IRC sent (text): {:?}", formatted.trim()
                                                     ));
                                                 }
                                                 ActionResult::CloseConnection => {

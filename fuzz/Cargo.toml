@@ -39,6 +39,12 @@ hickory-proto = "0.24"
 # The Nostr target checks that every refusal NetGet renders is itself JSON.
 serde_json = "1"
 
+# The MySQL target runs opensrv-mysql's own protocol loop behind NetGet's PacketLimitReader,
+# with a shim of its own: see fuzz_targets/mysql_session.rs.
+opensrv-mysql = "0.7"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt", "io-util"] }
+
 # The HDFS target decodes Hadoop's protocol buffers with the same prost as netget's.
 prost = "0.13"
 
@@ -424,6 +430,27 @@ bench = false
 [[bin]]
 name = "gre_packet"
 path = "fuzz_targets/gre_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mysql_stmt_execute"
+path = "fuzz_targets/mysql_stmt_execute.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cassandra_envelope"
+path = "fuzz_targets/cassandra_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mysql_session"
+path = "fuzz_targets/mysql_session.rs"
 test = false
 doc = false
 bench = false

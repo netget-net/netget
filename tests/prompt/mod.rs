@@ -7,7 +7,7 @@
 //! snapshot proves nothing by itself):
 //!
 //! ```text
-//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt --test prompt_snapshots
+//! UPDATE_SNAPSHOTS=1 ./cargo-isolated.sh test --test prompt
 //! ```
 //!
 //! or `tests/prompt/update_snapshots.sh`, which runs exactly that.
@@ -43,7 +43,6 @@ const SNAPSHOTS: &[&str] = &[
     "retry_mechanism_prompt",
     "unknown_action_retry_prompt",
     "user_input_prompt",
-    "user_input_prompt_docs_gate",
     "user_input_prompt_proxy_server",
     "user_input_prompt_without_scripting",
     "user_input_prompt_without_web_search",
@@ -503,9 +502,7 @@ async fn test_user_input_prompt_proxy_server() {
 #[tokio::test]
 async fn test_user_input_prompt() {
     // No servers, every scripting runtime: the prompt an operator's first turn renders.
-    // The documentation gate is off in the shipped build
-    // (`events::handler::REQUIRE_DOCS_FOR_OPEN_ACTIONS`), so open_server and open_client
-    // are offered from the start and this is the production prompt.
+    // open_server and open_client are offered from the start.
     let prompt = build_user_input_prompt().await;
 
     assert_prompt_snapshot("user_input_prompt", &prompt);
@@ -527,7 +524,7 @@ async fn test_user_input_prompt() {
     );
     assert!(
         !prompt.contains("NOT AVAILABLE YET") && !prompt.contains("are not offered yet"),
-        "nothing should be described as gated when the gate is off"
+        "open_server and open_client are never described as gated"
     );
 
     // Acting on "the first server" is not offered here: there is no instance in context.
@@ -553,55 +550,6 @@ async fn test_user_input_prompt() {
         prompt.contains("`python` (Python 3.11.0)")
             && prompt.contains("`javascript` (Node.js v20.0.0)"),
         "script languages should be listed as accepted tokens"
-    );
-}
-
-/// The documentation-gated variant (`REQUIRE_DOCS_FOR_OPEN_ACTIONS = true`): no
-/// open_server / open_client definitions or examples, and the instructions say why.
-#[cfg(all(unix, feature = "sqlite"))]
-#[tokio::test]
-async fn test_user_input_prompt_docs_gate() {
-    let state = Arc::new(AppState::new());
-    let scripting_env = netget::scripting::ScriptingEnvironment {
-        python: Some("Python 3.11.0".to_string()),
-        javascript: Some("v20.0.0".to_string()),
-        go: Some("go version go1.21.0".to_string()),
-        perl: Some("perl 5.38.0".to_string()),
-    };
-    state.set_scripting_env(scripting_env).await;
-
-    let system_prompt =
-        PromptBuilder::build_user_input_system_prompt_with_docs(&state, vec![], None, false, false)
-            .await;
-    let prompt = format!(
-        "{}\n\nTrigger: User input: \"{}\"",
-        system_prompt, "start a DNS server on port 53"
-    );
-
-    assert_prompt_snapshot("user_input_prompt_docs_gate", &prompt);
-
-    assert!(
-        prompt.contains("are not offered yet") && prompt.contains("read_documentation"),
-        "the gated prompt should say to read the documentation first"
-    );
-    assert!(
-        !prompt.contains(". open_server\n") && !prompt.contains(". open_client\n"),
-        "open_server / open_client should have no definition before the docs are read"
-    );
-    for example in [
-        r#""type": "open_server""#,
-        r#""type":"open_server""#,
-        r#""type": "open_client""#,
-        r#""type":"open_client""#,
-    ] {
-        assert!(
-            !prompt.contains(example),
-            "the gated prompt should not teach {example} before it is offered"
-        );
-    }
-    assert!(
-        !prompt.contains("Available Base Stacks"),
-        "Base stacks should NOT be shown before reading docs"
     );
 }
 
@@ -988,7 +936,7 @@ async fn test_protocol_mcp_documentation() {
         async move {
             let doc = netget::mcp_stdio::docs::render_protocol_docs(protocol, state)
                 .await
-                .unwrap_or_else(|| panic!("{protocol} is compiled in"));
+                .unwrap_or_else(|e| panic!("{protocol} is compiled in: {e}"));
             normalize_mcp_port_line(&doc)
         }
     };

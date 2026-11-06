@@ -70,11 +70,11 @@ impl Protocol for RadsecClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The RADIUS client's transport over a tokio-rustls stream: packets framed by their Length field, the server verified against ca_file, a client certificate when given; every reply verified (Response Authenticator, Message-Authenticator) exactly as over UDP")
             .llm_control("The same as the RADIUS client: who to authenticate and how, what to account, and what to do with each reply")
-            .e2e_testing("tests/client/radsec: NetGet's own RadSec server; FreeRADIUS with a TLS listener, and radsecproxy in front of FreeRADIUS, as independent servers")
+            .e2e_testing("tests/client/radsec/real_server_test.rs against FreeRADIUS 3 with a TLS listener requiring a client certificate, and radsecproxy forwarding to FreeRADIUS over UDP: the handler chain names the accounting session after the Reply-Message FreeRADIUS sent, and the session id and user are read from FreeRADIUS's own detail file; a rejected user is refused with FreeRADIUS's message. Fails rather than skips without radiusd or radsecproxy")
             .notes("One connection carries authentication and accounting. Nothing is retransmitted; a request waits timeout_ms and is then reported as a timeout. A connection that closes ends the client.")
             .max_inbound_bytes(crate::server::radius::packet::MAX_PACKET_LEN)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))

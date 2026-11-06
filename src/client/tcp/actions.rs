@@ -11,31 +11,50 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::LazyLock;
 
-/// TCP client connected event
+/// TCP client connected event.
+///
+/// These two statics are what `connect_with_llm_actions` raises *and* what
+/// [`TcpClientProtocol::get_event_types`] declares. The declaration used to be two fresh
+/// `EventType::new` calls with no fields and a placeholder example, so the docs said "(no
+/// documented fields)" for events that carry `remote_addr` and `data`/`encoding`.
 pub static TCP_CLIENT_CONNECTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "tcp_connected",
-        "TCP client successfully connected to server",
+        "The client has connected to the server. Send the first bytes now if the instruction \
+         says the client speaks first; otherwise answer with no actions and wait for the \
+         server.",
         serde_json::json!({
             "type": "send_tcp_data",
-            "data": "Hello"
+            "data": "Hello\r\n"
         }),
     )
-    .with_parameters(vec![Parameter {
-        name: "remote_addr".to_string(),
-        type_hint: "string".to_string(),
-        description: "Remote server address".to_string(),
-        required: true,
-    }])
+    .with_parameters(vec![
+        Parameter {
+            name: "remote_addr".to_string(),
+            type_hint: "string".to_string(),
+            description: "The server's address, ip:port, as connected".to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "local_addr".to_string(),
+            type_hint: "string".to_string(),
+            description: "This client's own address, ip:port".to_string(),
+            required: true,
+        },
+        crate::server::tcp::actions::mptcp_event_parameter(),
+    ])
+    .with_alternative_example(json!({"type": "wait_for_more"}))
 });
 
 /// TCP client data received event
 pub static TCP_CLIENT_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "tcp_data_received",
-        "Data received from TCP server",
-        json!({"type": "placeholder", "event_id": "tcp_data_received"}),
+        "Data received from the TCP server",
+        json!({"type": "send_tcp_data", "data": "OK\r\n"}),
     )
+    .with_alternative_example(json!({"type": "wait_for_more"}))
+    .with_alternative_example(json!({"type": "disconnect"}))
     .with_parameters(vec![
         Parameter {
             name: "data".to_string(),
@@ -55,6 +74,7 @@ pub static TCP_CLIENT_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|
             description: "Length of data in bytes".to_string(),
             required: true,
         },
+        crate::server::tcp::actions::mptcp_event_parameter(),
     ])
 });
 
@@ -148,23 +168,36 @@ impl Protocol for TcpClientProtocol {
     }
     fn get_event_types(&self) -> Vec<EventType> {
         vec![
-            EventType::new(
-                "tcp_connected",
-                "Triggered when TCP client connects to server",
-                json!({"type": "placeholder", "event_id": "tcp_connected"}),
-            ),
-            EventType::new(
-                "tcp_data_received",
-                "Triggered when TCP client receives data from server",
-                json!({"type": "placeholder", "event_id": "tcp_data_received"}),
-            ),
+            TCP_CLIENT_CONNECTED_EVENT.clone(),
+            TCP_CLIENT_DATA_RECEIVED_EVENT.clone(),
         ]
+    }
+    fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
+        vec![crate::server::tcp::actions::multipath_parameter(
+            "Connect with Multipath TCP (MPTCP, RFC 8684): the socket is opened with \
+             IPPROTO_MPTCP, and when the server does not speak MPTCP the kernel falls back to \
+             plain TCP on the same connection. Whether MPTCP was negotiated is then carried as \
+             `mptcp` on every event and shown by client_status. Linux only (5.6+, \
+             net.mptcp.enabled=1): the connect fails with the reason when the kernel refuses an \
+             MPTCP socket; on macOS (where MPTCP is only reachable through Network.framework) \
+             and every other platform it is refused outright.",
+        )]
     }
     fn stack_name(&self) -> &'static str {
         "ETH>IP>TCP"
     }
     fn keywords(&self) -> Vec<&'static str> {
-        vec!["tcp", "tcp client", "connect to tcp"]
+        vec![
+            "tcp",
+            "tcp client",
+            "connect to tcp",
+            "mptcp",
+            "multipath tcp",
+        ]
+    }
+    fn alias_note(&self, alias: &str) -> Option<&'static str> {
+        crate::server::tcp::actions::is_multipath_alias(alias)
+            .then_some(crate::server::tcp::actions::MULTIPATH_ALIAS_NOTE)
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
@@ -258,12 +291,20 @@ impl Client for TcpClientProtocol {
     > {
         Box::pin(async move {
             use crate::client::tcp::TcpClient;
-            TcpClient::connect_with_llm_actions(
+            let multipath = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_bool("multipath"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(crate::server::tcp::actions::MULTIPATH_DEFAULT);
+            TcpClient::connect_with_options(
                 ctx.remote_addr,
                 ctx.llm_client,
                 ctx.state,
                 ctx.status_tx,
                 ctx.client_id,
+                multipath,
             )
             .await
         })

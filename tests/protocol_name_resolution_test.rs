@@ -69,3 +69,120 @@ fn colliding_inputs_resolve_consistently() {
         assert!(first.is_some(), "{input:?} resolved to nothing");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Exact-name resolution (`resolve_name`) and whole-word keyword matching
+// ---------------------------------------------------------------------------
+//
+// `get_protocol_docs` with "mptcp" used to return TCP's page headed "`mptcp` — MCP reference":
+// the client registry matched keywords as raw substrings ("mptcp" contains "tcp") and the
+// server registry ended with "anything containing tcp is TCP". A caller naming a protocol now
+// gets that protocol, an alias reported as one, or an error with suggestions.
+
+use netget::protocol::name_match::{contains_words, NameMatch};
+use netget::protocol::server_registry::registry;
+
+#[test]
+fn keywords_match_only_as_whole_words() {
+    assert!(contains_words("tcp", "tcp"));
+    assert!(contains_words("a tcp server", "tcp"));
+    assert!(
+        contains_words("tcpx tcp", "tcp"),
+        "every occurrence is tried"
+    );
+    assert!(!contains_words("mptcp", "tcp"));
+    assert!(!contains_words("tcp_client", "tcp"));
+    assert!(!contains_words("email server", "mail server"));
+    assert!(contains_words("a mail server here", "mail server"));
+}
+
+#[test]
+fn free_text_parsing_no_longer_finds_tcp_inside_other_words() {
+    for input in ["zztcpzz", "xtcp", "tcpish"] {
+        assert_eq!(registry().parse_from_str(input), None, "server: {input:?}");
+        assert_eq!(
+            CLIENT_REGISTRY.parse_from_str(input),
+            None,
+            "client: {input:?}"
+        );
+    }
+    // Free text that names tcp as a word still resolves.
+    assert_eq!(
+        registry().parse_from_str("a raw tcp server").as_deref(),
+        Some("TCP")
+    );
+    assert_eq!(
+        CLIENT_REGISTRY
+            .parse_from_str("connect over tcp please")
+            .as_deref(),
+        Some("TCP")
+    );
+}
+
+#[test]
+fn exact_names_resolve_canonically_and_aliases_say_so() {
+    for input in ["tcp", "TCP", " Tcp "] {
+        let (p, how) = registry().resolve_name(input).expect(input);
+        assert_eq!((p.protocol_name(), how), ("TCP", NameMatch::Canonical));
+        let (c, how) = CLIENT_REGISTRY.resolve_name(input).expect(input);
+        assert_eq!((c.protocol_name(), how), ("TCP", NameMatch::Canonical));
+    }
+    let (p, how) = registry().resolve_name("eth>ip>tcp").expect("stack name");
+    assert_eq!((p.protocol_name(), how), ("TCP", NameMatch::StackName));
+
+    for input in ["mptcp", "MPTCP", "multipath tcp", "multipath-tcp"] {
+        let (p, how) = registry().resolve_name(input).expect(input);
+        assert_eq!(p.protocol_name(), "TCP");
+        assert!(
+            matches!(how, NameMatch::Alias(_)),
+            "{input:?} is an alias: {how:?}"
+        );
+        let (c, how) = CLIENT_REGISTRY.resolve_name(input).expect(input);
+        assert_eq!(c.protocol_name(), "TCP");
+        assert!(
+            matches!(how, NameMatch::Alias(_)),
+            "{input:?} is an alias: {how:?}"
+        );
+    }
+    // Multi-word canonical names fold spaces, hyphens and underscores.
+    let (c, _) = CLIENT_REGISTRY
+        .resolve_name("ssh-agent")
+        .expect("ssh-agent");
+    assert_eq!(c.protocol_name(), "SSH Agent");
+}
+
+#[test]
+fn a_near_miss_is_an_error_with_suggestions_not_a_guess() {
+    // Free-text parsing would map "a tcp server" to TCP; a name lookup must not.
+    let err = registry()
+        .resolve_name("a tcp server")
+        .err()
+        .expect("not a name")
+        .to_string();
+    assert!(
+        err.contains("Unknown protocol") && err.contains("'tcp'"),
+        "{err}"
+    );
+    let err = CLIENT_REGISTRY
+        .resolve_name("a tcp client")
+        .err()
+        .expect("not a name")
+        .to_string();
+    assert!(err.contains("'tcp'"), "{err}");
+
+    // A typo gets an edit-distance suggestion.
+    let err = registry()
+        .resolve_name("tccp")
+        .err()
+        .expect("typo")
+        .to_string();
+    assert!(err.contains("Did you mean"), "{err}");
+
+    // Nothing close: no suggestion, still an error.
+    let err = registry()
+        .resolve_name("definitely_not_a_protocol")
+        .err()
+        .expect("unknown")
+        .to_string();
+    assert!(err.starts_with("Unknown protocol"), "{err}");
+}

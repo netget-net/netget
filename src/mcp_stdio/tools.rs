@@ -157,6 +157,19 @@ pub struct ListProtocolsParams {
     /// Include experimental/honeypot protocols
     #[serde(default)]
     pub include_disabled: Option<bool>,
+    /// Words to search for (case-insensitive, whole words): matched against each protocol's
+    /// name, keywords, search aliases, group, layer and description, e.g. "raw ip packet",
+    /// "ethernet", "mqtt". Results are ranked by how many words they match.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Only protocols at this layer of the stack: "l2" (link: Ethernet, ARP), "l3" (network:
+    /// IP, ICMP, tunnels), "l4" (transport: TCP, UDP, QUIC with nothing above),
+    /// "app" (application protocols), or "other" (USB, Bluetooth, serial, pipes).
+    #[serde(default)]
+    pub layer: Option<String>,
+    /// Show at most this many protocols per section (server / client).
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub limit: Option<u32>,
 }
 
 fn default_all() -> Option<String> {
@@ -402,6 +415,17 @@ pub struct ListAccessLogsParams {
     /// Maximum number of recent entries to return (default 20)
     #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
     pub limit: Option<u32>,
+    /// Only entries for this client (its handled events and the actions it was answered
+    /// with). Give at most one of client_id / server_id.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub client_id: Option<u32>,
+    /// Only entries for this server.
+    #[serde(default, deserialize_with = "deserialize_option_u32_flexible")]
+    pub server_id: Option<u32>,
+    /// Only entries newer than this access-log id — pass the newest id you have seen to
+    /// fetch just what happened since.
+    #[serde(default, deserialize_with = "deserialize_option_u64_flexible")]
+    pub since_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -409,6 +433,16 @@ pub struct GetAccessLogParams {
     /// Access-log entry id (from list_access_logs)
     #[serde(deserialize_with = "deserialize_u64_flexible")]
     pub id: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListLocalListenersParams {
+    /// "tcp" (listening sockets), "udp" (bound sockets), or "all" (default)
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Only sockets on this port
+    #[serde(default, deserialize_with = "deserialize_option_u16_flexible")]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -791,6 +825,52 @@ fn spawn_state_reaper(
     })
 }
 
+/// A server's instruction as `list_servers` / `server_status` report it.
+///
+/// A server started with no instruction runs on NetGet's default text
+/// ([`crate::state::server::default_server_instruction`]); it is reported as that, not as
+/// something the operator wrote — a handlers-only server would otherwise appear to have been
+/// given an instruction nobody gave it.
+fn describe_server_instruction(server: &crate::state::server::ServerInstance) -> String {
+    if server.instruction.is_empty() {
+        "(none)".to_string()
+    } else if server.instruction_is_default() {
+        format!(
+            "(none given — NetGet's default applies: \"{}\")",
+            server.instruction
+        )
+    } else {
+        server.instruction.clone()
+    }
+}
+
+/// A client's instruction as `list_clients` / `client_status` report it — the client twin of
+/// [`describe_server_instruction`]: NetGet's default
+/// ([`crate::state::client::default_client_instruction`]) is labelled as such, not shown as
+/// though the operator had written it.
+fn describe_client_instruction(client: &crate::state::client::ClientInstance) -> String {
+    if client.instruction.is_empty() {
+        "(none)".to_string()
+    } else if client.instruction_is_default() {
+        let has_rules = client
+            .event_handler_config
+            .as_ref()
+            .is_some_and(|c| !c.handlers.is_empty());
+        if has_rules {
+            "(none given — only events no handler matches reach the model, with NetGet's \
+             generic default)"
+                .to_string()
+        } else {
+            format!(
+                "(none given — NetGet's default applies: \"{}\")",
+                client.instruction
+            )
+        }
+    } else {
+        client.instruction.clone()
+    }
+}
+
 /// How often the MCP-mode scheduled-task ticker fires. Matches the 1s cadence the
 /// TUI event loop and the non-interactive `run_server` runner use for their task
 /// timers, so a task's declared `interval_secs`/`delay_secs` are honoured to the
@@ -840,6 +920,22 @@ fn spawn_task_ticker(
             .await;
         }
     })
+}
+
+/// What a `mptcp` field in a connection's protocol info says, for status output. Present only
+/// on a `tcp` instance started with `multipath` (`src/utils/mptcp.rs`).
+fn mptcp_text(value: Option<&serde_json::Value>) -> Option<&'static str> {
+    match value.and_then(|v| v.as_bool())? {
+        true => Some("MPTCP negotiated"),
+        false => Some("multipath requested, peer fell back to plain TCP"),
+    }
+}
+
+/// [`mptcp_text`] as a suffix for a connection line, empty when there is nothing to say.
+fn mptcp_suffix(value: Option<&serde_json::Value>) -> String {
+    mptcp_text(value)
+        .map(|t| format!(" — {t}"))
+        .unwrap_or_default()
 }
 
 /// The port a server is actually listening on.
@@ -1037,7 +1133,9 @@ impl NetGetMcpService {
         // The receiver belongs to the same service lifetime as its producers.
         let status_drain = tokio::spawn(async move {
             while let Some(msg) = status_rx.recv().await {
-                eprintln!("[NETGET] {}", msg);
+                if !crate::utils::is_status_control_line(&msg) {
+                    eprintln!("[NETGET] {}", msg);
+                }
             }
         });
         let state = Arc::new(SharedState {
@@ -1065,20 +1163,51 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List all available network protocols that can be started as servers or clients"
+        description = "List the network protocols that can be started as servers or clients. The full list is long (~250 per side): pass `query` (words such as \"raw ip packet\", \"ethernet\", \"mqtt\"; ranked by words matched) and/or `layer` (l2, l3, l4, app, other) and `limit` to narrow it; filtered results show each protocol's layer and stack, and how many matched out of the total."
     )]
     async fn list_protocols(
         &self,
         Parameters(params): Parameters<ListProtocolsParams>,
     ) -> Result<CallToolResult, McpError> {
+        use super::protocol_search::{
+            query_terms, Layer, ProtocolFilters, ProtocolRow, Searchable,
+        };
+
         let filter_type = params.r#type.as_deref().unwrap_or("all");
         let include_disabled = params.include_disabled.unwrap_or(false);
+        let terms = params.query.as_deref().map(query_terms).unwrap_or_default();
+        let layer = match params.layer.as_deref().filter(|l| !l.trim().is_empty()) {
+            None => None,
+            Some(text) => match Layer::parse(text) {
+                Some(layer) => Some(layer),
+                None => {
+                    let valid: Vec<&str> = Layer::ALL.iter().map(|l| l.as_str()).collect();
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Unknown layer {text:?}. Valid layers: {}.",
+                        valid.join(", ")
+                    ))]));
+                }
+            },
+        };
+        let limit = params.limit.map(|n| n as usize);
+        // With no filter the listing is exactly what it always was.
+        let filtering = !terms.is_empty() || layer.is_some() || limit.is_some();
+
+        let filters = ProtocolFilters {
+            terms: &terms,
+            layer,
+            limit,
+            filtering,
+        };
+
         let mut result = String::new();
 
         if filter_type == "all" || filter_type == "server" {
             let registry = crate::protocol::server_registry::registry();
             let protocols = registry.available_protocols();
             result.push_str("## Server Protocols\n\n");
+            let mut rows = Vec::new();
+            let mut total = 0;
             for name in &protocols {
                 if let Some(proto) = registry.get(name) {
                     let metadata = proto.metadata();
@@ -1090,14 +1219,25 @@ impl NetGetMcpService {
                     {
                         continue;
                     }
-                    result.push_str(&format!(
-                        "- **{}** ({}) - {}\n",
+                    total += 1;
+                    let searchable = Searchable {
                         name,
+                        keywords: proto.keywords(),
+                        search_terms: metadata.search_terms,
+                        group: proto.group_name(),
+                        stack: proto.stack_name(),
+                        prose: vec![proto.description(), metadata.implementation],
+                    };
+                    if let Some(row) = filters.row(
+                        &searchable,
                         metadata.state.as_str(),
-                        metadata.implementation
-                    ));
+                        metadata.implementation,
+                    ) {
+                        rows.push(row);
+                    }
                 }
             }
+            filters.render("server", total, rows, &mut result);
             result.push('\n');
         }
 
@@ -1107,6 +1247,8 @@ impl NetGetMcpService {
             protocols.sort();
             result.push_str("## Client Protocols\n\n");
             result.push_str("Start one with `start_client` (needs a `remote_addr`).\n\n");
+            let mut rows = Vec::new();
+            let mut total = 0;
             for name in &protocols {
                 if let Some(proto) = registry.get(name) {
                     let metadata = proto.metadata();
@@ -1118,16 +1260,29 @@ impl NetGetMcpService {
                     {
                         continue;
                     }
-                    result.push_str(&format!(
-                        "- **{}** ({}) - {}\n",
+                    total += 1;
+                    let searchable = Searchable {
                         name,
-                        metadata.state.as_str(),
-                        proto.description()
-                    ));
-                } else {
-                    result.push_str(&format!("- **{}**\n", name));
+                        keywords: proto.keywords(),
+                        search_terms: metadata.search_terms,
+                        group: proto.group_name(),
+                        stack: proto.stack_name(),
+                        prose: vec![proto.description()],
+                    };
+                    if let Some(row) =
+                        filters.row(&searchable, metadata.state.as_str(), proto.description())
+                    {
+                        rows.push(row);
+                    }
+                } else if !filtering {
+                    rows.push(ProtocolRow {
+                        line: format!("- **{}**\n", name),
+                        rank: (0, 0),
+                        name: name.clone(),
+                    });
                 }
             }
+            filters.render("client", total, rows, &mut result);
             result.push('\n');
         }
 
@@ -1141,12 +1296,21 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartServerParams>,
     ) -> Result<CallToolResult, McpError> {
-        let instruction = params.instruction.unwrap_or_else(|| {
-            format!(
-                "You are a {} server. Handle requests appropriately.",
-                params.protocol
-            )
-        });
+        // `protocol` is a name: resolve it exactly (canonical name, stack name or declared
+        // alias) and start that protocol under its canonical name. A near miss is refused with
+        // suggestions rather than started as whatever it happens to contain.
+        let mut params = params;
+        match crate::protocol::server_registry::registry().resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start server: {e}"
+                ))]))
+            }
+        }
+        let instruction = params
+            .instruction
+            .unwrap_or_else(|| crate::state::server::default_server_instruction(&params.protocol));
 
         // Drive the new server with NetGet's configured LLM client (Ollama/OpenAI from CLI args)
         self.state
@@ -1220,10 +1384,13 @@ impl NetGetMcpService {
             self.state.app_state.set_server_memo(server_id, memo).await;
         }
 
-        // Collect startup status messages
+        // Collect startup status messages. Control sentinels (`__UPDATE_UI__`, a protocol
+        // asking the dashboard to repaint) share the stream and are not for the caller.
         let mut messages = Vec::new();
         while let Ok(msg) = status_rx.try_recv() {
-            messages.push(msg);
+            if !crate::utils::is_status_control_line(&msg) {
+                messages.push(msg);
+            }
         }
 
         let capturing = self
@@ -1289,11 +1456,7 @@ impl NetGetMcpService {
                 server.protocol_name,
                 bound_port(server),
                 server.status,
-                if server.instruction.is_empty() {
-                    "(none)"
-                } else {
-                    &server.instruction
-                },
+                describe_server_instruction(server),
                 if server.memory.is_empty() {
                     "(empty)"
                 } else {
@@ -1305,7 +1468,9 @@ impl NetGetMcpService {
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get detailed status of a specific server")]
+    #[tool(
+        description = "Get detailed status of a specific server: port, status, instruction, connections (with the ids send_to_peer takes), its event handlers, counters (events handled and who answered them) and its most recent events with their answers."
+    )]
     async fn server_status(
         &self,
         Parameters(params): Parameters<ServerStatusParams>,
@@ -1325,11 +1490,7 @@ impl NetGetMcpService {
                     server.protocol_name,
                     bound_port(&server),
                     server.status,
-                    if server.instruction.is_empty() {
-                        "(none)"
-                    } else {
-                        &server.instruction
-                    },
+                    describe_server_instruction(&server),
                     if server.memory.is_empty() {
                         "(empty)"
                     } else {
@@ -1365,12 +1526,13 @@ impl NetGetMcpService {
                             .has_peer_handle(server_id, conn.id.as_u32())
                             .await;
                         result.push_str(&format!(
-                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}\n",
+                            "- connection_id **{}** — {} ({:?}), {} byte(s) in / {} out{}{}\n",
                             conn.id.as_u32(),
                             conn.remote_addr,
                             conn.status,
                             conn.bytes_received,
                             conn.bytes_sent,
+                            mptcp_suffix(conn.protocol_info.data.get("mptcp")),
                             if injectable {
                                 " — accepts send_to_peer / disconnect_peer"
                             } else {
@@ -1387,6 +1549,17 @@ impl NetGetMcpService {
                         }
                     }
                 }
+                result.push_str(&super::activity::handlers_section(
+                    server.event_handler_config.as_ref(),
+                ));
+                result.push_str(
+                    &super::activity::activity_section(
+                        &self.state.app_state,
+                        crate::state::app_state::AccessLogOwner::Server(server_id.as_u32()),
+                        None,
+                    )
+                    .await,
+                );
                 Ok(CallToolResult::success(vec![Content::text(result)]))
             }
             None => Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1536,23 +1709,21 @@ impl NetGetMcpService {
         match crate::mcp_stdio::docs::render_protocol_docs(&params.protocol, &self.state.app_state)
             .await
         {
-            Some(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
-            None => {
-                // Protocol not compiled in - list what's available
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(reason) => {
+                // Not a name either registry has: say why (with did-you-mean suggestions) and
+                // list what is available. Protocols are not Cargo features, so there is no
+                // feature to rebuild with.
                 let server_registry = crate::protocol::server_registry::registry();
                 let available = server_registry.available_protocols();
                 Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Protocol '{}' not found. It may not be compiled into this build.\n\n\
-                     Available server protocols ({}):\n{}\n\n\
-                     Build with the protocol feature enabled: cargo build --features mcp-stdio,{}",
-                    params.protocol,
+                    "{reason}\n\nAvailable server protocols ({}):\n{}",
                     available.len(),
                     available
                         .iter()
                         .map(|p| format!("  - {}", p))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    params.protocol.to_lowercase(),
                 ))]))
             }
         }
@@ -1722,52 +1893,130 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List recent request/response access-log entries across all servers (newest first). Use get_access_log with an entry id to see the full request and response."
+        description = "List recent request/response access-log entries across all servers and clients (newest first): each handled event, the actions it was answered with, and what answered it (rule, model, cache). Filter to one instance with client_id or server_id, and pass since_id (the newest id already seen) to get only newer entries. Use get_access_log with an entry id to see the full request and response."
     )]
     async fn list_access_logs(
         &self,
         Parameters(params): Parameters<ListAccessLogsParams>,
     ) -> Result<CallToolResult, McpError> {
+        use crate::state::app_state::AccessLogOwner;
+
         let limit = params.limit.unwrap_or(20) as usize;
-        let entries = self.state.app_state.list_access_logs(Some(limit)).await;
+        let owner = match (params.client_id, params.server_id) {
+            (Some(_), Some(_)) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Give client_id or server_id, not both.",
+                )]));
+            }
+            (Some(id), None) => Some(AccessLogOwner::Client(id)),
+            (None, Some(id)) => Some(AccessLogOwner::Server(id)),
+            (None, None) => None,
+        };
+        let entries: Vec<_> = match params.since_id {
+            // Newest first, so everything after the first entry at or below `since_id` is
+            // older still.
+            Some(since) => self
+                .state
+                .app_state
+                .list_access_logs_for(owner, None)
+                .await
+                .into_iter()
+                .take_while(|e| e.id > since)
+                .take(limit)
+                .collect(),
+            None => {
+                self.state
+                    .app_state
+                    .list_access_logs_for(owner, Some(limit))
+                    .await
+            }
+        };
 
         if entries.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "No requests logged yet. Access logs are recorded as servers handle requests.",
-            )]));
+            let text = match (owner, params.since_id) {
+                (_, Some(since)) => format!("No entries newer than #{since}."),
+                (Some(AccessLogOwner::Client(id)), None) => format!(
+                    "No events logged for client #{id} yet. An event is recorded once it has \
+                     been answered; one whose model call failed leaves no entry."
+                ),
+                (Some(AccessLogOwner::Server(id)), None) => {
+                    format!("No requests logged for server #{id} yet.")
+                }
+                (None, None) => "No requests logged yet. Access logs are recorded as servers \
+                                 and clients handle events."
+                    .to_string(),
+            };
+            return Ok(CallToolResult::success(vec![Content::text(text)]));
         }
 
-        let now_ms = crate::utils::clock::SystemTime::now()
-            .duration_since(crate::utils::clock::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = super::activity::now_unix_ms();
 
-        let mut out = format!("## Recent requests ({} shown)\n\n", entries.len());
+        let scope = match owner {
+            Some(AccessLogOwner::Client(id)) => format!(" for client #{id}"),
+            Some(AccessLogOwner::Server(id)) => format!(" for server #{id}"),
+            None => String::new(),
+        };
+        let mut out = format!("## Recent requests{scope} ({} shown)\n\n", entries.len());
         for e in &entries {
-            let age = now_ms.saturating_sub(e.unix_ms) / 1000;
-            let owner = match (e.server_id, e.client_id) {
-                (Some(id), _) => format!("server #{id}"),
-                (None, Some(id)) => format!("client #{id}"),
-                (None, None) => "unknown".to_string(),
-            };
-            out.push_str(&format!(
-                "- **#{}** [{}s ago] {} ({}) — {} — {} → {}{}\n",
-                e.id,
-                age,
-                owner,
-                e.protocol,
-                e.event_type,
-                summarize_request(&e.request),
-                summarize_response(&e.response),
-                e.answered_by
-                    .as_deref()
-                    .map(|by| format!(" (answered by {by})"))
-                    .unwrap_or_default(),
-            ));
+            out.push_str(&super::activity::access_log_line(e, now_ms, true));
         }
         out.push_str("\nUse `get_access_log` with an id for the full request and response.");
 
         Ok(CallToolResult::success(vec![Content::text(out)]))
+    }
+
+    #[tool(
+        description = "List the TCP sockets listening and UDP sockets bound on THIS host — something to point a client at — with each one's address, port, pid and process name, and which are this NetGet's own servers. Read-only; filter with transport (tcp/udp) and port. Without root, other users' processes are not visible."
+    )]
+    async fn list_local_listeners(
+        &self,
+        Parameters(params): Parameters<ListLocalListenersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let transport = match params
+            .transport
+            .as_deref()
+            .map(|t| t.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("") | Some("all") => None,
+            Some("tcp") => Some("tcp"),
+            Some("udp") => Some("udp"),
+            Some(other) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Unknown transport {other:?}: use \"tcp\", \"udp\" or \"all\"."
+                ))]));
+            }
+        };
+        // The socket table is read with blocking system calls.
+        let listeners =
+            match tokio::task::spawn_blocking(super::local_listeners::local_listeners).await {
+                Ok(Ok(listeners)) => listeners,
+                Ok(Err(e)) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Could not list local listeners: {e}"
+                    ))]));
+                }
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Could not list local listeners: {e}"
+                    ))]));
+                }
+            };
+        let servers: Vec<super::local_listeners::RunningServer> = self
+            .state
+            .app_state
+            .get_all_servers()
+            .await
+            .iter()
+            .map(|s| super::local_listeners::RunningServer {
+                id: s.id.as_u32(),
+                protocol: s.protocol_name.clone(),
+                port: bound_port(s),
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::text(
+            super::local_listeners::render(&listeners, &servers, transport, params.port),
+        )]))
     }
 
     #[tool(
@@ -1921,11 +2170,18 @@ impl NetGetMcpService {
         &self,
         Parameters(params): Parameters<StartClientParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `protocol` is a name: resolved exactly, as for start_server.
+        let mut params = params;
+        match crate::protocol::CLIENT_REGISTRY.resolve_name(&params.protocol) {
+            Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to start client: {e}"
+                ))]))
+            }
+        }
         let instruction = params.instruction.unwrap_or_else(|| {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                params.protocol, params.remote_addr
-            )
+            crate::state::client::default_client_instruction(&params.protocol, &params.remote_addr)
         });
 
         let scheduled_tasks = match parse_scheduled_tasks(params.scheduled_tasks) {
@@ -2002,11 +2258,21 @@ impl NetGetMcpService {
             self.state.app_state.set_client_memo(client_id, memo).await;
         }
 
+        // A protocol may say what it made of remote_addr (DataLink: a capture filter).
+        let connect_note = self
+            .state
+            .app_state
+            .get_client(client_id)
+            .await
+            .and_then(|c| c.get_protocol_field("connect_note").cloned())
+            .and_then(|v| v.as_str().map(|s| format!("\n{s}")))
+            .unwrap_or_default();
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Client #{} ({}) connected to {}.{}",
+            "Client #{} ({}) connected to {}.{}{}",
             client_id.as_u32(),
             params.protocol,
             params.remote_addr,
+            connect_note,
             capturing
         ))]))
     }
@@ -2034,7 +2300,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "List all clients with their protocol, remote address, status and instruction"
+        description = "List all clients with their protocol, remote address, status and instruction. Live clients are listed first; disconnected or failed clients follow under their own heading — they are kept so they can be reconnected by id, and stop_client removes one."
     )]
     async fn list_clients(&self) -> Result<CallToolResult, McpError> {
         let clients = self.state.app_state.get_all_clients().await;
@@ -2048,31 +2314,55 @@ impl NetGetMcpService {
         let mut clients = clients;
         clients.sort_by_key(|c| c.id.as_u32());
 
-        let mut result = String::from("## Clients\n\n");
-        for client in &clients {
-            result.push_str(&format!(
-                "- **Client #{}**: {} -> {} ({})\n  Instruction: {}\n  Memory: {}\n\n",
-                client.id.as_u32(),
-                client.protocol_name,
-                client.remote_addr,
-                client.status,
-                if client.instruction.is_empty() {
-                    "(none)"
-                } else {
-                    &client.instruction
-                },
-                if client.memory.is_empty() {
-                    "(empty)"
-                } else {
-                    &client.memory
-                },
-            ));
+        // A client that hung up keeps its row on purpose — the model's `reconnect_client`
+        // and the dashboard's card both reconnect it by id, and `disconnect_client` is "hang
+        // up", not "remove". It is listed apart, so a finished client is not mistaken for a
+        // live one; stop_client removes it.
+        let (ended, live): (Vec<_>, Vec<_>) = clients.iter().partition(|c| {
+            matches!(
+                c.status,
+                crate::state::client::ClientStatus::Disconnected
+                    | crate::state::client::ClientStatus::Error(_)
+            )
+        });
+
+        let mut result = String::new();
+        let sections = [
+            ("## Clients\n\n", live),
+            (
+                "## Disconnected clients\n\nKept so they can be reconnected by id; \
+                 stop_client removes one.\n\n",
+                ended,
+            ),
+        ];
+        for (heading, clients) in sections {
+            if clients.is_empty() {
+                continue;
+            }
+            result.push_str(heading);
+            for client in clients {
+                result.push_str(&format!(
+                    "- **Client #{}**: {} -> {} ({})\n  Instruction: {}\n  Memory: {}\n\n",
+                    client.id.as_u32(),
+                    client.protocol_name,
+                    client.remote_addr,
+                    client.status,
+                    describe_client_instruction(client),
+                    if client.memory.is_empty() {
+                        "(empty)"
+                    } else {
+                        &client.memory
+                    },
+                ));
+            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
-    #[tool(description = "Get detailed status of a specific client")]
+    #[tool(
+        description = "Get detailed status of a specific client: protocol, addresses, status, instruction (or that none was given), its event handlers, counters (events handled and who answered them, actions, model calls used), byte/packet counts where the protocol keeps them, and its most recent events with their answers."
+    )]
     async fn client_status(
         &self,
         Parameters(params): Parameters<ClientStatusParams>,
@@ -2092,11 +2382,7 @@ impl NetGetMcpService {
                     client.protocol_name,
                     client.remote_addr,
                     client.status,
-                    if client.instruction.is_empty() {
-                        "(none)"
-                    } else {
-                        &client.instruction
-                    },
+                    describe_client_instruction(&client),
                     if client.memory.is_empty() {
                         "(empty)"
                     } else {
@@ -2107,7 +2393,18 @@ impl NetGetMcpService {
                     &self.state.app_state,
                     crate::capture::CaptureOwner::Client(client_id),
                 ));
+                if let Some(mptcp) = mptcp_text(client.get_protocol_field("mptcp")) {
+                    result.push_str(&format!("- **Multipath**: {mptcp}\n"));
+                }
 
+                if client.connection.is_none() {
+                    // Byte and packet counters are kept by the protocol itself, and only
+                    // those that open a socket of their own fill them in.
+                    result.push_str(
+                        "- **Bytes/packets**: not counted by this protocol — the events and \
+                         actions below are what NetGet saw it do\n",
+                    );
+                }
                 if let Some(conn) = &client.connection {
                     result.push_str(&format!(
                         "- **Local address**: {}\n\
@@ -2126,6 +2423,22 @@ impl NetGetMcpService {
                         conn.packets_received,
                     ));
                 }
+
+                result.push_str(&super::activity::handlers_section(
+                    client.event_handler_config.as_ref(),
+                ));
+                let budget = (
+                    self.state.app_state.get_client_llm_calls(client_id).await,
+                    self.state.app_state.get_client_llm_call_limit().await,
+                );
+                result.push_str(
+                    &super::activity::activity_section(
+                        &self.state.app_state,
+                        crate::state::app_state::AccessLogOwner::Client(client_id.as_u32()),
+                        Some(budget),
+                    )
+                    .await,
+                );
 
                 Ok(CallToolResult::success(vec![Content::text(result)]))
             }
@@ -2998,7 +3311,7 @@ fn parse_scheduled_tasks(
 }
 
 /// Build a short one-line summary of a request (event data) for the log list.
-fn summarize_request(request: &serde_json::Value) -> String {
+pub(super) fn summarize_request(request: &serde_json::Value) -> String {
     // HTTP-style requests: method + path
     let method = request.get("method").and_then(|v| v.as_str());
     let path = request.get("path").and_then(|v| v.as_str());
@@ -3014,7 +3327,7 @@ fn summarize_request(request: &serde_json::Value) -> String {
 }
 
 /// Build a short one-line summary of the response action array for the log list.
-fn summarize_response(response: &[serde_json::Value]) -> String {
+pub(super) fn summarize_response(response: &[serde_json::Value]) -> String {
     if response.is_empty() {
         return "(no response)".to_string();
     }

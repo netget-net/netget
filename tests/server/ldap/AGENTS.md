@@ -18,7 +18,7 @@ claimed "the ldapsearch/ldapadd command-line tools" as well while nothing assert
 not maturity evidence. `real_client_test.rs` is what that claim always should have been.
 `ldapadd` is still driven by nothing.
 
-## The five files, and what each is for
+## The six files, and what each is for
 
 This doc described `e2e_test.rs` alone until 22 September 2026 — the files beside it went
 unmentioned, including the two that exist because of real defects. A test nothing points at is a
@@ -29,6 +29,7 @@ test nobody re-reads.
 | `e2e_test.rs` | the maturity evidence: `ldap3` binds, searches and parses entries through its own `SearchEntry::construct` |
 | `llm_failure_test.rs` | what a client gets when the backend fails — `unavailable` (52) |
 | `result_code_range_test.rs` | a narrowing cast that encoded LDAP **success** |
+| `answer_with_test.rs` | the `ldap_bind` hint names the kind of bind (anonymous, a DN with or without a password, SASL), and the bind is offered `ldap_bind_response` alone |
 | `connection_bounds_test.rs` | the read deadlines and the connection cap, driven from the wire |
 | `real_client_test.rs` | the **second** client: OpenLDAP's `ldapsearch`, asserted on the LDIF it rendered |
 

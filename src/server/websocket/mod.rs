@@ -830,8 +830,11 @@ impl WebSocketServer {
         )
         .await;
 
-        let subprotocol = match decision {
-            HandshakeDecision::Accept { subprotocol } => subprotocol,
+        let (subprotocol, greeting) = match decision {
+            HandshakeDecision::Accept {
+                subprotocol,
+                greeting,
+            } => (subprotocol, greeting),
             HandshakeDecision::Reject { status, reason } => {
                 // The tag on the fail-closed refusals is written by `run_handshake_decision`,
                 // which is the only place that knows *why* the upgrade was refused; this line
@@ -946,6 +949,7 @@ impl WebSocketServer {
             peer_addr,
             idle_timeout,
             deflate,
+            greeting,
         )
         .await;
 
@@ -1028,15 +1032,27 @@ impl WebSocketServer {
                             .get("subprotocol")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
+                        let greeting = data
+                            .get("greeting")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         Log::new(Some(status_tx)).info(format!(
-                            "WebSocket upgrade from {} accepted decision=model_answer{}",
+                            "WebSocket upgrade from {} accepted decision=model_answer{}{}",
                             peer_addr,
                             subprotocol
                                 .as_ref()
                                 .map(|s| format!(" (subprotocol {s})"))
-                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                            if greeting.is_some() {
+                                " with a greeting"
+                            } else {
+                                ""
+                            }
                         ));
-                        return HandshakeDecision::Accept { subprotocol };
+                        return HandshakeDecision::Accept {
+                            subprotocol,
+                            greeting,
+                        };
                     }
                     "reject_websocket" => {
                         let status = data
@@ -1093,6 +1109,7 @@ impl WebSocketServer {
         peer_addr: SocketAddr,
         idle_timeout: std::time::Duration,
         deflate: Option<deflate::DeflateParams>,
+        greeting: Option<String>,
     ) {
         let (mut sink, mut stream) = ws_stream.split();
 
@@ -1133,49 +1150,63 @@ impl WebSocketServer {
             let _ = sink.flush().await;
         });
 
-        // `websocket_connection_opened` — the server's chance to speak first.
-        let opened_event = Event::new(
-            &WEBSOCKET_CONNECTION_OPENED_EVENT,
-            serde_json::json!({
-                "path": path,
-                "answer_with": actions::OPENED_ANSWER_WITH,
-                "subprotocol": ctx.subprotocol.clone().unwrap_or_default(),
-                "permessage_deflate": deflate.map(|p| p.to_json()),
-                "client_ip": peer_addr.ip().to_string(),
-                "client_port": peer_addr.port(),
-            }),
-        );
-        ctx.protocol.set_speaking_first(true);
-        let opened_answer = call_llm(
-            &ctx.llm_client,
-            &ctx.app_state,
-            ctx.server_id,
-            Some(ctx.connection_id),
-            &opened_event,
-            ctx.protocol.as_ref(),
-        )
-        .await;
-        ctx.protocol.set_speaking_first(false);
-        match opened_answer {
-            Ok(result) => {
-                for msg in result.messages {
-                    let _ = ctx.status_tx.send(msg);
+        // The greeting the handshake answer carried goes out first, before any frame the
+        // client sends can be answered.
+        if let Some(text) = greeting {
+            Log::new(Some(&ctx.status_tx)).info(format!(
+                "WebSocket {} greeted on open decision=model_answer",
+                ctx.connection_id
+            ));
+            let _ = ctx.out_tx.send(WsOut::Text(text));
+        }
+
+        // `websocket_connection_opened` — a rule's chance to speak first. See
+        // `raise_opened_event` for when it is raised.
+        let handlers = ctx.app_state.get_event_handler_config(ctx.server_id).await;
+        if raise_opened_event(handlers.as_ref()) {
+            let opened_event = Event::new(
+                &WEBSOCKET_CONNECTION_OPENED_EVENT,
+                serde_json::json!({
+                    "path": path,
+                    "answer_with": actions::OPENED_ANSWER_WITH,
+                    "subprotocol": ctx.subprotocol.clone().unwrap_or_default(),
+                    "permessage_deflate": deflate.map(|p| p.to_json()),
+                    "client_ip": peer_addr.ip().to_string(),
+                    "client_port": peer_addr.port(),
+                }),
+            );
+            ctx.protocol.set_speaking_first(true);
+            let opened_answer = call_llm(
+                &ctx.llm_client,
+                &ctx.app_state,
+                ctx.server_id,
+                Some(ctx.connection_id),
+                &opened_event,
+                ctx.protocol.as_ref(),
+            )
+            .await;
+            ctx.protocol.set_speaking_first(false);
+            match opened_answer {
+                Ok(result) => {
+                    for msg in result.messages {
+                        let _ = ctx.status_tx.send(msg);
+                    }
                 }
-            }
-            Err(e) => {
-                // Not fatal: nothing has been promised to the client yet, so the connection
-                // stays up and the first real message gets its own chance.
-                //
-                // `llm_error_notice_only` rather than `fail_closed_*`: the upgrade was already
-                // decided by `websocket_handshake`, this event only offers the server a chance
-                // to speak first, and nothing was refused or closed. Tagging it fail-closed
-                // would put a line in front of every `grep decision=fail_closed` that denied
-                // nothing.
-                Log::new(Some(&ctx.status_tx)).warn(format!(
-                    "WebSocket connection-opened handler failed on {} \
-                     decision=llm_error_notice_only: {}",
-                    ctx.connection_id, e
-                ));
+                Err(e) => {
+                    // Not fatal: nothing has been promised to the client yet, so the
+                    // connection stays up and the first real message gets its own chance.
+                    //
+                    // `llm_error_notice_only` rather than `fail_closed_*`: the upgrade was
+                    // already decided by `websocket_handshake`, this event only offers the
+                    // server a chance to speak first, and nothing was refused or closed.
+                    // Tagging it fail-closed would put a line in front of every
+                    // `grep decision=fail_closed` that denied nothing.
+                    Log::new(Some(&ctx.status_tx)).warn(format!(
+                        "WebSocket connection-opened handler failed on {} \
+                         decision=llm_error_notice_only: {}",
+                        ctx.connection_id, e
+                    ));
+                }
             }
         }
 
@@ -1544,8 +1575,39 @@ impl WebSocketServer {
 
 /// The outcome of the `websocket_handshake` event.
 enum HandshakeDecision {
-    Accept { subprotocol: Option<String> },
-    Reject { status: u16, reason: String },
+    Accept {
+        subprotocol: Option<String>,
+        /// The first message to send once the connection is open, when the answer gave one.
+        greeting: Option<String>,
+    },
+    Reject {
+        status: u16,
+        reason: String,
+    },
+}
+
+/// Whether `websocket_connection_opened` is raised for this connection.
+///
+/// The model decides whether to speak first in its answer to the handshake
+/// (`accept_websocket`'s `greeting`), so when the model answered the handshake and no rule is
+/// configured for the opened event, there is nothing left to ask: asking again is a second
+/// model call per connection, and llama3.1:8b used it to greet clients its instructions never
+/// mentioned. A handshake answered by a rule (static, script, a person) has decided nothing
+/// about speaking first, so the opened event is raised as it always was; and a rule set for
+/// the opened event itself is always honoured.
+fn raise_opened_event(handlers: Option<&crate::scripting::EventHandlerConfig>) -> bool {
+    use crate::scripting::EventHandlerType;
+    let Some(handlers) = handlers else {
+        return false;
+    };
+    let handshake_by_model = matches!(
+        handlers.find_handler(WEBSOCKET_HANDSHAKE_EVENT.id.as_str()),
+        None | Some(EventHandlerType::Llm { .. })
+    );
+    !handshake_by_model
+        || handlers
+            .find_handler(WEBSOCKET_CONNECTION_OPENED_EVENT.id.as_str())
+            .is_some()
 }
 
 /// Read bytes until the blank line that terminates an HTTP request head.

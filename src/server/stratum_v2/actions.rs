@@ -294,7 +294,8 @@ pub static JD_SOLUTION_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "stratum_v2_jd_solution",
         "The job declarator client pushed a solution (PushSolution) that Rust matched to an accepted job, rebuilt into a block and verified against its nbits. The block is logged in full. The protocol has no reply.",
-        json!({"type": ACCEPT}),
+        // The protocol has no reply, so the example is a note to the operator.
+        json!({"type": "notify_operator", "message": "Block found"}),
     )
     .with_parameters(vec![
         p("request_id", "number", "The declaration it solves", true),

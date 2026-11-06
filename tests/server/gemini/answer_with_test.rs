@@ -69,3 +69,32 @@ fn the_page_examples_are_placeholders() {
         );
     }
 }
+
+/// A text line carrying a url is rendered as the paragraph and then its link, rather than as a
+/// paragraph whose url is dropped - the shape llama3.1:8b used for "with a link to /about" in
+/// two runs of five.
+#[test]
+fn a_text_line_with_a_url_keeps_its_link() {
+    use netget::llm::actions::protocol_trait::{ActionResult, Server};
+    use netget::server::gemini::actions::GeminiProtocol;
+    let render = |lines: serde_json::Value| match GeminiProtocol::new()
+        .execute_action(serde_json::json!({"type": "send_gemtext", "lines": lines}))
+    {
+        Ok(ActionResult::Output(bytes)) => String::from_utf8(bytes).unwrap(),
+        other => panic!("expected a page, got {other:?}"),
+    };
+    let page = render(serde_json::json!([
+        {"type": "heading1", "text": "Welcome to the NetGet capsule"},
+        {"type": "text", "text": "A capsule for the NetGet tool", "url": "/about", "alt": "Learn more"}
+    ]));
+    assert!(
+        page.ends_with("\nA capsule for the NetGet tool\n=> /about Learn more\n"),
+        "{page:?}"
+    );
+    // With no label of its own, the text is the link's label.
+    let page = render(serde_json::json!([{"type": "text", "text": "About", "url": "/about"}]));
+    assert!(page.ends_with("\r\n=> /about About\n"), "{page:?}");
+    // A text line with no url is still only text.
+    let page = render(serde_json::json!([{"type": "text", "text": "plain"}]));
+    assert!(page.ends_with("\r\nplain\n"), "{page:?}");
+}

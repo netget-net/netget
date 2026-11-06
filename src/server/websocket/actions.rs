@@ -386,15 +386,29 @@ impl WebSocketProtocol {
             other => other,
         };
 
+        // An empty greeting is no greeting: told to greet nobody, the model fills the field
+        // with "" rather than leaving it out, and websocat reads a zero-length first message
+        // as the end of the stream (see `set_speaking_first`).
+        let greeting = match action.get("greeting") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(s)) => Some(s.clone()).filter(|s| !s.trim().is_empty()),
+            Some(other) => {
+                return Err(anyhow::anyhow!(
+                    "accept_websocket 'greeting' must be a string, got {other}"
+                ))
+            }
+        };
+
         self.log(format!(
-            "WebSocket accept {} subprotocol={:?}",
+            "WebSocket accept {} subprotocol={:?} greeting={}",
             self.conn_label(),
-            subprotocol
+            subprotocol,
+            greeting.is_some()
         ));
 
         Ok(ActionResult::Custom {
             name: "accept_websocket".to_string(),
-            data: json!({ "subprotocol": subprotocol }),
+            data: json!({ "subprotocol": subprotocol, "greeting": greeting }),
         })
     }
 
@@ -986,19 +1000,32 @@ pub fn accept_websocket_action() -> ActionDefinition {
              websocket_handshake event that is answered with neither accept_websocket nor \
              reject_websocket is refused with HTTP 503, because silence must not read as \
              consent. Most clients offer no subprotocol; accept them with no 'subprotocol' \
-             field."
+             field. A server that speaks first says so here, in 'greeting'."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "subprotocol".to_string(),
-            type_hint: "string".to_string(),
-            description:
-                "Only when the event's 'subprotocols' list is not empty: the one of those \
-                 values to agree on, echoed back in Sec-WebSocket-Protocol. Omit it when the \
-                 list is empty. A value the client did not offer is dropped (RFC 6455 \
-                 forbids echoing it) and the connection opens without one."
-                    .to_string(),
-            required: false,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "subprotocol".to_string(),
+                type_hint: "string".to_string(),
+                description:
+                    "Only when the event's 'subprotocols' list is not empty: the one of those \
+                     values to agree on, echoed back in Sec-WebSocket-Protocol. Omit it when \
+                     the list is empty. A value the client did not offer is dropped (RFC 6455 \
+                     forbids echoing it) and the connection opens without one."
+                        .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "greeting".to_string(),
+                type_hint: "string".to_string(),
+                description:
+                    "Only when your instructions say to greet clients or send something as \
+                     soon as they connect: that text, word for word, sent as the first \
+                     message once the connection is open. Omit it otherwise - an echo server \
+                     or a server that only answers sends nothing first."
+                        .to_string(),
+                required: false,
+            },
+        ],
         example: json!({"type": "accept_websocket"}),
         log_template: Some(
             LogTemplate::new()
@@ -1341,24 +1368,33 @@ fn open_connection_actions() -> Vec<ActionDefinition> {
 /// upgrade - which offers no subprotocol - with `accept_websocket` naming the example's "chat"
 /// subprotocol (five runs in five), and in another case with `reject_websocket` 403 "no
 /// subprotocols offered" (five in five). Neither instruction said anything about the
-/// handshake. The request now says whether any subprotocol was offered, that none is normal,
-/// and that a refusal needs a reason from the instructions.
+/// handshake. The request says whether any subprotocol was offered, that none is normal, and
+/// that a refusal needs a reason from the instructions.
+///
+/// It also carries the speak-first decision, through `accept_websocket`'s `greeting`. Asked
+/// separately, on `websocket_connection_opened`, the model greeted every connection whatever
+/// the instructions said - an echo server sent "Hello, Client!" five runs in five - and told
+/// to greet, it answered the handshake itself with `notify_operator` and the greeting three runs
+/// in five, which is the fail-closed 503. With the greeting a field of the accept, the same
+/// prompts replayed (seeds 42-46) greeted with the instruction's words five in five, and the
+/// echo server left it empty three in five.
 pub fn handshake_answer_with(offered: &[String]) -> String {
-    let later = "This step only opens the connection: any message - a greeting, an echo, a \
-                 reply - is sent after it has opened, never here";
+    let greet = "If and only if your instructions say to greet clients or send something as \
+                 soon as they connect, put those exact words in accept_websocket's greeting; \
+                 otherwise no greeting. Echoes and replies are sent later, when messages arrive";
     let refuse = "reject_websocket only when your instructions give a reason to refuse this \
                   client (its path, its Origin, a missing token)";
     if offered.is_empty() {
         format!(
             "this client offered no subprotocol, which is normal for most clients and never a \
-             reason to refuse. Answer exactly {{\"type\": \"accept_websocket\"}} and nothing \
-             else - unless your instructions give a reason to refuse this client (its path, \
-             its Origin, a missing token), then reject_websocket. {later}"
+             reason to refuse. Answer accept_websocket - unless your instructions give a \
+             reason to refuse this client (its path, its Origin, a missing token), then \
+             reject_websocket. {greet}"
         )
     } else {
         format!(
             "accept_websocket, naming at most one of the subprotocols this client offered ({}) \
-             in 'subprotocol', or none. {refuse}. {later}",
+             in 'subprotocol', or none. {refuse}. {greet}",
             offered.join(", ")
         )
     }
@@ -1422,7 +1458,8 @@ pub static WEBSOCKET_HANDSHAKE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             name: "answer_with".to_string(),
             type_hint: "string".to_string(),
             description: "What this handshake takes: accept_websocket (naming one of the \
-                          offered subprotocols only when there are any), or reject_websocket \
+                          offered subprotocols only when there are any, and a greeting only \
+                          when the instructions say to greet on connect), or reject_websocket \
                           for a reason the instructions give."
                 .to_string(),
             required: true,
@@ -1471,8 +1508,10 @@ pub static WEBSOCKET_HANDSHAKE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     )
 });
 
-/// Emitted immediately after the 101 response is written. This is the server's chance to
-/// speak first. See `WebSocketServer::run_connection`.
+/// Emitted immediately after the 101 response is written, when the handshake was answered by
+/// a rule rather than the model, or when a rule is configured for this event. A model that
+/// answered the handshake has already decided whether to speak first (`accept_websocket`'s
+/// `greeting`) and is not asked again. See `WebSocketServer::run_connection`.
 pub static WEBSOCKET_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "websocket_connection_opened",
@@ -1672,7 +1711,8 @@ pub static WEBSOCKET_CLOSE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "websocket_close",
         "The client is closing the connection. The close frame is echoed back automatically; \
          this event is the last chance to record what happened or send a final frame.",
-        json!({"type": "notify_operator", "message": "client disconnected"}),
+        // Recording is append_to_log: notify_operator is not offered beside the send actions.
+        json!({"type": "append_to_log", "output_name": "websocket", "content": "client closed"}),
     )
     .with_parameters(vec![
         Parameter {

@@ -92,8 +92,19 @@ pub trait Protocol: Send + Sync {
     /// - SSH: ["ssh"]
     /// - mDNS: ["mdns", "bonjour", "dns-sd", "zeroconf"]
     ///
-    /// Keywords are matched case-insensitively as substrings.
+    /// Keywords are matched case-insensitively as whole words (never as raw substrings) by the
+    /// free-text parsers, and as the whole input by the exact-name lookups
+    /// (`ServerRegistry::resolve_name`, `ClientRegistry::resolve_name`) the MCP tools use, where
+    /// a keyword is reported as an alias of this protocol.
     fn keywords(&self) -> Vec<&'static str>;
+
+    /// What a caller who named this protocol by `alias` (one of [`Self::keywords`]) needs to
+    /// know, shown under "`alias` is an alias of `<name>`" in the protocol docs. `None` (the
+    /// default) when the alias is just another spelling. `tcp` uses it to say that `mptcp`
+    /// means `startup_params.multipath`.
+    fn alias_note(&self, _alias: &str) -> Option<&'static str> {
+        None
+    }
 
     /// Get protocol metadata with implementation details
     ///

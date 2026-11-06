@@ -170,8 +170,9 @@ impl ComposerModel {
         )
     }
 
-    /// Compose the answer to a parked request. The vocabulary is whatever the
-    /// owning protocol can execute for that event.
+    /// Compose the answer to a parked request. The vocabulary is what the model
+    /// would be offered for that event
+    /// (`crate::state::intercepts::server_answer_actions` / `client_answer_actions`).
     pub fn for_intercept(
         id: u64,
         owner: UiKey,
@@ -357,10 +358,29 @@ impl ComposerModel {
         if let Some(raw) = &self.raw_json {
             let value: serde_json::Value = serde_json::from_str(raw)
                 .map_err(|e| anyhow::anyhow!("action JSON is invalid: {e}"))?;
-            return Ok(match value {
+            let items = match value {
                 serde_json::Value::Array(items) => items,
                 other => vec![other],
-            });
+            };
+            // Raw JSON can name anything; hold it to the same list the picker offers (and
+            // MCP's `answer_intercept` accepts), plus the actions every protocol accepts.
+            for item in &items {
+                let name = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let offered = self.actions.iter().any(|a| a.name == name)
+                    || crate::events::handler::common_action_names().contains(&name);
+                if !offered {
+                    let names: Vec<&str> = self.actions.iter().map(|a| a.name.as_str()).collect();
+                    anyhow::bail!(
+                        "'{name}' is not an answer to this request. Its answers: {}",
+                        if names.is_empty() {
+                            "(none — Answer with nothing or Fail closed)".to_string()
+                        } else {
+                            names.join(", ")
+                        }
+                    );
+                }
+            }
+            return Ok(items);
         }
         Ok(vec![self.build_action()?])
     }
@@ -478,6 +498,17 @@ impl ComposerModel {
 pub fn describe(outcome: &ClientSendOutcome) -> String {
     match outcome {
         ClientSendOutcome::Sent { bytes_sent } => format!("sent {bytes_sent} byte(s)"),
+        ClientSendOutcome::Probed { bytes_sent, report } => format!(
+            "sent {bytes_sent} byte(s); {}",
+            report["summary"]
+                .as_array()
+                .map(|lines| lines
+                    .iter()
+                    .filter_map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "))
+                .unwrap_or_default()
+        ),
         ClientSendOutcome::Executed { detail } => format!("executed ({detail})"),
         ClientSendOutcome::Rejected { error } => format!("rejected: {error}"),
         ClientSendOutcome::Disconnected => "disconnected".to_string(),

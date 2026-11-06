@@ -41,6 +41,8 @@ pub fn decode(frame: &[u8], expected: MessageType) -> Result<Message> {
         length + 2 == frame.len(),
         "DoQ stream must contain exactly one complete DNS message"
     );
+    crate::utils::dns_screen::screen_dns_message(&frame[2..])
+        .map_err(|reason| anyhow::anyhow!("Invalid DoQ DNS message: {reason}"))?;
     let mut decoder = BinDecoder::new(&frame[2..]);
     let message = Message::read(&mut decoder).context("Invalid DoQ DNS message")?;
     ensure!(decoder.is_empty(), "Trailing bytes after DoQ DNS message");

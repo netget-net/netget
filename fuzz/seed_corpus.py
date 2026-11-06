@@ -1469,6 +1469,142 @@ write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
 write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
 write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
 
+
+# --- mysql_stmt_execute: COM_STMT_EXECUTE parameter blocks -----------------
+# Seed layout (see the target): count, flags (bit 0 = previous types follow), long-data
+# mask, [previous types], then the payload after the 0x17 command byte.
+def mysql_exec(count, payload, prev_types=None, long_mask=0):
+    head = bytes([count, 1 if prev_types is not None else 0, long_mask])
+    return head + (bytes(prev_types) if prev_types is not None else b"") + payload
+
+
+def mysql_exec_payload(stmt, nulls, types, values, bound=1):
+    p = struct.pack("<IBI", stmt, 0, 1)
+    if nulls:
+        bitmap = bytearray((len(nulls) + 7) // 8)
+        for i, n in enumerate(nulls):
+            if n:
+                bitmap[i // 8] |= 1 << (i % 8)
+        p += bytes(bitmap) + bytes([bound])
+        if bound:
+            p += bytes(types)
+    return p + values
+
+
+def mysql_lenenc_str(b):
+    if len(b) < 0xFB:
+        return bytes([len(b)]) + b
+    return b"\xfc" + struct.pack("<H", len(b)) + b
+
+
+MY_TYPES = [0x08, 0, 0x08, 0x80, 0x03, 0, 0x01, 0, 0x05, 0, 0x04, 0, 0xFD, 0, 0xF6, 0,
+            0x06, 0, 0x0C, 0, 0x0A, 0, 0x0B, 0, 0xFC, 0]
+MY_VALUES = (struct.pack("<q", 42) + struct.pack("<Q", 2**64 - 1) + struct.pack("<i", -7)
+             + b"\xff" + struct.pack("<d", 2.5) + struct.pack("<f", 0.1)
+             + mysql_lenenc_str("alice ⟩".encode()) + mysql_lenenc_str(b"12.50")
+             + bytes([11]) + struct.pack("<HBBBBBI", 2026, 10, 31, 12, 34, 56, 789)
+             + bytes([4]) + struct.pack("<HBB", 2026, 1, 2)
+             + bytes([12, 1]) + struct.pack("<IBBBI", 1, 2, 3, 4, 5)
+             + mysql_lenenc_str(b"\xff\xfe\x00" * 100))
+write("mysql_stmt_execute", "every_type",
+      mysql_exec(13, mysql_exec_payload(1, [False] * 13, MY_TYPES, MY_VALUES)))
+write("mysql_stmt_execute", "no_params", mysql_exec(0, mysql_exec_payload(2, [], [], b"")))
+write("mysql_stmt_execute", "rebound_types",
+      mysql_exec(2, mysql_exec_payload(3, [False, True], [], struct.pack("<i", 5), bound=0),
+                 prev_types=[0x03, 0, 0xFD, 0]))
+write("mysql_stmt_execute", "long_data",
+      mysql_exec(2, mysql_exec_payload(4, [False, False], [0x03, 0, 0xFC, 0],
+                                       struct.pack("<i", 9)), long_mask=0b10))
+write("mysql_stmt_execute", "many_nulls",
+      mysql_exec(200, mysql_exec_payload(5, [True] * 200, [0x06, 0] * 200, b"")))
+# The shapes that panic opensrv-mysql's ParamParser, and lying lengths.
+write("mysql_stmt_execute", "no_bitmap", mysql_exec(2, struct.pack("<IBI", 1, 0, 1)))
+write("mysql_stmt_execute", "short_types",
+      mysql_exec(2, struct.pack("<IBI", 1, 0, 1) + b"\x00\x01\x08\x00"))
+write("mysql_stmt_execute", "bad_type",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x42, 0], b"\x00" * 4)))
+write("mysql_stmt_execute", "never_bound",
+      mysql_exec(1, mysql_exec_payload(1, [False], [], b"\x00" * 8, bound=0)))
+write("mysql_stmt_execute", "u64_max_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0],
+                                       b"\xfe" + struct.pack("<Q", 2**64 - 1) + b"abc")))
+write("mysql_stmt_execute", "ff_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0], b"\xff\x00")))
+write("mysql_stmt_execute", "bad_temporal_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x0C, 0], b"\x05" + b"\x00" * 5)))
+# --- SNMP: the recursion rasn actually has --------------------------------
+# rasn 0.18 recurses on a *constructed OCTET STRING* (`24 80`), and `community` is one; the
+# `30 80` bomb above nests SEQUENCEs, which the guard refuses for the same reason but which
+# is not the path that overflowed. Indefinite outer SEQUENCE, version 1, then the bomb.
+write("snmp_ber", "octet_string_depth_bomb",
+      b"\x30\x80\x02\x01\x01" + b"\x24\x80" * 30000)
+
+
+# --- DNS: a backwards compression-pointer chain ---------------------------
+def dns_pointer_chain(links):
+    m = bytearray([0x12, 0x34, 0x01, 0x00, 0, 1, 0, 1, 0, 0, 0, 1])
+    m += b"\x00" + struct.pack(">HH", 1, 1)          # root question at offset 12
+    m += b"\x00" + struct.pack(">HHI", 10, 1, 0)      # NULL answer, root owner
+    rdlength_at = len(m)
+    m += b"\x00\x00"
+    start, previous = len(m), 12
+    for _ in range(links):
+        here = len(m)
+        m += struct.pack(">H", 0xC000 | previous)
+        previous = here
+    m[rdlength_at:rdlength_at + 2] = struct.pack(">H", len(m) - start)
+    m += struct.pack(">H", 0xC000 | previous)          # owner name: the chain's far end
+    m += struct.pack(">HHIH", 1, 1, 0, 4) + bytes([127, 0, 0, 1])
+    return bytes(m)
+
+
+# hickory-proto 0.24 recurses once per hop: a debug build dies at 1 702 on a 2 MiB stack.
+# 8 000 links keeps every offset under the 14-bit pointer limit.
+write("dns_message", "pointer_chain_bomb", dns_pointer_chain(8000))
+write("dns_message", "pointer_chain_at_limit", dns_pointer_chain(126))
+
+
+# --- Cassandra: CQL v4 request frames and the headers from_buffer panics on -
+def cql(version, flags, stream, opcode, body):
+    return struct.pack(">BBhBI", version, flags, stream, opcode, len(body)) + body
+
+
+def cql_string(s):
+    return struct.pack(">H", len(s)) + s
+
+
+write("cassandra_envelope", "startup",
+      cql(4, 0, 1, 0x01, struct.pack(">H", 1) + cql_string(b"CQL_VERSION") + cql_string(b"3.0.0")))
+write("cassandra_envelope", "options", cql(4, 0, 0, 0x05, b""))
+write("cassandra_envelope", "query_tracing",
+      cql(4, 0x02, 2, 0x07, struct.pack(">I", 8) + b"SELECT 1" + struct.pack(">HB", 1, 0)))
+write("cassandra_envelope", "response_tracing_no_id", cql(0x84, 0x02, 3, 0x07, b""))
+write("cassandra_envelope", "warning_negative_count", cql(4, 0x08, 4, 0x01, b"\xff\xff"))
+write("cassandra_envelope", "warning_string_past_body",
+      cql(4, 0x08, 5, 0x01, b"\x00\x01\x00\x10xy"))
+write("cassandra_envelope", "body_length_high_bit", struct.pack(">BBhBI", 4, 0, 6, 1, 0xFFFFFFFF))
+
+
+# --- MySQL: what a client sends after the greeting -------------------------
+def mysql_packet(seq, payload):
+    return struct.pack("<I", len(payload))[:3] + bytes([seq]) + payload
+
+
+handshake = (struct.pack("<IIB", 0x0000_8200, 16777216, 0x21) + b"\x00" * 23
+             + b"root\x00" + b"\x00")
+login = mysql_packet(1, handshake)
+write("mysql_session", "login_query_ping",
+      login + mysql_packet(0, b"\x03select 1") + mysql_packet(0, b"\x0e"))
+write("mysql_session", "login_prepare_execute_close",
+      login + mysql_packet(0, b"\x16select ?")
+      + mysql_packet(0, b"\x17" + struct.pack("<IBI", 1, 0, 1))
+      + mysql_packet(0, b"\x19" + struct.pack("<I", 1)) + mysql_packet(0, b"\x01"))
+write("mysql_session", "login_long_data",
+      login + mysql_packet(0, b"\x16select ?")
+      + mysql_packet(0, b"\x18" + struct.pack("<IH", 1, 0) + b"chunk"))
+# Sequence id 255: `set_seq(seq + 1)` overflows. The reader refuses it.
+write("mysql_session", "handshake_sequence_255", mysql_packet(0xFF, handshake))
+write("mysql_session", "command_sequence_255", login + mysql_packet(0xFF, b"\x0e"))
 # --- ctap2_cbor: utils::cbor_depth + serde_cbor, the usb-fido2 CTAP2 parameter decoder ---------
 
 

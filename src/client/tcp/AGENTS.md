@@ -63,8 +63,25 @@ raw bytes, and interpret responses.
 
 **Events:**
 
-- `tcp_connected` - Fired when connection established
-- `tcp_data_received` - Fired when data received from server
+- `tcp_connected` - Fired when connection established. Fields: `remote_addr`, `local_addr`,
+  and `mptcp` when started with `multipath`.
+- `tcp_data_received` - Fired when data received from server. Fields: `data`, `encoding`,
+  `data_length`, and `mptcp` when started with `multipath`.
+
+`get_event_types()` returns the same `TCP_CLIENT_CONNECTED_EVENT` /
+`TCP_CLIENT_DATA_RECEIVED_EVENT` statics the read loop raises. It used to build two fresh
+placeholder events with no fields, so the docs said "(no documented fields)" and showed a note to
+the operator as the example answer; `tests/event_example_actions_test.rs` now checks every
+event's example against what its role offers.
+
+### Multipath TCP
+
+`startup_params: {"multipath": true}` connects over an `IPPROTO_MPTCP` socket
+(`src/utils/mptcp.rs`; Linux only, refused elsewhere with the platform's reason, and refused with
+the kernel's reason when MPTCP is missing or disabled). If the server does not speak MPTCP the
+kernel falls back to plain TCP, so what was negotiated is read off the socket and recorded as
+`mptcp` in the client's `protocol_data` (shown by MCP `client_status` as **Multipath**) and in its
+events. See `src/server/tcp/AGENTS.md` for the detection details.
 
 ### Data Encoding
 

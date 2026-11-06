@@ -34,8 +34,8 @@ fn default_log_level() -> String {
 /// terminal" - only trailing-argument prompts worked non-interactively, despite
 /// `cat prompt.txt | netget` being advertised in --help.
 ///
-/// Reading is lazy as well as once: `--mcp`, `--mcp-http`, `--simple`,
-/// `--client` and `--server` all return before either accessor is called, so
+/// Reading is lazy as well as once: `--mcp`, `--mcp-http`, `--client` and
+/// `--server` all return before either accessor is called, so
 /// stdin is never touched in the modes that need it for their own protocol. An
 /// interactive terminal is left alone entirely.
 ///
@@ -448,6 +448,14 @@ pub struct Args {
     )]
     pub run_for: Option<u64>,
 
+    /// Non-interactive only: write a JSON readiness report here once every instance started.
+    #[clap(
+        long = "ready-file",
+        value_name = "PATH",
+        help = "Non-interactive mode: once every server the run started is listening (and every client is connected), write a JSON report of the bound addresses to PATH — {\"version\":1,\"pid\":…,\"servers\":[{\"id\",\"protocol\",\"host\",\"port\",\"address\"}],\"clients\":[{\"id\",\"protocol\",\"remote_addr\",\"status\"}]}. Written atomically, so the file appearing means it is complete; an existing file at PATH is removed at startup. For test fixtures that start NetGet on port 0."
+    )]
+    pub ready_file: Option<std::path::PathBuf>,
+
     /// Path to mock LLM configuration file (for testing)
     #[clap(
         long = "mock-config-file",
@@ -456,21 +464,6 @@ pub struct Args {
         hide = true  // Hidden from help output - internal testing flag
     )]
     pub mock_config_file: Option<std::path::PathBuf>,
-
-    /// Start a simple protocol (simplified LLM interface for "dumb" models)
-    #[clap(
-        long = "simple",
-        value_name = "PROTOCOL",
-        help = "Start a simple protocol server (e.g., http). Use --simple-list to see available protocols."
-    )]
-    pub simple_protocol: Option<String>,
-
-    /// List available simple protocols
-    #[clap(
-        long = "simple-list",
-        help = "List available simple protocols that can be started with --simple"
-    )]
-    pub simple_list: bool,
 
     /// Connect a protocol client to a remote server (non-interactive)
     #[clap(
@@ -575,7 +568,7 @@ pub struct Args {
 
     /// Connect an agent to a running --mcp-http --llm-agent process. Emits compact
     /// requests as JSON lines on stdout and reads answers as JSON lines on stdin.
-    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "simple_protocol", "load_file", "llm_agent"])]
+    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "load_file", "llm_agent"])]
     pub agent_connect: Option<String>,
 
     /// Run as MCP STDIO server (for Claude Desktop/Code integration)
@@ -864,10 +857,7 @@ impl Args {
     pub fn client_instruction(&self, protocol: &str, remote_addr: &str) -> String {
         let trailing = self.prompt.join(" ").trim().to_string();
         if trailing.is_empty() {
-            format!(
-                "You are a {} client connected to {}. Handle responses appropriately.",
-                protocol, remote_addr
-            )
+            crate::state::client::default_client_instruction(protocol, remote_addr)
         } else {
             trailing
         }
