@@ -60,7 +60,7 @@ struct ConsumerHandle {
     connection_id: u32,
     channel: u16,
     queue: String,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+    tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     frame_max: u32,
     next_delivery_tag: Arc<AtomicU64>,
 }
@@ -87,7 +87,7 @@ pub fn register_consumer(
     consumer_tag: &str,
     channel: u16,
     queue: &str,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+    tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     frame_max: u32,
 ) -> bool {
     if let Ok(mut map) = AMQP_CONSUMERS.lock() {
@@ -232,7 +232,7 @@ fn lookup_consumer(server_id: u32, consumer_tag: &str) -> Option<ConsumerHandle>
 pub struct AmqpProtocol {
     server_id: Option<ServerId>,
     connection_id: Option<ConnectionId>,
-    out_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    out_tx: Option<crate::utils::outbox::OutboxSender<Vec<u8>>>,
     status_tx: Option<mpsc::UnboundedSender<String>>,
     /// Channel the method currently being answered arrived on.
     channel: AtomicU32,
@@ -270,7 +270,7 @@ impl AmqpProtocol {
     pub fn for_connection(
         server_id: ServerId,
         connection_id: ConnectionId,
-        out_tx: mpsc::UnboundedSender<Vec<u8>>,
+        out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
         status_tx: mpsc::UnboundedSender<String>,
         frame_max: u32,
     ) -> Self {

@@ -426,7 +426,7 @@ async fn serve(
 /// `send_to_peer`) as WebSocket frames: every `write` is one relay message, a shutdown is a
 /// close frame. `peer_support` writes each rendered frame with one `write_all`.
 struct FrameWriter {
-    tx: mpsc::UnboundedSender<Outbound>,
+    tx: crate::utils::outbox::OutboxSender<Outbound>,
 }
 
 impl tokio::io::AsyncWrite for FrameWriter {
@@ -509,7 +509,13 @@ async fn session(
         WebSocketStream::from_partially_read(socket, leftover, Role::Server, Some(ws_config)).await;
     let (sink, stream) = ws.split();
 
-    let (out_tx, out_rx) = mpsc::unbounded_channel::<Outbound>();
+    // Bounded: an accepted EVENT is broadcast to every matching subscription, so a subscriber
+    // that stops reading is cut off rather than queued for (`utils::outbox`).
+    let (out_tx, out_rx) = crate::utils::outbox::channel(
+        format!("Nostr connection {connection_id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+        Outbound::weight,
+    );
     let conn = Arc::new(ConnShared::new(connection_id.as_u32(), out_tx.clone()));
     server.relay.add(conn.clone());
     let protocol = Arc::new(NostrProtocol::for_connection(
@@ -620,7 +626,7 @@ impl Session {
     async fn write_frames(
         &self,
         mut sink: SplitSink<WebSocketStream<TcpStream>, Message>,
-        mut out_rx: mpsc::UnboundedReceiver<Outbound>,
+        mut out_rx: crate::utils::outbox::OutboxReceiver<Outbound>,
     ) {
         while let Some(out) = out_rx.recv().await {
             let (message, closing) = match out {

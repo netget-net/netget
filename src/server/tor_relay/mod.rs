@@ -414,8 +414,13 @@ async fn run_tor_relay_connection(
         status_tx.clone(),
     );
 
-    // Create channel for outgoing cells
-    let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
+    // Outgoing cells. Bounded: a stream forwarder relays whatever the exit target sends, so a
+    // client that stops reading is cut off rather than queued for (`utils::outbox`). Sends
+    // never wait, so the session loop, which both produces and drains cells, cannot deadlock.
+    let (outgoing_tx, outgoing_rx) = crate::utils::outbox::bytes_channel(
+        format!("Tor relay connection {connection_id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+    );
 
     let mut session = TorRelaySession {
         reader,
@@ -454,8 +459,8 @@ struct TorRelaySession {
     protocol: Arc<TorRelayProtocol>,
     circuit_manager: Arc<CircuitManager>,
     /// Channel for sending outgoing cells (from forwarder tasks)
-    outgoing_tx: mpsc::UnboundedSender<Vec<u8>>,
-    outgoing_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    outgoing_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
+    outgoing_rx: crate::utils::outbox::OutboxReceiver<Vec<u8>>,
 }
 
 impl TorRelaySession {
@@ -1573,7 +1578,7 @@ impl TorRelaySession {
         &self,
         circuit_id: CircuitId,
         stream_id: StreamId,
-        outgoing_tx: mpsc::UnboundedSender<Vec<u8>>,
+        outgoing_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     ) -> Result<()> {
         // Read half only. Holding a lock over the whole TcpStream here parked the
         // client-to-target write path forever, because this task waits in `read()`.

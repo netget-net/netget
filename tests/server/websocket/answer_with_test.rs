@@ -16,7 +16,11 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 fn executor(offered: &[&str]) -> WebSocketProtocol {
-    let (out_tx, _out_rx) = mpsc::unbounded_channel();
+    let (out_tx, _out_rx) = netget::utils::outbox::channel(
+        "test",
+        netget::utils::outbox::OutboxLimits::DEFAULT,
+        netget::server::websocket::actions::WsOut::weight,
+    );
     let (status_tx, _status_rx) = mpsc::unbounded_channel();
     WebSocketProtocol::for_connection(
         ServerId::new(1),
@@ -117,7 +121,11 @@ fn the_opened_and_message_hints_leave_the_words_to_the_instructions() {
 /// eval's model sent after one was never shown. A reply to the client is not affected.
 #[test]
 fn an_empty_greeting_is_dropped_but_an_empty_reply_is_sent() {
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel();
+    let (out_tx, mut out_rx) = netget::utils::outbox::channel(
+        "test",
+        netget::utils::outbox::OutboxLimits::DEFAULT,
+        netget::server::websocket::actions::WsOut::weight,
+    );
     let (status_tx, _status_rx) = mpsc::unbounded_channel();
     let protocol = WebSocketProtocol::for_connection(
         ServerId::new(1),

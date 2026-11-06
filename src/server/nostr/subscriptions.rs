@@ -24,6 +24,18 @@ pub enum Outbound {
     Shutdown,
 }
 
+impl Outbound {
+    /// Payload size, for the connection's outbound bound (`utils::outbox`).
+    pub fn weight(&self) -> usize {
+        match self {
+            Outbound::Text(t) => t.len(),
+            Outbound::Close { reason, .. } => reason.len(),
+            Outbound::Ping(p) => p.len(),
+            Outbound::Shutdown => 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Subscription {
     filters: Vec<Filter>,
@@ -42,12 +54,12 @@ struct Subscriptions {
 #[derive(Debug)]
 pub struct ConnShared {
     pub connection_id: u32,
-    out_tx: mpsc::UnboundedSender<Outbound>,
+    out_tx: crate::utils::outbox::OutboxSender<Outbound>,
     subs: Mutex<Subscriptions>,
 }
 
 impl ConnShared {
-    pub fn new(connection_id: u32, out_tx: mpsc::UnboundedSender<Outbound>) -> Self {
+    pub fn new(connection_id: u32, out_tx: crate::utils::outbox::OutboxSender<Outbound>) -> Self {
         Self {
             connection_id,
             out_tx,
@@ -66,7 +78,7 @@ impl ConnShared {
         let _ = self.out_tx.send(Outbound::Text(message));
     }
 
-    pub fn out_tx(&self) -> &mpsc::UnboundedSender<Outbound> {
+    pub fn out_tx(&self) -> &crate::utils::outbox::OutboxSender<Outbound> {
         &self.out_tx
     }
 

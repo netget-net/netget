@@ -316,7 +316,7 @@ impl Session {
     /// On a v5 connection, say why it is closing before it closes (§4.13.2: a server that
     /// detects a malformed packet or a protocol error SHOULD send DISCONNECT with the reason).
     /// 3.1.1 has no server DISCONNECT, so there the close itself is the whole message.
-    fn refuse(&self, out_tx: &mpsc::UnboundedSender<Vec<u8>>, reason: u8) {
+    fn refuse(&self, out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>, reason: u8) {
         if self.v5 {
             let _ = out_tx.send(build_disconnect_v5(reason, &v5::PropertyWriter::new()));
         }
@@ -351,7 +351,10 @@ async fn handle_mqtt_connection(
     // All writes for this connection funnel through one channel so that packets
     // produced by the read loop and packets produced by an action (possibly for a
     // different connection) can never interleave mid-packet.
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = crate::utils::outbox::bytes_channel(
+        format!("MQTT connection {connection_id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+    );
     let writer_status_tx = status_tx.clone();
     let writer_write_half = write_half.clone();
     let writer_state = app_state.clone();
@@ -654,7 +657,7 @@ async fn handle_mqtt_connection(
 #[allow(clippy::too_many_arguments)]
 async fn finish_connection(
     protocol: Arc<MqttProtocol>,
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     writer_handle: tokio::task::JoinHandle<()>,
     app_state: &Arc<AppState>,
     server_id: crate::state::ServerId,
@@ -711,7 +714,7 @@ async fn dispatch_packet(
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
     protocol: Arc<MqttProtocol>,
-    out_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>,
 ) -> bool {
     match packet.packet_type {
         PKT_CONNECT => {
@@ -1436,7 +1439,7 @@ async fn publish_batch<R: tokio::io::AsyncRead + Unpin>(
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
     protocol: &MqttProtocol,
-    out_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>,
 ) -> bool {
     let mut events = Vec::new();
     match publish_event(&first, session, server_id, status_tx) {

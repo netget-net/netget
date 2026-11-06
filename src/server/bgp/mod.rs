@@ -357,7 +357,7 @@ struct BgpSession {
     /// Negotiated hold time: min(ours, theirs). Zero disables both timers.
     hold_time: u16,
 
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     /// `peer_asn4`, mirrored for the peer command task so an injected UPDATE is encoded at the
     /// width this session negotiated.
     peer_asn4_shared: Arc<AtomicBool>,
@@ -392,7 +392,10 @@ async fn run_session(
     // Never clone a TcpStream: split it, give the write half to one task, and let everything
     // that needs to send push bytes through a channel.
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = crate::utils::outbox::bytes_channel(
+        format!("BGP session {connection_id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+    );
 
     // Every byte that reaches the wire passes through here, so this is the one place the
     // outbound counters (and `last_activity`) are kept — keepalives, NOTIFICATIONs and injected
@@ -1185,7 +1188,7 @@ impl SendOutcome {
 #[allow(clippy::too_many_arguments)]
 async fn spawn_timers(
     hold_time: u16,
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     last_received: Arc<AtomicU64>,
     started: crate::utils::clock::Instant,
     shutdown: Arc<Shutdown>,
@@ -1312,7 +1315,7 @@ async fn spawn_peer_command_task(
     app_state: Arc<AppState>,
     server_id: crate::state::ServerId,
     connection_id: crate::server::connection::ConnectionId,
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     peer_asn4: Arc<AtomicBool>,
     shutdown: Arc<Shutdown>,
     status_tx: mpsc::UnboundedSender<String>,
@@ -1388,13 +1391,13 @@ async fn execute_injected_action(
     protocol: &BgpProtocol,
     app_state: &AppState,
     server_id: crate::state::ServerId,
-    out_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>,
     peer_asn4: bool,
     shutdown: &Arc<Shutdown>,
 ) -> Result<crate::state::client_handles::ClientSendOutcome> {
     use crate::state::client_handles::ClientSendOutcome;
 
-    let cease = |out_tx: &mpsc::UnboundedSender<Vec<u8>>| -> Result<()> {
+    let cease = |out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>| -> Result<()> {
         let bytes =
             wire::encode_notification(wire::ERR_CEASE, wire::SUB_CEASE_ADMIN_SHUTDOWN, &[])?;
         out_tx
