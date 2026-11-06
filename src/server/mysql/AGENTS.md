@@ -243,7 +243,7 @@ counters live and refresh `last_activity`. Proven with zero LLM calls by
 ## Prepared-statement parameters
 
 `on_execute` is handed an `opensrv_mysql::ParamParser` and **never iterates it**.
-Its iterator, `Params::next` in `opensrv-mysql-0.7.0/src/params.rs`, trusts every
+Its iterator, `Params::next` in the published opensrv-mysql 0.7.0 crate's `params.rs`, trusts every
 length the peer sent and panics the connection task on five shapes:
 
 | line | panic | the peer sends |
