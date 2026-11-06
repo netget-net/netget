@@ -139,11 +139,11 @@ impl Protocol for CapnpRpcClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The server's hand-written Cap'n Proto encoding and RPC messages: Bootstrap, pipelined Calls on the bootstrap capability matched by question id, Return, Finish")
             .llm_control("Which methods to call with which parameters, and what to do with each result")
-            .e2e_testing("tests/client/capnp_rpc: NetGet's own server; pycapnp (the C++ Cap'n Proto runtime) and capnproto.org/go/capnp v3 as independent servers")
+            .e2e_testing("tests/client/capnp_rpc/real_server_test.rs against two independent Cap'n Proto servers, pycapnp (the C++ runtime) and capnproto.org/go/capnp v3, both serving directory.capnp: the connect handler's store is echoed back by each server exactly as it decoded it; calls cover a superclass method, results with a union, group and defaults, and exceptions. Fails rather than skips without the peers from tests/server/capnp_rpc/install_peers.py")
             .notes("Only the bootstrap capability is called; capabilities in results are not followed. The client exports nothing, so a call from the server is answered with an exception. At most 64 calls may await answers; a handler chain stops after 8 follow-ups. Same message bounds as the server.")
             .max_inbound_bytes(crate::server::capnp_rpc::layout::MAX_MESSAGE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
