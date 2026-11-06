@@ -165,6 +165,12 @@ guard does not panic, which is the easy half.
 | `packstream_message` | `bolt::packstream::decode` (recursive, `MAX_PACKSTREAM_DEPTH`, declared lengths checked before allocation) and `Dechunker` (1 MiB cap), then `parse_request` and the event's JSON conversion; `encode ∘ decode` must be idempotent | HELLO, before any login |
 | `smb2_request` | `smb::wire::next_in_chain` over a whole compound frame, then every `parse_*` request parser on every request in it (not only its own command's); every reply header must round-trip MessageId/TreeId/SessionId | first frame of a TCP connection; NEGOTIATE and SESSION_SETUP are pre-auth |
 | `ntlmssp_token` | `smb::auth` — the NTLMSSP scan through a SPNEGO wrapper, `parse_authenticate`, and the CHALLENGE / `negTokenResp` the server builds back (its DER lengths must be exact) | SESSION_SETUP security buffer, pre-auth |
+| `mqtt_packet` | `mqtt::take_packet` (remaining-length varint, `DEFAULT_MAX_PACKET_SIZE` checked before allocation), then the parser `dispatch_packet` calls for each type — `parse_connect`/`parse_publish`/`parse_subscribe`/`parse_unsubscribe` and v5 `read_properties`, in v5 mode once a level-5 CONNECT parses | first bytes of a TCP connection |
+| `kafka_request` | `kafka-protocol`'s request header and body decoders at the version the request names (ApiVersions, Metadata, Fetch, OffsetCommit, Produce; decode → encode → decode must agree), and for Produce `kafka::decode_record_batches`, NetGet's bounded inflater — each batch a second time with its CRC-32C fixed so the search gets past the checksum | any request; Kafka has no authentication here |
+| `etcd_request` | `etcd::unary_message` (the 5-byte gRPC message header) → the prost decoder for the KV method — `TxnRequest` is recursive through `RequestOp.request_txn`; decode → encode → decode must agree | the first RPC of an h2c connection |
+| `grpc_message` | `grpc::decode_grpc_frame` → `prost_reflect::DynamicMessage::decode` against a recursive schema (message, repeated, map and oneof self-references, every scalar, bytes) → `value_codec::dynamic_message_to_json` (`MAX_VALUE_DEPTH`) and `stream_codec::to_json` | the first RPC of an h2c connection |
+| `pgwire_frontend` | `pgwire::messages::PgWireFrontendMessage::decode` from the patched `vendor/pgwire` (this crate patches it in, as the root manifest does), through the SSL → Startup → query states pgwire's server codec walks; re-encoding must be a fixed point | SSLRequest and StartupMessage, pre-auth |
+| `websocket_session` | the whole inbound stack: `parse_request_head`, `validate_upgrade`, `deflate::negotiate`, then the leftover bytes through `deflate::DeflateStream` (NetGet's frame parser, reassembly and bounded inflater) under tungstenite's server-role decoder via `WebSocketStream::from_partially_read`, on an in-memory socket | the upgrade request and every frame after it |
 
 Every target is deterministic: no I/O, no sockets, no clock, no LLM. Several assert
 determinism explicitly by decoding twice and comparing, because a decoder that disagrees
@@ -179,9 +185,9 @@ committed precisely so the binary blobs have a provenance. Edit the script, not 
 python3 fuzz/seed_corpus.py .      # from the repository root
 ```
 
-Eleven targets carry **depth bombs** — `bencode_structure`, `snmp_ber`, `ctap2_cbor`,
+Thirteen targets carry **depth bombs** — `bencode_structure`, `snmp_ber`, `ctap2_cbor`,
 `amqp_field_table`, `resp_frame`, `bson_document`, `ldap_filter`, `svn_tuple`,
-`xmlrpc_value`, `packstream_message`, `ntlmssp_token` — and they are the reason this harness can find anything. Coverage-guided fuzzing gives **no gradient toward nesting depth**: a value
+`xmlrpc_value`, `packstream_message`, `ntlmssp_token`, `etcd_request`, `grpc_message` — and they are the reason this harness can find anything. Coverage-guided fuzzing gives **no gradient toward nesting depth**: a value
 nested 10,000 deep runs exactly the same basic blocks as one nested 3 deep, so libFuzzer
 scores it as uninteresting and discards it. It will not grow one by itself.
 
@@ -220,6 +226,24 @@ NTLMSSP token) reaches no recursion today — the server scans SPNEGO for the NT
 instead of walking the DER — and is there for the day a DER walker replaces the scan.
 `smb2_request` is flat too: a compound chain is linear, so its long-axis seed is a chain of
 14 000 linked ECHOs.
+
+The two protobuf targets' bombs are aimed at a guard NetGet does not own. `etcd_request`
+(`txn_depth_bomb`: 20 000 levels of `TxnRequest` → `RequestOp.request_txn`) and `grpc_message`
+(`nested_child_bomb`, `nested_map_bomb`, and `unknown_group_bomb`: 20 000 nested groups in an
+unknown field) are refused today by prost's recursion limit of 100. That limit disappears for
+every prost decoder in the process if any crate in the build graph enables prost's
+`no-recursion-limit` feature — Cargo unifies features — and these seeds are what turns that
+into a crash here rather than in production. `grpc_message` also seeds 90 levels, inside prost's
+limit, for `value_codec`'s own `MAX_VALUE_DEPTH` (32) to refuse.
+
+`mqtt_packet`, `kafka_request`, `pgwire_frontend` and `websocket_session` are flat, and seed the
+lying and the long axes instead: remaining lengths, array counts, byte lengths and frame lengths
+at their maxima or past their message; a 30 000-filter SUBSCRIBE, a 60 000-parameter Bind and a
+20 000-fragment message. Two of them carry **decompression bombs**, the flat formats' depth bomb:
+`kafka_request`'s `produce_gzip_inflation_bomb` (a 64 KiB gzip batch of 64 MiB of zeros, which
+`kafka-protocol`'s own decompressor inflated in full — it is why `MAX_INFLATED_PRODUCE_BYTES`
+exists) and `websocket_session`'s `deflate_inflation_bomb` (64 MiB in one permessage-deflate
+frame, which `Codec::inflate` stops at the 1 MiB message limit).
 
 ## Proving the harness works
 
@@ -284,8 +308,9 @@ to be off on macOS. A harness can be green for the wrong reason in more than one
   hand-rolled offset arithmetic on pre-auth CREATE and SESSION_SETUP bodies.
 - **`torrent_dht::parse_krpc_message`** is private, but its dangerous half is
   `check_bencode_structure`, which `bencode_structure` already drives directly.
-- **MySQL and PostgreSQL** delegate framing to `opensrv-mysql` and `pgwire`; there is no
-  NetGet byte parser to target.
+- **MySQL and PostgreSQL** delegate framing to `opensrv-mysql` and `pgwire`, so their
+  targets drive those decoders: `mysql_session` behind NetGet's `PacketLimitReader`, and
+  `pgwire_frontend` against the patched `vendor/pgwire` NetGet builds.
 
 ## Not a merge gate
 

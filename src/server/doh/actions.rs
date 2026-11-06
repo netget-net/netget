@@ -155,7 +155,7 @@ impl Protocol for DohProtocol {
                  UNPROVEN: certificate validation of any kind. The certificate is self-signed, \
                  and kdig is run with a path-only authority so it keeps the opportunistic \
                  profile -- naming an authority makes it verify, and an IP literal there is \
-                 rejected as SNI by rustls outright.",
+                 rejected as SNI by rustls outright. PCAP ORACLE: kdig runs with SSLKEYLOGFILE through a recording relay; tshark decrypts both sessions and must dissect HTTP/2 and DNS in the server's direction (the GET request's base64url query is not dissected; the reply is). FUZZ: fuzz/fuzz_targets/dns_message.rs (hickory-proto's Message::from_vec).",
             )
             .notes("GET/POST, HTTP/2 only (no HTTP/1.1), self-signed certs, any request path accepted. Advertises ALPN h2 - without it a negotiating client falls back to HTTP/1.1, which this server does not speak")
             .max_inbound_bytes(crate::server::doh::MAX_DOH_BODY_BYTES as usize)

@@ -56,7 +56,7 @@ use tracing::{debug, error, info, trace, warn};
 /// The MQTT fixed header allows a 268 435 455 byte remaining length. Trusting it
 /// would let one client ask for a 256 MiB allocation per packet, so the value is
 /// capped and the connection is dropped instead.
-const DEFAULT_MAX_PACKET_SIZE: usize = 256 * 1024;
+pub const DEFAULT_MAX_PACKET_SIZE: usize = 256 * 1024;
 
 /// Hard ceiling on the configurable `max_packet_size` startup parameter.
 pub const MAX_PACKET_SIZE_LIMIT: usize = 16 * 1024 * 1024;
@@ -292,10 +292,10 @@ impl MqttServer {
 
 /// A parsed MQTT control packet: fixed-header type, its 4 flag bits, and the
 /// variable-header + payload bytes.
-struct RawPacket {
-    packet_type: u8,
-    flags: u8,
-    body: Vec<u8>,
+pub struct RawPacket {
+    pub packet_type: u8,
+    pub flags: u8,
+    pub body: Vec<u8>,
 }
 
 /// What one connection knows about its own session.
@@ -1715,8 +1715,9 @@ impl From<v5::PropertyError> for PacketError {
 ///
 /// Returns `Ok(None)` when more bytes are needed. Every index is bounds-checked;
 /// no input can panic this function, and the declared remaining length is validated
-/// against `max_packet_size` before any allocation.
-fn take_packet(
+/// against `max_packet_size` before any allocation. `pub` for
+/// `fuzz/fuzz_targets/mqtt_packet.rs`, which drives it ahead of the packet parsers.
+pub fn take_packet(
     buffer: &mut Vec<u8>,
     max_packet_size: usize,
 ) -> std::result::Result<Option<RawPacket>, PacketError> {

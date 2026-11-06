@@ -810,7 +810,7 @@ impl Protocol for WebSocketProtocol {
                  deflate_real_client_test.rs): a relay shows every frame NetGet sent had RSV1 \
                  set and shrank, ws negotiates a 10-bit window with no context takeover, and a \
                  compressed frame that inflates past max_message_size is refused while \
-                 inflating (1009). Untested: wss:// and any browser.",
+                 inflating (1009). Untested: wss:// and any browser. PCAP ORACLE: deflate_real_client_test.rs runs Python websockets through a recording relay and tshark's http/websocket dissectors read the upgrade and every compressed frame. FUZZ: fuzz/fuzz_targets/websocket_session.rs (head parser, deflate::negotiate, DeflateStream under tungstenite; a 64 MiB inflation bomb).",
             )
             .notes(
                 "Validated against websocat 1.14.1 and curl 8.20.0 as real independent \

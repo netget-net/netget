@@ -1,0 +1,11 @@
+GET /ws HTTP/1.1
+Host: localhost
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=8; client_max_window_bits=16
+Sec-WebSocket-Extensions: x-webkit-deflate-frame, permessage-deflate; server_no_context_takeover; client_max_window_bits=9
+Sec-WebSocket-Extensions: permessage-deflate; unknown_param
+
+¡Ñ7˙!=ùT$=

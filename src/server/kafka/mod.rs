@@ -134,6 +134,104 @@ const MIN_REQUEST_BYTES: i32 = 8;
 /// size is an allocation primitive for any unauthenticated peer.
 pub const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 
+/// The most one Produce request's compressed record batches may inflate to, all batches
+/// together.
+///
+/// `kafka-protocol`'s own gzip, zstd and lz4 decompressors inflate to whatever the stream
+/// says, so a 1 MiB gzip batch of zeros became 1 GiB in this process, and a request at
+/// [`MAX_REQUEST_BYTES`] could ask for ~100 GiB. Sixteen times Kafka's default
+/// `message.max.bytes` (1 MiB, which bounds a *compressed* batch) is far above what a real
+/// producer's batch inflates to, and the decoded records of 16 MiB stay well under a gigabyte
+/// even at Kafka's 7-byte minimum record.
+pub const MAX_INFLATED_PRODUCE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Why a Produce partition's record batches could not be decoded.
+#[derive(Debug)]
+pub enum BatchError {
+    /// The compressed batches inflate past [`MAX_INFLATED_PRODUCE_BYTES`]: MESSAGE_TOO_LARGE.
+    TooLarge,
+    /// Anything else the decoder refused: CORRUPT_MESSAGE.
+    Corrupt(anyhow::Error),
+}
+
+/// Marker error the bounded decompressor raises, so [`decode_record_batches`] can tell an
+/// inflation past the budget from a corrupt batch.
+#[derive(Debug)]
+struct InflationLimit;
+
+impl std::fmt::Display for InflationLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "record batch inflates past {MAX_INFLATED_PRODUCE_BYTES} bytes"
+        )
+    }
+}
+
+impl std::error::Error for InflationLimit {}
+
+/// Inflate one batch's records, reading at most `left + 1` bytes of output.
+fn inflate_bounded(
+    input: &mut Bytes,
+    compression: Compression,
+    left: &std::cell::Cell<usize>,
+) -> Result<std::io::Cursor<Bytes>> {
+    use std::io::Read;
+    let input = input.split_to(input.len());
+    let budget = left.get();
+    let out = match compression {
+        Compression::None => input,
+        Compression::Snappy => {
+            let n = snap::raw::decompress_len(&input)?;
+            if n > budget {
+                return Err(InflationLimit.into());
+            }
+            Bytes::from(snap::raw::Decoder::new().decompress_vec(&input)?)
+        }
+        Compression::Gzip | Compression::Lz4 | Compression::Zstd => {
+            let reader: Box<dyn Read + '_> = match compression {
+                Compression::Gzip => Box::new(flate2::read::GzDecoder::new(&input[..])),
+                Compression::Lz4 => Box::new(lz4::Decoder::new(&input[..])?),
+                _ => Box::new(zstd::stream::read::Decoder::new(&input[..])?),
+            };
+            let mut out = Vec::new();
+            reader.take(budget as u64 + 1).read_to_end(&mut out)?;
+            if out.len() > budget {
+                return Err(InflationLimit.into());
+            }
+            Bytes::from(out)
+        }
+    };
+    if compression != Compression::None {
+        left.set(budget - out.len());
+    }
+    Ok(std::io::Cursor::new(out))
+}
+
+/// Decode a Produce partition's record batches as this broker does, charging what compressed
+/// batches inflate to against `budget` (see [`MAX_INFLATED_PRODUCE_BYTES`]).
+///
+/// `pub` for `fuzz/fuzz_targets/kafka_request.rs` and the decompression-bomb test.
+pub fn decode_record_batches(
+    raw: &[u8],
+    budget: &mut usize,
+) -> std::result::Result<Vec<Record>, BatchError> {
+    let left = std::cell::Cell::new(*budget);
+    let mut rc = std::io::Cursor::new(Bytes::copy_from_slice(raw));
+    let result = RecordBatchDecoder::decode_with_custom_compression(
+        &mut rc,
+        Some(|b: &mut Bytes, c: Compression| inflate_bounded(b, c, &left)),
+    );
+    *budget = left.get();
+    result.map_err(|e| {
+        if e.downcast_ref::<InflationLimit>().is_some() {
+            BatchError::TooLarge
+        } else {
+            BatchError::Corrupt(e)
+        }
+    })
+}
+
 /// Cap on how much of a request is hex-dumped at TRACE level.
 const MAX_TRACE_HEX_BYTES: usize = 4096;
 
@@ -162,6 +260,7 @@ const MAX_EVENT_VALUE_BYTES: usize = 1024;
 const ERR_UNKNOWN_SERVER_ERROR: i16 = -1;
 const ERR_NONE: i16 = 0;
 const ERR_CORRUPT_MESSAGE: i16 = 2;
+const ERR_MESSAGE_TOO_LARGE: i16 = 10;
 const ERR_UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// Retriable in every Kafka client. Used when the *backend* is saturated rather than
 /// when anything about the request was wrong, so the client backs off and tries again
@@ -1269,6 +1368,7 @@ impl KafkaServer {
 
         let mut topic_responses = Vec::new();
         let mut units = 0usize;
+        let mut inflation_budget = MAX_INFLATED_PRODUCE_BYTES;
 
         for topic_data in &request.topic_data {
             let topic_name = topic_data.name.to_string();
@@ -1312,33 +1412,38 @@ impl KafkaServer {
                 // success, which told the producer its data was durable when it had been
                 // silently dropped.
                 let records = match &partition_data.records {
-                    Some(raw) => {
-                        let owned = Bytes::copy_from_slice(raw.as_ref());
-                        let mut rc = std::io::Cursor::new(owned);
-                        match RecordBatchDecoder::decode_with_custom_compression::<
-                            _,
-                            fn(&mut Bytes, Compression) -> Result<std::io::Cursor<Bytes>>,
-                        >(
-                            &mut rc,
-                            None::<fn(&mut Bytes, Compression) -> Result<std::io::Cursor<Bytes>>>,
-                        ) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                Log::new(Some(status_tx)).warn(format!(
+                    Some(raw) => match decode_record_batches(raw.as_ref(), &mut inflation_budget) {
+                        Ok(r) => r,
+                        Err(BatchError::TooLarge) => {
+                            Log::new(Some(status_tx)).warn(format!(
+                                    "Kafka produce to '{}' partition {}: record batches inflate past \
+                                     the request's {}-byte budget decision=refused_inflation_bound; \
+                                     replying MESSAGE_TOO_LARGE",
+                                    topic_name, partition_idx, MAX_INFLATED_PRODUCE_BYTES
+                                ));
+                            partition_responses.push(
+                                PartitionProduceResponse::default()
+                                    .with_index(partition_idx)
+                                    .with_error_code(ERR_MESSAGE_TOO_LARGE)
+                                    .with_base_offset(-1),
+                            );
+                            continue;
+                        }
+                        Err(BatchError::Corrupt(e)) => {
+                            Log::new(Some(status_tx)).warn(format!(
                                     "Kafka produce to '{}' partition {}: unparseable record batch ({}); \
                                      replying CORRUPT_MESSAGE",
                                     topic_name, partition_idx, e
                                 ));
-                                partition_responses.push(
-                                    PartitionProduceResponse::default()
-                                        .with_index(partition_idx)
-                                        .with_error_code(ERR_CORRUPT_MESSAGE)
-                                        .with_base_offset(-1),
-                                );
-                                continue;
-                            }
+                            partition_responses.push(
+                                PartitionProduceResponse::default()
+                                    .with_index(partition_idx)
+                                    .with_error_code(ERR_CORRUPT_MESSAGE)
+                                    .with_base_offset(-1),
+                            );
+                            continue;
                         }
-                    }
+                    },
                     None => Vec::new(),
                 };
 
