@@ -186,3 +186,15 @@ Mutation-checked: sending no properties from `mqtt_publish` fails four of the si
 Note on running as root: `client/mqtt::keepalive_test` points Mosquitto's `log_dest file` at a
 root-owned temp dir; a root-run Mosquitto drops to the `mosquitto` user and cannot write it, so
 that test fails there and passes on a CI runner. The v5 tests log to stderr and are unaffected.
+
+## Stable conditions 2 and 3: the pcap oracle and the fuzz target
+
+**Condition 2** was already met: `v5_wire_test.rs` and `llm_failure_test.rs` run the pcap
+oracle over hand-built client packets and the broker's exact replies. Those are not a recorded
+Mosquitto or Paho session; the bytes of the real-client tests are not captured.
+
+**Condition 3.** `fuzz/fuzz_targets/mqtt_packet.rs` drives `mqtt::take_packet` and every
+parser `dispatch_packet` calls (CONNECT, PUBLISH, SUBSCRIBE, UNSUBSCRIBE, v5 DISCONNECT
+properties), in v5 mode once a level-5 CONNECT parses. MQTT does not nest; the corpus carries
+remaining lengths at and past the varint's maximum, property-length lies and a 30 000-filter
+SUBSCRIBE. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 16 251 executions, no crash.
