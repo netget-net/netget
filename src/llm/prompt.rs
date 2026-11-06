@@ -459,10 +459,6 @@ Check the action definition in "Available Actions" for required parameters and p
             &state.get_scripting_env().await,
         )
         .is_some();
-        // Offered only once enabled (see events::handler::open_actions_enabled).
-        let open_actions_enabled = filtered_actions
-            .iter()
-            .any(|a| a.name == "open_server" || a.name == "open_client");
         // The memory section explains connection memory only where it is offered.
         let connection_memory_actions = filtered_actions
             .iter()
@@ -623,7 +619,6 @@ Check the action definition in "Available Actions" for required parameters and p
             .field("regular_actions", &regular_actions)
             .field("include_base_stacks", include_base_stacks)
             .field("scripting_enabled", scripting_offered)
-            .field("open_actions_enabled", open_actions_enabled)
             .field("connection_memory_actions", connection_memory_actions)
             .optional_field("handler_mode_preference", handler_mode_preference)
             .field("servers", &servers_data)
@@ -676,10 +671,6 @@ Check the action definition in "Available Actions" for required parameters and p
     /// This builds the SYSTEM prompt only (without the user input trigger).
     /// The caller should add the user input as a separate user message.
     ///
-    /// Offers `open_server` / `open_client` exactly when an operator turn would
-    /// (`events::handler::open_actions_enabled`): with the documentation gate off, which is
-    /// the shipped setting, that is always. So what this renders is what the model is shown.
-    ///
     /// # Arguments
     /// * `state` - Application state
     /// * `protocol_async_actions` - Optional async actions from active protocol
@@ -689,61 +680,11 @@ Check the action definition in "Available Actions" for required parameters and p
         protocol_async_actions: Vec<ActionDefinition>,
         conversation_history: Option<String>,
     ) -> String {
-        let (is_open_server_enabled, is_open_client_enabled) =
-            crate::events::handler::open_actions_enabled(state).await;
-        Self::build_user_input_system_prompt_with_docs(
-            state,
-            protocol_async_actions,
-            conversation_history,
-            is_open_server_enabled,
-            is_open_client_enabled,
-        )
-        .await
-    }
-
-    /// Build system prompt for user input with explicit open_server/open_client enablement
-    ///
-    /// `false` renders the documentation-gated variant: `open_server` / `open_client` are
-    /// left out, the instructions say to call `read_documentation` first, and the event
-    /// handler guidance is held back until they are offered. The guidance itself is one
-    /// template (`user_input/partials/instructions.hbs`) for both variants.
-    ///
-    /// # Arguments
-    /// * `state` - Application state
-    /// * `protocol_async_actions` - Optional async actions from active protocol
-    /// * `conversation_history` - Optional conversation history
-    /// * `is_open_server_enabled` - Whether open_server action is enabled
-    /// * `is_open_client_enabled` - Whether open_client action is enabled
-    pub async fn build_user_input_system_prompt_with_docs(
-        state: &AppState,
-        protocol_async_actions: Vec<ActionDefinition>,
-        conversation_history: Option<String>,
-        is_open_server_enabled: bool,
-        is_open_client_enabled: bool,
-    ) -> String {
         let selected_mode = state.get_selected_scripting_mode().await;
         let scripting_env = state.get_scripting_env().await;
 
-        // Check if documentation has been fetched (for prompt guidance, not action enablement)
-        let has_documentation = conversation_history
-            .as_ref()
-            .map(|history| {
-                history.contains("read_documentation")
-                    || history.contains("read_server_documentation")
-                    || history.contains("read_client_documentation")
-                    || history.contains("Server Protocol:")
-                    || history.contains("Client Protocol:")
-            })
-            .unwrap_or(false);
-
-        let has_running_servers = !state.get_all_servers().await.is_empty();
-
-        let mut actions = crate::llm::actions::common::get_operator_common_actions(
-            selected_mode,
-            &scripting_env,
-            is_open_server_enabled,
-            is_open_client_enabled,
-        );
+        let mut actions =
+            crate::llm::actions::common::get_operator_common_actions(selected_mode, &scripting_env);
 
         // Add tool actions
         let web_search_mode = state.get_web_search_mode().await;
@@ -752,16 +693,9 @@ Check the action definition in "Available Actions" for required parameters and p
         // Add protocol async actions
         actions.extend(protocol_async_actions);
 
-        // Build prompt with conditional base stack docs
-        // Only show full base stack docs after documentation has been fetched or explicitly enabled
-        // Also check if protocols have been documented in AppState
-        let has_documented_protocols =
-            state.is_server_docs_read().await || state.is_client_docs_read().await;
-        let include_base_stacks = has_documentation
-            || has_running_servers
-            || has_documented_protocols
-            || is_open_server_enabled
-            || is_open_client_enabled;
+        // The operator prompt offers open_server / open_client, so it carries the base stacks
+        // they choose between.
+        let include_base_stacks = true;
 
         // The instructions are rendered by the user_input template itself.
         Self::build_action_prompt(
@@ -930,7 +864,7 @@ Check the action definition in "Available Actions" for required parameters and p
     /// The exact list of actions a **user-input** prompt advertises, given the assembled list.
     ///
     /// The sibling of [`Self::advertised_network_event_actions`], and it exists for the same
-    /// reason: `build_user_input_system_prompt_with_docs` renders
+    /// reason: `build_user_input_system_prompt` renders
     /// [`Self::filter_actions_by_scripting_mode`]'s output, so a caller that hands its own
     /// pre-filter list to `with_native_tools` — or validates the model's reply against it —
     /// offers and accepts actions the prompt never showed. With scripting Off that means
@@ -1087,8 +1021,6 @@ Check the action definition in "Available Actions" for required parameters and p
                 actions = crate::llm::actions::common::get_operator_common_actions(
                     selected_mode,
                     &scripting_env,
-                    true,
-                    true,
                 );
                 actions.retain(|a| !GLOBAL_TASK_UNTARGETED_ACTIONS.contains(&a.name.as_str()));
                 actions.extend(get_all_tool_actions(web_search_mode));

@@ -38,14 +38,14 @@ use tracing::{debug, warn};
 /// This is a directory of *live sockets*, not storage: nothing is retained after a
 /// client disconnects, and no message, subscription, topic or retained value is ever
 /// held here. It exists so the model can name a recipient for `mqtt_publish`.
-type Directory = HashMap<(u32, String), (mpsc::UnboundedSender<Vec<u8>>, bool)>;
+type Directory = HashMap<(u32, String), (crate::utils::outbox::OutboxSender<Vec<u8>>, bool)>;
 static MQTT_CLIENTS: LazyLock<Mutex<Directory>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Record a connected client's writer so actions can address it by client id.
 pub fn register_client(
     server_id: ServerId,
     client_id: &str,
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+    tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     v5: bool,
 ) {
     if let Ok(mut map) = MQTT_CLIENTS.lock() {
@@ -111,7 +111,7 @@ pub struct MqttProtocol {
     server_id: Option<ServerId>,
     #[allow(dead_code)]
     connection_id: Option<ConnectionId>,
-    out_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    out_tx: Option<crate::utils::outbox::OutboxSender<Vec<u8>>>,
     status_tx: Option<mpsc::UnboundedSender<String>>,
     client_id: RwLock<Option<String>>,
     /// Bitmask of MQTT packet types written to *this* connection, used by the
@@ -162,7 +162,7 @@ impl MqttProtocol {
     pub fn for_connection(
         server_id: ServerId,
         connection_id: ConnectionId,
-        out_tx: mpsc::UnboundedSender<Vec<u8>>,
+        out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
         status_tx: mpsc::UnboundedSender<String>,
     ) -> Self {
         Self {
@@ -900,7 +900,7 @@ impl Protocol for MqttProtocol {
                  UNPROVEN: TLS/8883, WebSocket transport, QoS 1 and 2 flows \
                  end to end, retained messages, wildcard filter matching, last-will delivery, \
                  session resume, and keep-alive reaping -- the broker implements no \
-                 subscription table, no retained store and no keep-alive timer.",
+                 subscription table, no retained store and no keep-alive timer. FUZZ: fuzz/fuzz_targets/mqtt_packet.rs drives take_packet and every packet parser (flat format; length-lie and 30 000-filter seeds).",
             )
             .notes(
                 "MQTT 3.1.1 and 5.0 (no TLS, no WebSocket). On a v5 connection every \

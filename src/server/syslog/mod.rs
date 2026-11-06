@@ -7,10 +7,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::SyslogProtocol;
 use crate::state::app_state::AppState;
@@ -110,10 +111,8 @@ impl SyslogServer {
                                 }),
                             );
 
-                            debug!("Syslog calling LLM for message from {}", peer_addr);
-                            let _ = status_clone.send(format!(
-                                "[DEBUG] Syslog calling LLM for message from {}",
-                                peer_addr
+                            Log::to(&status_clone).debug(format!(
+                                "Syslog calling LLM for message from {}", peer_addr
                             ));
 
                             // Call LLM
@@ -130,8 +129,7 @@ impl SyslogServer {
                                 Ok(execution_result) => {
                                     // Display messages from LLM
                                     for message in &execution_result.messages {
-                                        info!("{}", message);
-                                        let _ = status_clone.send(format!("[INFO] {}", message));
+                                        Log::to(&status_clone).info(message);
                                     }
 
                                     // Syslog is one-way: nothing is ever written back to the

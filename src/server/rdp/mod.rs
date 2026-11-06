@@ -17,6 +17,7 @@ pub mod actions;
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -34,7 +35,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Largest X.224 Connection Request accepted, in bytes. A real CR is well under 512 bytes
 /// (routing cookie + RDP_NEG_REQ + optional correlation info); the TPKT length field is
@@ -141,9 +142,8 @@ impl RdpServer {
                             ConnectionId::new(app_state.get_next_unified_id().await);
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
 
-                        info!("RDP client connected from {}", remote_addr);
-                        let _ = status_tx
-                            .send(format!("[INFO] RDP client connected from {}", remote_addr));
+                        Log::to(&status_tx)
+                            .info(format!("RDP client connected from {}", remote_addr));
 
                         let llm_clone = llm_client.clone();
                         let state_clone = app_state.clone();

@@ -64,6 +64,11 @@ versions of handler-API changes away from what `src/server/postgresql/` implemen
   Upstream ended the session silently and returned `Ok(())`. NetGet logs it as
   `decision=refused_malformed_message`.
 - `Cargo.toml`: `bytes` 1.10 (the `try_get_*` methods).
+- `messages/copy.rs`: `CopyFail::message_type()` returns CopyFail's own tag, `f`. Upstream
+  returns CopyDone's `c`, so pgwire's encoding of a CopyFail was read back as a CopyDone with
+  a body (and refused). Decoding was never affected — the frontend decoder dispatches on the
+  tag the peer sent — so this matters to pgwire's client and to the `pgwire_frontend` fuzz
+  target's round trip, which found it.
 
 What it does not do: a required string that is missing its NUL, followed by bytes that happen to
 decode as the fields after it, still decodes as garbage values rather than being refused at the

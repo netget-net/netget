@@ -125,7 +125,7 @@ impl Protocol for DotProtocol {
                  answering with a fixed transaction id instead of the client's, at which point \
                  kdig waits out its timeout and the test fails. \
                  UNPROVEN: certificate validation of any kind (the cert is self-signed and plain \
-                 `+tls` does not authenticate it), client auth, and record types beyond A.",
+                 `+tls` does not authenticate it), client auth, and record types beyond A. PCAP ORACLE: kdig runs with SSLKEYLOGFILE through a recording relay; tshark decrypts both sessions and must dissect DNS in the server's direction. FUZZ: fuzz/fuzz_targets/dns_message.rs (hickory-proto's Message::from_vec).",
             )
             .notes("Self-signed certs only, no client auth, TLS overhead")
             .history(crate::protocol::metadata::HistoryMode::Off)

@@ -941,7 +941,13 @@ impl WebRtcServer {
         let (mut ws_tx, mut ws_rx) = ws.split();
 
         // A writer task owns the sink so the read loop never blocks on a slow peer.
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+        // Bounded: every bad frame is answered at once, so a peer that sends without reading
+        // is cut off rather than queued for (`utils::outbox`).
+        let (out_tx, mut out_rx) = crate::utils::outbox::channel(
+            format!("WebRTC signalling connection {remote_addr}"),
+            crate::utils::outbox::OutboxLimits::DEFAULT,
+            Message::len,
+        );
         let writer = tokio::spawn(async move {
             while let Some(msg) = out_rx.recv().await {
                 if ws_tx.send(msg).await.is_err() {
@@ -1325,7 +1331,7 @@ fn signal_name(signal: &WebRtcSignal) -> &'static str {
 }
 
 /// Queue a signalling frame for the writer task.
-fn send_signal(out_tx: &mpsc::UnboundedSender<Message>, signal: &WebRtcSignal) {
+fn send_signal(out_tx: &crate::utils::outbox::OutboxSender<Message>, signal: &WebRtcSignal) {
     match serde_json::to_string(signal) {
         Ok(json) => {
             let _ = out_tx.send(Message::Text(json));

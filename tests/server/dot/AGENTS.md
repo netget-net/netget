@@ -270,3 +270,16 @@ Add test with proper certificate validation:
 - [hickory-proto Documentation](https://docs.rs/hickory-proto/latest/hickory_proto/)
 - [tokio-rustls Documentation](https://docs.rs/tokio-rustls/latest/tokio_rustls/)
 - [rustls Documentation](https://docs.rs/rustls/latest/rustls/)
+
+## Stable condition 2: the pcap oracle, decrypted
+
+`real_client_test.rs` runs kdig with `SSLKEYLOGFILE` set (GnuTLS honours it) and through a
+recording relay. The pcap oracle hands tshark the key log (`PcapOracle::tls_keylog`) and frames
+the stream on port 853, where tshark's DNS dissector registers for TLS application data, so
+both sessions are decrypted and the RFC 7858 length prefix and each DNS reply are read by the
+`dns` dissector. `require_named("dns")` fails the oracle unless DNS appears in what the server
+sent, so a key log that did not match is a failure rather than a pass on the record layer.
+
+Condition 3 is `fuzz/fuzz_targets/dns_message.rs`, which fuzzes the `hickory_proto`
+`Message::from_vec` this server calls on every query, with a `compression_pointer_loop` in its
+corpus.

@@ -104,18 +104,18 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    end: BLE needs an adapter, WireGuard needs root and a backend. WireGuard is `Experimental`.
 3. **`pgwire` malformed-query panic (item 77)** — upstream; kills one connection task only.
 4. **`AppState` is one `RwLock` over everything (item 23)** — a throughput ceiling.
-5. **The `easy` layer (item 35)** — still present (`src/easy/http`). Finish or delete.
-6. **`REQUIRE_DOCS_FOR_OPEN_ACTIONS` (item 29)** — a hardcoded `false` guarding a gate nobody
-   enables; make it a runtime setting or delete it and its state.
-7. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
+5. **Linux `-full` release archives with libpcap, Bluetooth and PC/SC (item 54)** — added
    beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
    next tagged release.
 
-8. **Logging long tail.** 111 of 153 server `mod.rs` files use the `Log` facade
-    (`src/logging/emit.rs`); 42 still hand-roll dual logging. Derive with
-    `grep -L 'Log::new\|crate::logging::Log' src/server/*/mod.rs`.
+6. **Logging long tail.** Server dual logging goes through the `Log` facade
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`). The sites still sending a
+    `[LEVEL]` line by hand are listed, per file, in the baseline of
+    `tests/hand_rolled_dual_logging_ratchet_test.rs`, which may only shrink; nearly all of them
+    are pairs whose file and TUI halves say different things on purpose (error detail in the
+    file, a decision tag or a shortened key on the TUI), so each is a per-protocol decision.
 
-9. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
+7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
 ### Patterns worth auditing for
 
@@ -178,7 +178,8 @@ Delete an entry once its context is no longer useful.
 |---|---|---|
 | 7 — unknown action names silent | (earlier) | `validate_static_action_names` rejects a bogus action at startup |
 | 9 — MCP scheduled-task leak | `82034d3d` | `remove_server()` owns teardown; MCP-surface coverage added so a rewrite cannot silently drop it |
-| 29/50 — dead documentation gate | (earlier) | One gate remains, behind a documented compile-time `false`; the second is gone |
+| 29/50 — dead documentation gate | W18 (November 2026) | `REQUIRE_DOCS_FOR_OPEN_ACTIONS`, both branches it guarded, `ActionExecutionError::DocumentationRequired`, the gated prompt variant and its snapshot, and the mock harness's replay of the retry are deleted. `open_server` / `open_client` are always offered to the operator prompt; the rendered production prompt is byte-identical |
+| 35 — `easy` layer | W18 (November 2026) | Deleted: `src/easy/`, its registry, trait, startup path, AppState instance maps, `prompts/easy_request/`, the `action_helper` hook that ran before deterministic handlers, `--simple` / `--simple-list`, and its tests. It served one protocol (HTTP), had no port or instruction flags, and nothing in scripts, tests, docs or the site invoked it. A saved session that still names an easy wrapper is refused; `"easy": []` still parses |
 | 32 — validator accepted a superset | `272acbc0` | `advertised_user_input_actions()` narrows to what the prompt rendered, mirroring the network-event path |
 | 39 — doc gate broke mocked tests | (earlier) | The retry no longer fires; 35 tests recovered from the `#[ignore]` it caused |
 | 78 — connect events fired only with `send_first` | `527e07f3`, then narrowed | `telnet_connection_opened` is raised for every connection, answered by a zero-action rule on dashboard servers via `EventType::raised_on_every_connection()`. `tcp_connection_opened` and `tls_connection_opened` stay gated on `send_first`, and their event and parameter descriptions now say so: raising them everywhere cost a model call per connection and cut the real-model eval's `tcp` score from 15/15 to 10/15. `socket_file`, `pty` and `stdio` are gated the same way and their `send_first` and connect-event descriptions say so too. |
@@ -377,15 +378,43 @@ dependencies inform. Do not turn the informational one into a second hard gate w
 what happens to a protocol whose dependency probe is merely unsure — `DeviceAccess` derives no
 dependency for exactly that reason.
 
-### 23. Architectural ceilings **[static]**
+### 23. Architectural ceilings **[measured]**
 
-- `AppState` is a single `RwLock` over servers, clients, connections, tasks, LLM config, and
-  access logs (`src/state/app_state.rs:261`). No deadlock (no `.await` under the guard), but
-  every per-connection stat update from every server serializes through one writer.
-- All 27 `mpsc` channels are unbounded; there is no backpressure anywhere. A stalled consumer
-  grows memory without bound.
-- `state/machine.rs` defines a generic `StateMachine<S>` that nothing instantiates; every
-  protocol hand-rolls Idle/Processing/Accumulating, so a fix in one does not propagate.
+- **The `AppState` lock.** `tests/app_state_contention_test.rs` (ignored; `--ignored
+  --nocapture`) drives 1/16/64/256 connections through a static-handler TCP server and prints
+  req/s and p50/p99, alone and beside readers. Baseline, debug build: 3 010 req/s at one
+  connection, 5 100–7 000 at 16–256 with p50 growing 2.7 ms → 36 ms; a 10 Hz dashboard changed
+  nothing; one back-to-back `build_snapshot` cut one connection to 546 req/s and four MCP-style
+  pollers to 280. Temporary per-call-site timing showed five write acquisitions and one read per
+  request (`update_connection_stats` ×2, `record_access_log` held 32–37 µs while rendering the
+  history entry, `register_server_task` for the answer task, a `with_server_mut` that only read
+  the peer address); at 64 connections writers waited 77% of the time while the lock was held
+  24% — the queue handoff, not the work, was the ceiling. `list_access_logs` held the read lock
+  ~1 ms copying the ring.
+
+  Done: counters, the access log and the task registry have their own locks
+  (`tests/app_state_off_lock_test.rs`); a request now takes one write and three reads. Re-measured
+  interleaved with the baseline binary under a machine load average of 120–245 (other builds),
+  so absolute numbers are depressed and the no-reader cells are within noise; the reader cells
+  are not: one connection beside a back-to-back dashboard 188–231 → 406–542 req/s, beside four
+  MCP pollers 138–146 → 215–342 req/s with p50 4.5 ms → 1.2 ms. Open: re-measure the no-reader
+  ceiling on a quiet machine; the remaining write (history) could move to a per-connection lock
+  if a protocol with history on ever needs more.
+- **Channels.** 60 tokio `unbounded_channel` sites (plus three `std::sync::mpsc::channel`),
+  classified 1 November 2026 by who sends and whether the consumer can stall: 26 are
+  operator-paced, startup-only or have their receiver dropped (MCP `start_server`'s status
+  receiver is dropped when the tool returns, so later sends fail rather than buffer); 15 are
+  limited upstream (yamux stream data by its flow-control window, `redis` pub/sub by its 8 MiB
+  subscriber limit, `mqtt_sn` and the datalink/ARP clients by one request in flight, the raw-frame
+  injectors by the capture rate); 22 could grow from network input. Bounded since:
+  the status channel where it is drained (`logging::status_drain`: dashboard and the three CLI
+  forwarders) and ten writer channels via `utils::outbox` (`mqtt`, `amqp`, `bgp`, `websocket`,
+  `nostr`, `webrtc`, `webrtc_signaling`, `guacamole`, `tor_relay`, the `libp2p` yamux session:
+  4096 frames / 8 MiB, then the peer is cut off). **Still open:** the USB/IP servers
+  (`usb/smartcard` APDUs, `usb/msc` I/O events, `usb/keyboard` LED reports — a `watch` would do —
+  and `usb/serial` bytes, all fed from synchronous URB callbacks), `can`'s transmit queue, and
+  three clients whose peer is the server the operator pointed them at (`guacamole`,
+  `websocket`, `ssdp`).
 
 ---
 
@@ -393,7 +422,9 @@ dependency for exactly that reason.
 > The MCP `start_server` tool description actively steers callers toward `event_handlers` with
 > script handlers over the LLM path. This code is therefore on the hot path, not a corner case.
 
-### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[verified]**
+### 29. `REQUIRE_DOCS_FOR_OPEN_ACTIONS` is dead configuration **[fixed — W18, November 2026]**
+
+> Fixed: the constant, both gated branches and the state only they read are deleted. The text below is the original finding.
 
 `src/events/handler.rs:20` is a hardcoded `const … = false`, so the "model must read the docs
 before it may open a server" gate never engages, while `is_server_docs_read()` /
@@ -413,7 +444,9 @@ what it renders, so e.g. `update_script` is accepted with scripting Off. Permiss
 than broken, but it is the same drift. Clearest at `src/events/handler.rs:611-637` and
 `src/llm/action_helper.rs:143-167`.
 
-### 35. The `easy` layer is a parallel subsystem serving one protocol **[verified]**
+### 35. The `easy` layer is a parallel subsystem serving one protocol **[fixed — W18, November 2026]**
+
+> Fixed: deleted, with `--simple` / `--simple-list`. The text below is the original finding.
 
 `src/easy/` contains exactly one protocol (HTTP, 378 LOC) but carries its own trait, registry
 (`src/protocol/easy_registry.rs`), startup path (`src/cli/easy_startup.rs`), prompt templates
@@ -508,9 +541,10 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   sequence id of 255 (`lib.rs:389`, `:502`, `:563`; overflow checks, so debug/test builds only)
   and `packet()`'s fragment `assert_eq!`s on a misnumbered chain (`packet_reader.rs:252`, `:266`;
   every build). Fixed in `PacketLimitReader`, which refuses both from the header and answers
-  1156 `ER_NET_PACKETS_OUT_OF_ORDER`. **Not fixed, left to the COM_STMT_EXECUTE rework:**
-  `ParamParser` panics (`params.rs:86` `split_at`, `:91` `panic!`, `:127` `unwrap`) and
-  COM_STMT_SEND_LONG_DATA appending with no bound (`lib.rs:663-678`).
+  1156 `ER_NET_PACKETS_OUT_OF_ORDER`. The `ParamParser` panics (`params.rs:86` `split_at`,
+  `:91` `panic!`, `:127` `unwrap`) are unreachable because `ParamParser` is never iterated,
+  and COM_STMT_SEND_LONG_DATA's unbounded append (`lib.rs:663-678`) is bounded beneath the
+  crate by `command_tap::LongDataGate`; see item 77.
 - **`rasn` 0.18.0 (behind `rasn-snmp`) — nothing new reachable.** The one wire-reachable defect,
   unbounded recursion on constructed OCTET STRINGs (`ber/de/parser.rs:62`), was already behind
   `check_ber_structure`; integer, OID, bit-string and length decoding were read and are bounded.
@@ -597,10 +631,31 @@ panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every 
 `tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. It
 should still be reported upstream, and a `[patch]` does not reach `cargo install`, where the
 containment in `src/server/postgresql/mod.rs` remains what stands between the panic and the
-server. `opensrv-mysql`'s `params.rs` cluster (five
-malformed `COM_STMT_EXECUTE` shapes, including an explicit `panic!("bad column type")` on a
-client-chosen byte) and `kafka-protocol`'s unbounded element counts are the same shape and are
-documented in the panic audit.
+server. `kafka-protocol`'s unbounded element counts are the same shape and are documented in
+the panic audit.
+
+`opensrv-mysql`'s `params.rs` cluster (five malformed `COM_STMT_EXECUTE` shapes, including an
+explicit `panic!("bad column type")` on a client-chosen byte) was the same shape and is
+**resolved on NetGet's side**, which shows the wrapping the PostgreSQL fix would need. The
+panics are all in `Params::next`, which runs only when a shim iterates `ParamParser`; the MySQL
+server never does. It used to buy that safety by dropping the parameter values, so the model
+saw `WHERE id = ?` and nothing else. It now copies each execute from beneath the crate
+(`src/server/mysql/command_tap.rs`, a reader wrapper like `packet_limit`'s) and decodes it with
+a bounded parser of its own (`src/server/mysql/stmt_params.rs`): the model gets `params` with
+types and values plus a `query_rendered` for reading, and every malformed shape is answered ERR
+1835 `ER_MALFORMED_PACKET` on a connection that stays up. Covered by
+`tests/server/mysql/prepared_params_test.rs` from a raw socket and by
+`fuzz/fuzz_targets/mysql_stmt_execute.rs`. `COM_STMT_SEND_LONG_DATA`, which the crate appends
+with no bound (`lib.rs:663-678`), is bounded beneath it by `command_tap::LongDataGate` (64 MiB a
+statement, 128 MiB a connection; ERR 1105 at the next execute).
+
+The same work found a **use-after-free** in `opensrv-mysql` 0.7.0, which is worse than any
+panic in this list: `PacketReader::next_async` (`packet_reader.rs:132-141`) returns a packet
+borrowed from `self.bytes` through `slice::from_raw_parts` after `self.bytes = rest.to_vec()`
+has freed that buffer, whenever one read held more than one packet. Two pipelined
+`COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. NetGet
+defends it with `command_tap`, which never lets a read cross a packet boundary; the crate needs
+an upstream fix (return the packet before reassigning, or parse from an owned copy).
 
 ### 78. `tcp_connection_opened` is advertised unconditionally and fires only for `send_first` servers **[verified, fixed: telnet raises it always, tcp/tls document the gate]**
 

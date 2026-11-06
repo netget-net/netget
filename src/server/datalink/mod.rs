@@ -27,11 +27,12 @@ use bytes::Bytes;
 use pcap::{Capture, Device};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::client::datalink::packet::{decode_frame, LinkType};
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::utils::truncate_for_log;
@@ -272,9 +273,8 @@ impl DataLinkServer {
                                 packet_event_data_for_link(&data, link_type, loopback),
                             );
 
-                            debug!("Datalink calling LLM for packet ({} bytes)", full_len);
-                            let _ = status_clone.send(format!(
-                                "[DEBUG] Datalink calling LLM for packet ({} bytes)",
+                            Log::to(&status_clone).debug(format!(
+                                "Datalink calling LLM for packet ({} bytes)",
                                 full_len
                             ));
 
@@ -290,8 +290,7 @@ impl DataLinkServer {
                             {
                                 Ok(execution_result) => {
                                     for message in &execution_result.messages {
-                                        info!("{}", message);
-                                        let _ = status_clone.send(format!("[INFO] {}", message));
+                                        Log::to(&status_clone).info(message);
                                     }
 
                                     // DataLink writes nothing to the wire in any case, so the

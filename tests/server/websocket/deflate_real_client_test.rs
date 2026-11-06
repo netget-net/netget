@@ -117,11 +117,15 @@ async fn opened_events(state: &AppState, id: ServerId) -> Vec<Value> {
 async fn python_websockets_reads_compressed_frames_from_netget() {
     let python = env("NETGET_WS_PYTHON");
     let (state, id, port) = server(true).await;
+    // Through a recording relay, so the pcap oracle at the end reads the session as it crossed.
+    let (relay, streams) =
+        crate::helpers::recording_relay::tcp_relay(format!("127.0.0.1:{port}").parse().unwrap())
+            .await;
     let script = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/server/websocket/peer/deflate_peer.py"
     );
-    let r = run(&python, &[script, "client", &port.to_string()]).await;
+    let r = run(&python, &[script, "client", &relay.port().to_string()]).await;
 
     assert_eq!(r["negotiated"], json!(["permessage-deflate"]), "{r}");
     let long = long_text();
@@ -178,6 +182,22 @@ async fn python_websockets_reads_compressed_frames_from_netget() {
         opened[0]["permessage_deflate"]["extension"], "permessage-deflate",
         "{opened:?}"
     );
+
+    // The pcap oracle: Wireshark's `http` dissector reads the upgrade and the 101, and its
+    // `websocket` dissector every frame after it — masking, lengths, RSV1, the fragmented
+    // message, the close — and inflates the permessage-deflate payloads itself, independently
+    // of Python websockets and of NetGet's DeflateStream.
+    let sessions = crate::helpers::recording_relay::recorded(&streams);
+    assert_eq!(
+        sessions.len(),
+        1,
+        "one websockets connection crossed the relay"
+    );
+    crate::helpers::recording_relay::replay(
+        crate::helpers::pcap_oracle::PcapOracle::tcp("websocket").require_named("websocket"),
+        &sessions[0],
+    )
+    .assert_clean();
 }
 
 #[tokio::test]

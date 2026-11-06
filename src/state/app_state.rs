@@ -5,7 +5,6 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 use super::client::{ClientId, ClientInstance};
-use super::easy::{EasyId, EasyInstance, EasyStatus};
 use super::server::{ServerId, ServerInstance};
 use super::task::{ScheduledTask, TaskId};
 use crate::server::connection::ConnectionId;
@@ -365,8 +364,6 @@ pub mod answered_by {
     pub const CACHE: &str = "cache";
     /// An `event_handlers` rule answered: a script, a static rule or a person (manual).
     pub const RULE: &str = "rule";
-    /// An easy-protocol layer answered.
-    pub const EASY: &str = "easy";
 }
 
 impl AccessLogEntry {
@@ -443,6 +440,76 @@ pub struct AppState {
     /// outside `inner` so the transport can record it synchronously on every request
     /// without taking the state lock.
     model_health: Arc<std::sync::Mutex<ModelHealth>>,
+    /// The access-log ring. Its own lock, not `inner`'s: every handled event appends to it and
+    /// `list_access_logs` copies it out, and under `inner` both would queue behind (and block)
+    /// everything else in `AppState`. See `tests/app_state_contention_test.rs`.
+    access_log: Arc<std::sync::Mutex<AccessLogRing>>,
+    /// Byte/packet counters reported by `update_connection_stats` and not yet folded into
+    /// `ServerInstance::connections`. Every protocol reports on every read and write, so this
+    /// is the most frequent state update there is; it takes this short lock instead of
+    /// `inner`'s write lock. Readers that hand out connections add these in
+    /// ([`AppState::get_server`], [`AppState::get_all_servers`]); every write path that reads or
+    /// removes a connection folds them first.
+    conn_stats: Arc<std::sync::Mutex<PendingConnStatsMap>>,
+    /// Background tasks owned by each live server (accept loops, per-connection readers and
+    /// answer tasks, datagram readers, interface readers, …).
+    ///
+    /// A `Vec` per server: a protocol may legitimately own more than one long-lived loop.
+    /// WireGuard has a UDP listener and a TUN reader; OpenVPN had to fuse both under a single
+    /// `select!` task purely because a single-slot registry silently dropped whichever handle
+    /// was registered first, leaving `stop_server` able to abort only the last one.
+    ///
+    /// An entry exists exactly while the server does: `add_server` creates it and teardown
+    /// removes it, so a registration that finds no entry is for a server already stopped and
+    /// aborts its task. Its own lock because servers register a task per connection (TCP one
+    /// per answer), which would make it one of the most frequent writers to `inner`.
+    server_tasks: Arc<std::sync::Mutex<ServerTaskMap>>,
+}
+
+type ServerTaskMap = HashMap<ServerId, Vec<tokio::task::JoinHandle<()>>>;
+
+/// The access log's ring buffer and id counter.
+#[derive(Default)]
+struct AccessLogRing {
+    /// Shared so that copying the ring out is a reference-count bump per entry under the lock;
+    /// the entries themselves are cloned after it is released.
+    entries: std::collections::VecDeque<Arc<AccessLogEntry>>,
+    /// Entries ever recorded; the next id is this plus one.
+    recorded: u64,
+    /// Per-instance totals of what the log recorded (see [`AccessActivity`]); unlike the ring,
+    /// never evicted while the instance lives.
+    activity: HashMap<AccessLogOwner, AccessActivity>,
+}
+
+/// Counters accumulated for one connection since they were last folded into its
+/// `ConnectionState`.
+#[derive(Default, Clone, Copy)]
+struct PendingConnStats {
+    bytes_received: u64,
+    bytes_sent: u64,
+    packets_received: u64,
+    packets_sent: u64,
+    last_activity: Option<crate::utils::clock::Instant>,
+}
+
+impl PendingConnStats {
+    fn apply_to(&self, conn: &mut super::server::ConnectionState) {
+        conn.bytes_received += self.bytes_received;
+        conn.bytes_sent += self.bytes_sent;
+        conn.packets_received += self.packets_received;
+        conn.packets_sent += self.packets_sent;
+        if let Some(at) = self.last_activity {
+            conn.last_activity = at;
+        }
+    }
+}
+
+type PendingConnStatsMap = HashMap<(ServerId, ConnectionId), PendingConnStats>;
+
+/// Lock a std mutex, recovering the data if a holder panicked: every critical section guarded
+/// this way is a few field updates that leave the data consistent at every step.
+fn lock_unpoisoned<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// What `get_status` says about the model beyond its name.
@@ -466,12 +533,6 @@ struct AppStateInner {
     /// Tor client instances (for directory queries)
     #[cfg(unix)]
     tor_clients: HashMap<ClientId, Arc<arti_client::TorClient<tor_rtcompat::PreferredRuntime>>>,
-    /// All easy protocol instances
-    easy_instances: HashMap<EasyId, EasyInstance>,
-    /// Mapping from underlying server ID to easy ID (for event routing)
-    server_to_easy: HashMap<ServerId, EasyId>,
-    /// Mapping from underlying client ID to easy ID (for event routing)
-    client_to_easy: HashMap<ClientId, EasyId>,
     /// Unified ID counter for servers, connections, and clients
     /// This ensures all IDs are unique across all three types
     next_unified_id: u32,
@@ -535,12 +596,6 @@ struct AppStateInner {
     documented_server_protocols: std::collections::HashSet<String>,
     /// Client protocols that have been documented (enables open_client for these protocols)
     documented_client_protocols: std::collections::HashSet<String>,
-    /// Recent request/response access-log entries (bounded ring buffer)
-    access_logs: std::collections::VecDeque<AccessLogEntry>,
-    /// Next access-log entry id to assign
-    next_access_log_id: u64,
-    /// Per-instance totals of what the access log recorded (see [`AccessActivity`]).
-    access_activity: HashMap<AccessLogOwner, AccessActivity>,
     /// Declared pipes: `from` server's `on` event forwarded into `to` server.
     /// Keyed by pipe id. Torn down when either endpoint server closes.
     pipes: HashMap<crate::pipe::PipeId, crate::pipe::PipeSpec>,
@@ -562,20 +617,6 @@ struct AppStateInner {
     /// touched through `register_client_task` / `remove_client`, and `ClientInstance`
     /// is constructed by callers outside this module.
     client_tasks: HashMap<ClientId, Vec<tokio::task::JoinHandle<()>>>,
-    /// Background tasks owned by each live server (accept loops, datagram readers,
-    /// interface readers, …).
-    ///
-    /// A `Vec` per server for the same reason as `client_tasks`: a protocol may
-    /// legitimately own more than one long-lived loop. WireGuard has a UDP listener
-    /// and a TUN reader; OpenVPN had to fuse both under a single `select!` task
-    /// purely because the previous single-slot registry silently dropped whichever
-    /// handle was registered first, leaving `stop_server` able to abort only the
-    /// last one.
-    ///
-    /// Lives here rather than on `ServerInstance` because the handles are only ever
-    /// touched through `register_server_task` / `remove_server`, and `ServerInstance`
-    /// is constructed by callers outside this module.
-    server_tasks: HashMap<ServerId, Vec<tokio::task::JoinHandle<()>>>,
     /// Type-erased handles to the *running* instance of each server.
     ///
     /// Async protocol actions are dispatched on the stateless protocol struct from
@@ -716,10 +757,19 @@ impl AppStateInner {
     /// Abort everything the server owns. Returns the aborted listener and connection tasks:
     /// an abort only *requests* cancellation, and the socket a task holds is closed when the
     /// runtime next polls it, so a caller that needs the port free awaits these.
-    fn teardown_server(&mut self, server_id: ServerId) -> Vec<tokio::task::JoinHandle<()>> {
+    fn teardown_server(
+        &mut self,
+        server_id: ServerId,
+        server_tasks: &std::sync::Mutex<ServerTaskMap>,
+        conn_stats: &std::sync::Mutex<PendingConnStatsMap>,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         // Dropping a JoinHandle only DETACHES the task in Tokio, so the abort is what
-        // actually releases the listening socket.
-        let aborted = self.server_tasks.remove(&server_id).unwrap_or_default();
+        // actually releases the listening socket. Removing the entry also refuses every later
+        // registration for this server (see `AppState::register_server_task`).
+        let aborted = lock_unpoisoned(server_tasks)
+            .remove(&server_id)
+            .unwrap_or_default();
+        lock_unpoisoned(conn_stats).retain(|(sid, _), _| *sid != server_id);
         for handle in &aborted {
             handle.abort();
         }
@@ -829,15 +879,15 @@ impl AppState {
             model_health: Default::default(),
             event_journal: Arc::new(crate::events::journal::EventJournal::default()),
             capture: Arc::new(crate::capture::CaptureRegistry::default()),
+            access_log: Default::default(),
+            conn_stats: Default::default(),
+            server_tasks: Default::default(),
             inner: Arc::new(RwLock::new(AppStateInner {
                 mode: Mode::Idle,
                 servers: HashMap::new(),
                 clients: HashMap::new(),
                 #[cfg(unix)]
                 tor_clients: HashMap::new(),
-                easy_instances: HashMap::new(),
-                server_to_easy: HashMap::new(),
-                client_to_easy: HashMap::new(),
                 next_unified_id: 1,
                 next_server_id: 1,
                 next_client_id: 1,
@@ -867,14 +917,10 @@ impl AppState {
                 _database_manager: crate::state::DatabaseManager::new(),
                 documented_server_protocols: std::collections::HashSet::new(),
                 documented_client_protocols: std::collections::HashSet::new(),
-                access_logs: std::collections::VecDeque::new(),
-                next_access_log_id: 1,
-                access_activity: HashMap::new(),
                 pipes: HashMap::new(),
                 client_llm_call_limit: client_llm_call_limit_from_env(),
                 client_llm_calls: HashMap::new(),
                 client_tasks: HashMap::new(),
-                server_tasks: HashMap::new(),
                 server_handles: HashMap::new(),
                 client_handles: HashMap::new(),
                 pending_intercepts: Vec::new(),
@@ -919,6 +965,7 @@ impl AppState {
         inner.next_unified_id += 1;
         server.id = id;
         inner.servers.insert(id, server);
+        lock_unpoisoned(&self.server_tasks).insert(id, Vec::new());
 
         // Set mode to Server if this is the first server
         if inner.mode == Mode::Idle {
@@ -937,11 +984,13 @@ impl AppState {
     pub async fn remove_server(&self, id: ServerId) -> Option<ServerInstance> {
         let (server, aborted) = {
             let mut inner = self.inner.write().await;
+            // The returned instance carries its connections' final counters.
+            self.fold_conn_stats(&mut inner);
             let server = inner.servers.remove(&id);
-            inner
-                .access_activity
+            lock_unpoisoned(&self.access_log)
+                .activity
                 .remove(&AccessLogOwner::Server(id.as_u32()));
-            let aborted = inner.teardown_server(id);
+            let aborted = inner.teardown_server(id, &self.server_tasks, &self.conn_stats);
             // Set mode to Idle if no more servers and no clients
             if inner.servers.is_empty() && inner.clients.is_empty() {
                 inner.mode = Mode::Idle;
@@ -1054,13 +1103,13 @@ impl AppState {
         // an unpolled future holding only the raw, detach-on-drop JoinHandle.
         let pending = PendingTaskRegistration(Some(handle));
         async move {
-            let mut inner = self.inner.write().await;
-            if !inner.servers.contains_key(&id) {
-                return;
+            let mut registry = lock_unpoisoned(&self.server_tasks);
+            // No entry: the server was removed (or never added), and `pending` aborts the task
+            // when it drops here.
+            if let Some(tasks) = registry.get_mut(&id) {
+                tasks.retain(|h| !h.is_finished());
+                tasks.push(pending.into_handle());
             }
-            let tasks = inner.server_tasks.entry(id).or_default();
-            tasks.retain(|h| !h.is_finished());
-            tasks.push(pending.into_handle());
         }
     }
 
@@ -1536,10 +1585,7 @@ impl AppState {
 
     /// Number of background tasks currently tracked for a server
     pub async fn server_task_count(&self, id: ServerId) -> usize {
-        self.inner
-            .read()
-            .await
-            .server_tasks
+        lock_unpoisoned(&self.server_tasks)
             .get(&id)
             .map(|t| t.len())
             .unwrap_or(0)
@@ -1547,7 +1593,10 @@ impl AppState {
 
     /// Get a server instance (cloned)
     pub async fn get_server(&self, id: ServerId) -> Option<ServerInstance> {
-        self.inner.read().await.servers.get(&id).cloned()
+        let inner = self.inner.read().await;
+        let mut server = inner.servers.get(&id).cloned()?;
+        self.add_pending_conn_stats(&mut server);
+        Some(server)
     }
 
     /// Get all server IDs
@@ -1557,7 +1606,43 @@ impl AppState {
 
     /// Get all servers (cloned)
     pub async fn get_all_servers(&self) -> Vec<ServerInstance> {
-        self.inner.read().await.servers.values().cloned().collect()
+        let inner = self.inner.read().await;
+        let mut servers: Vec<ServerInstance> = inner.servers.values().cloned().collect();
+        for server in &mut servers {
+            self.add_pending_conn_stats(server);
+        }
+        servers
+    }
+
+    /// Add the counters `update_connection_stats` has not folded in yet to a copy of a server.
+    /// Called with `inner` read-locked, which keeps a fold from running in between, so the copy
+    /// counts every byte exactly once.
+    fn add_pending_conn_stats(&self, server: &mut ServerInstance) {
+        let pending = lock_unpoisoned(&self.conn_stats);
+        if pending.is_empty() {
+            return;
+        }
+        for (id, conn) in server.connections.iter_mut() {
+            if let Some(stats) = pending.get(&(server.id, *id)) {
+                stats.apply_to(conn);
+            }
+        }
+    }
+
+    /// Fold every pending counter into its connection, dropping counters for connections the
+    /// state no longer holds. Called with `inner` write-locked by every path that reads or
+    /// removes connections in place.
+    fn fold_conn_stats(&self, inner: &mut AppStateInner) {
+        let mut pending = lock_unpoisoned(&self.conn_stats);
+        for ((server_id, conn_id), stats) in pending.drain() {
+            if let Some(conn) = inner
+                .servers
+                .get_mut(&server_id)
+                .and_then(|server| server.connections.get_mut(&conn_id))
+            {
+                stats.apply_to(conn);
+            }
+        }
     }
 
     /// Update server status
@@ -1831,26 +1916,6 @@ impl AppState {
         (next, true)
     }
 
-    /// Check if server documentation has been read (enables open_server)
-    pub async fn is_server_docs_read(&self) -> bool {
-        !self
-            .inner
-            .read()
-            .await
-            .documented_server_protocols
-            .is_empty()
-    }
-
-    /// Check if client documentation has been read (enables open_client)
-    pub async fn is_client_docs_read(&self) -> bool {
-        !self
-            .inner
-            .read()
-            .await
-            .documented_client_protocols
-            .is_empty()
-    }
-
     /// Mark server protocols as documented
     pub async fn mark_server_protocols_documented(&self, protocols: &[String]) {
         let mut inner = self.inner.write().await;
@@ -2074,6 +2139,7 @@ impl AppState {
     /// protocol the registry does not know is left alone.
     pub async fn cleanup_old_connections(&self, max_age_secs: u64) {
         let mut inner = self.inner.write().await;
+        self.fold_conn_stats(&mut inner);
         for server in inner.servers.values_mut() {
             let connectionless = crate::protocol::server_registry::registry()
                 .resolve(&server.protocol_name)
@@ -2091,6 +2157,7 @@ impl AppState {
         let now = crate::utils::clock::Instant::now();
 
         let mut inner = self.inner.write().await;
+        self.fold_conn_stats(&mut inner);
         for server in inner.servers.values_mut() {
             let to_remove: Vec<crate::server::connection::ConnectionId> = server
                 .connections
@@ -2138,7 +2205,7 @@ impl AppState {
         for id in &to_remove {
             inner.servers.remove(id);
             // Detached on purpose: this sweep holds the state lock and must not wait.
-            drop(inner.teardown_server(*id));
+            drop(inner.teardown_server(*id, &self.server_tasks, &self.conn_stats));
         }
 
         // Set mode to Idle if no more servers and no clients
@@ -2160,7 +2227,10 @@ impl AppState {
         server_id: ServerId,
         connection: super::server::ConnectionState,
     ) {
-        if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
+        let mut inner = self.inner.write().await;
+        // Counters reported under this id before it was registered belong to nothing.
+        lock_unpoisoned(&self.conn_stats).remove(&(server_id, connection.id));
+        if let Some(server) = inner.servers.get_mut(&server_id) {
             server.add_connection(connection);
         }
     }
@@ -2206,6 +2276,8 @@ impl AppState {
     ) {
         {
             let mut inner = self.inner.write().await;
+            // The closed-connection summary `remove_connection` keeps carries the counters.
+            self.fold_conn_stats(&mut inner);
             if let Some(server) = inner.servers.get_mut(&server_id) {
                 server.remove_connection(connection_id);
             }
@@ -2488,23 +2560,16 @@ impl AppState {
         packets_received: Option<u64>,
         packets_sent: Option<u64>,
     ) {
-        if let Some(server) = self.inner.write().await.servers.get_mut(&server_id) {
-            if let Some(conn) = server.connections.get_mut(&connection_id) {
-                if let Some(br) = bytes_received {
-                    conn.bytes_received += br;
-                }
-                if let Some(bs) = bytes_sent {
-                    conn.bytes_sent += bs;
-                }
-                if let Some(pr) = packets_received {
-                    conn.packets_received += pr;
-                }
-                if let Some(ps) = packets_sent {
-                    conn.packets_sent += ps;
-                }
-                conn.last_activity = crate::utils::clock::Instant::now();
-            }
-        }
+        // Accumulated outside `inner` and folded in later; see `conn_stats`. A counter for a
+        // connection the server never registered is dropped at the next fold.
+        let now = crate::utils::clock::Instant::now();
+        let mut pending = lock_unpoisoned(&self.conn_stats);
+        let stats = pending.entry((server_id, connection_id)).or_default();
+        stats.bytes_received += bytes_received.unwrap_or(0);
+        stats.bytes_sent += bytes_sent.unwrap_or(0);
+        stats.packets_received += packets_received.unwrap_or(0);
+        stats.packets_sent += packets_sent.unwrap_or(0);
+        stats.last_activity = Some(now);
     }
 
     /// Update connection status
@@ -2675,8 +2740,8 @@ impl AppState {
             let mut inner = self.inner.write().await;
             let client = inner.clients.remove(&id);
             inner.client_llm_calls.remove(&id);
-            inner
-                .access_activity
+            lock_unpoisoned(&self.access_log)
+                .activity
                 .remove(&AccessLogOwner::Client(id.as_u32()));
             inner.reap_intercepts(
                 crate::state::intercepts::InterceptOwner::Client(id),
@@ -2964,141 +3029,6 @@ impl AppState {
         }
     }
 
-    // ========== Easy Protocol Management ==========
-
-    /// Add a new easy protocol instance
-    pub async fn add_easy_instance(&self, mut easy_instance: EasyInstance) -> EasyId {
-        let mut inner = self.inner.write().await;
-        let id = EasyId::new(inner.next_unified_id);
-        inner.next_unified_id += 1;
-        easy_instance.id = id;
-        inner.easy_instances.insert(id, easy_instance);
-        id
-    }
-
-    /// Remove an easy protocol instance
-    pub async fn remove_easy_instance(&self, id: EasyId) -> Option<EasyInstance> {
-        let mut inner = self.inner.write().await;
-        let instance = inner.easy_instances.remove(&id);
-
-        // Remove from routing maps if present
-        if let Some(ref inst) = instance {
-            if let Some(server_id) = inst.underlying_server_id {
-                inner.server_to_easy.remove(&server_id);
-            }
-            if let Some(client_id) = inst.underlying_client_id {
-                inner.client_to_easy.remove(&client_id);
-            }
-        }
-
-        instance
-    }
-
-    /// Link an underlying server to an easy protocol instance (for event routing)
-    pub async fn link_server_to_easy(&self, server_id: ServerId, easy_id: EasyId) {
-        let mut inner = self.inner.write().await;
-        inner.server_to_easy.insert(server_id, easy_id);
-        if let Some(easy_instance) = inner.easy_instances.get_mut(&easy_id) {
-            easy_instance.set_underlying_server(server_id);
-        }
-    }
-
-    /// Link an underlying client to an easy protocol instance (for event routing)
-    pub async fn link_client_to_easy(&self, client_id: ClientId, easy_id: EasyId) {
-        let mut inner = self.inner.write().await;
-        inner.client_to_easy.insert(client_id, easy_id);
-        if let Some(easy_instance) = inner.easy_instances.get_mut(&easy_id) {
-            easy_instance.set_underlying_client(client_id);
-        }
-    }
-
-    /// Get easy ID for a given server ID (returns None if server is not managed by an easy protocol)
-    pub async fn get_easy_for_server(&self, server_id: ServerId) -> Option<EasyId> {
-        self.inner
-            .read()
-            .await
-            .server_to_easy
-            .get(&server_id)
-            .copied()
-    }
-
-    /// Get easy ID for a given client ID (returns None if client is not managed by an easy protocol)
-    pub async fn get_easy_for_client(&self, client_id: ClientId) -> Option<EasyId> {
-        self.inner
-            .read()
-            .await
-            .client_to_easy
-            .get(&client_id)
-            .copied()
-    }
-
-    /// Get easy protocol instance
-    pub async fn get_easy_instance(&self, id: EasyId) -> Option<EasyInstance> {
-        // Note: EasyInstance doesn't impl Clone because it contains JoinHandle
-        // Instead we provide specific access methods
-        self.inner.read().await.easy_instances.get(&id).map(|inst| {
-            // Clone all fields except JoinHandle
-            let mut cloned = EasyInstance::new(
-                inst.id,
-                inst.protocol_name.clone(),
-                inst.underlying_protocol.clone(),
-                inst.user_instruction.clone(),
-            );
-            cloned.underlying_server_id = inst.underlying_server_id;
-            cloned.underlying_client_id = inst.underlying_client_id;
-            cloned.status = inst.status.clone();
-            cloned.created_at = inst.created_at;
-            cloned.status_changed_at = inst.status_changed_at;
-            // Note: handle is NOT cloned (cannot clone JoinHandle)
-            cloned
-        })
-    }
-
-    /// Update easy protocol status
-    pub async fn update_easy_status(&self, id: EasyId, status: EasyStatus) {
-        if let Some(instance) = self.inner.write().await.easy_instances.get_mut(&id) {
-            instance.set_status(status);
-        }
-    }
-
-    /// Get all easy protocol instances
-    pub async fn get_all_easy_instances(&self) -> Vec<EasyInstance> {
-        self.inner
-            .read()
-            .await
-            .easy_instances
-            .values()
-            .map(|inst| {
-                // Clone all fields except JoinHandle
-                let mut cloned = EasyInstance::new(
-                    inst.id,
-                    inst.protocol_name.clone(),
-                    inst.underlying_protocol.clone(),
-                    inst.user_instruction.clone(),
-                );
-                cloned.underlying_server_id = inst.underlying_server_id;
-                cloned.underlying_client_id = inst.underlying_client_id;
-                cloned.status = inst.status.clone();
-                cloned.created_at = inst.created_at;
-                cloned.status_changed_at = inst.status_changed_at;
-                cloned
-            })
-            .collect()
-    }
-
-    /// Execute a closure with mutable access to an easy instance
-    pub async fn with_easy_mut<F, R>(&self, easy_id: EasyId, f: F) -> Option<R>
-    where
-        F: FnOnce(&mut EasyInstance) -> R,
-    {
-        self.inner
-            .write()
-            .await
-            .easy_instances
-            .get_mut(&easy_id)
-            .map(f)
-    }
-
     // ========== Backwards Compatibility Methods ==========
     // These methods help bridge old single-server code to new multi-server architecture
     // They typically operate on "the first server" or aggregate across all servers.
@@ -3177,7 +3107,20 @@ impl AppState {
     where
         F: FnOnce(&mut ServerInstance) -> R,
     {
-        self.inner.write().await.servers.get_mut(&server_id).map(f)
+        let mut inner = self.inner.write().await;
+        self.fold_conn_stats(&mut inner);
+        inner.servers.get_mut(&server_id).map(f)
+    }
+
+    /// Execute a closure with read access to a server. Prefer this to [`Self::with_server_mut`]
+    /// for anything that only reads: it shares the lock instead of taking it exclusively.
+    /// Connection counters in the closure's view may lag by what has not been folded in yet;
+    /// [`Self::get_server`] is exact.
+    pub async fn with_server<F, R>(&self, server_id: ServerId, f: F) -> Option<R>
+    where
+        F: FnOnce(&ServerInstance) -> R,
+    {
+        self.inner.read().await.servers.get(&server_id).map(f)
     }
 
     // ===== Task Management Methods =====
@@ -3669,9 +3612,12 @@ impl AppState {
             AccessLogOwner::Client(id) => (None, Some(id)),
         };
 
-        let mut inner = self.inner.write().await;
-
-        if history {
+        // The costly part of a history entry is rendering it; do that before any lock, and
+        // only for an owner that keeps history on this connection.
+        if history && self.history_wanted(owner, connection_id).await {
+            let entry =
+                crate::state::exchange_history::RenderedEntry::new(event_type, &request, &response);
+            let mut inner = self.inner.write().await;
             // The same exchange, into the connection's history — every event the access log sees
             // is one the model may need to know happened, whoever answered it. Only for a
             // connection the server still holds: an id it has removed (or never registered) would
@@ -3688,39 +3634,21 @@ impl AppState {
                                 .exchange_history
                                 .entry(conn)
                                 .or_default()
-                                .record(event_type, &request, &response, limit);
+                                .record_rendered(entry, limit);
                         }
                     }
                 }
                 AccessLogOwner::Client(cid) => {
                     if let Some(client) = inner.clients.get_mut(&ClientId::new(cid)) {
                         let limit = client.history_entries;
-                        client
-                            .exchange_history
-                            .record(event_type, &request, &response, limit);
+                        client.exchange_history.record_rendered(entry, limit);
                     }
                 }
             }
         }
 
-        let activity = inner.access_activity.entry(owner).or_default();
-        if event_type == INJECTED_ACTION_EVENT {
-            // The entry's request is the action itself; its response is usually empty.
-            activity.injected += 1;
-        } else {
-            activity.events += 1;
-            activity.actions += response.len() as u64;
-            *activity
-                .answered_by
-                .entry(answered_by.unwrap_or("unrecorded").to_string())
-                .or_default() += 1;
-        }
-        activity.last_unix_ms = Some(unix_ms);
-
-        let id = inner.next_access_log_id;
-        inner.next_access_log_id += 1;
-        inner.access_logs.push_back(AccessLogEntry {
-            id,
+        let entry = AccessLogEntry {
+            id: 0,
             unix_ms,
             server_id,
             client_id,
@@ -3730,10 +3658,37 @@ impl AppState {
             request,
             response,
             answered_by: answered_by.map(str::to_string),
-        });
-        while inner.access_logs.len() > ACCESS_LOG_CAPACITY {
-            inner.access_logs.pop_front();
-        }
+        };
+        let id = {
+            let mut log = lock_unpoisoned(&self.access_log);
+            let activity = log.activity.entry(owner).or_default();
+            if entry.event_type == INJECTED_ACTION_EVENT {
+                // The entry's request is the action itself; its response is usually empty.
+                activity.injected += 1;
+            } else {
+                activity.events += 1;
+                activity.actions += entry.response.len() as u64;
+                *activity
+                    .answered_by
+                    .entry(
+                        entry
+                            .answered_by
+                            .as_deref()
+                            .unwrap_or("unrecorded")
+                            .to_string(),
+                    )
+                    .or_default() += 1;
+            }
+            activity.last_unix_ms = Some(unix_ms);
+            log.recorded += 1;
+            let id = log.recorded;
+            log.entries
+                .push_back(Arc::new(AccessLogEntry { id, ..entry }));
+            while log.entries.len() > ACCESS_LOG_CAPACITY {
+                log.entries.pop_front();
+            }
+            id
+        };
         self.event_journal.publish(
             crate::events::journal::ACCESS_RECORDED,
             serde_json::json!({
@@ -3742,6 +3697,29 @@ impl AppState {
             }),
         );
         id
+    }
+
+    /// Whether an exchange for this owner and connection would be kept in history, so the
+    /// entry is worth rendering. Checked again under the write lock before it is appended.
+    async fn history_wanted(&self, owner: AccessLogOwner, connection_id: Option<u32>) -> bool {
+        let inner = self.inner.read().await;
+        match owner {
+            AccessLogOwner::Server(sid) => connection_id.is_some_and(|conn| {
+                inner
+                    .servers
+                    .get(&ServerId::new(sid))
+                    .is_some_and(|server| {
+                        server.history_entries > 0
+                            && server
+                                .connections
+                                .contains_key(&crate::server::connection::ConnectionId::new(conn))
+                    })
+            }),
+            AccessLogOwner::Client(cid) => inner
+                .clients
+                .get(&ClientId::new(cid))
+                .is_some_and(|client| client.history_entries > 0),
+        }
     }
 
     /// The history block to show the model ahead of an event on this server connection, or
@@ -3995,7 +3973,7 @@ impl AppState {
     /// injected action. Unlike the ring buffer this never shrinks, so it is a monotonic count
     /// of handled events for the life of the process (`--exit-after-events` reads it).
     pub async fn access_log_total(&self) -> u64 {
-        self.inner.read().await.next_access_log_id.saturating_sub(1)
+        lock_unpoisoned(&self.access_log).recorded
     }
 
     /// Return the most recent access-log entries, newest first (up to `limit`).
@@ -4011,24 +3989,23 @@ impl AppState {
         owner: Option<AccessLogOwner>,
         limit: Option<usize>,
     ) -> Vec<AccessLogEntry> {
-        let inner = self.inner.read().await;
         let take = limit.unwrap_or(ACCESS_LOG_CAPACITY);
-        inner
-            .access_logs
+        let shared: Vec<Arc<AccessLogEntry>> = lock_unpoisoned(&self.access_log)
+            .entries
             .iter()
             .rev()
             .filter(|entry| owner.is_none() || entry.owner() == owner)
             .take(take)
             .cloned()
-            .collect()
+            .collect();
+        // The deep copy happens here, with no lock held.
+        shared.iter().map(|entry| (**entry).clone()).collect()
     }
 
     /// What one instance's access log has recorded over its life (zeroes if nothing yet).
     pub async fn access_activity(&self, owner: AccessLogOwner) -> AccessActivity {
-        self.inner
-            .read()
-            .await
-            .access_activity
+        lock_unpoisoned(&self.access_log)
+            .activity
             .get(&owner)
             .cloned()
             .unwrap_or_default()
@@ -4036,8 +4013,12 @@ impl AppState {
 
     /// Look up a single access-log entry by id.
     pub async fn get_access_log(&self, id: u64) -> Option<AccessLogEntry> {
-        let inner = self.inner.read().await;
-        inner.access_logs.iter().find(|e| e.id == id).cloned()
+        let entry = lock_unpoisoned(&self.access_log)
+            .entries
+            .iter()
+            .find(|e| e.id == id)
+            .cloned();
+        entry.map(|entry| (*entry).clone())
     }
 
     // ===== LLM Token Tracking Methods =====
@@ -4193,6 +4174,9 @@ impl AppState {
     /// which properly assigns server IDs.
     pub async fn add_server_with_id(&self, server: ServerInstance) {
         let mut inner = self.inner.write().await;
+        lock_unpoisoned(&self.server_tasks)
+            .entry(server.id)
+            .or_default();
         inner.servers.insert(server.id, server);
 
         // Set mode to Server if this is the first server

@@ -1,6 +1,6 @@
 # Selected Nostr client
 
-Experimental NIP-01 client beside the existing programmable relay. Native WS and WSS use one WebSocket connection; WSS verifies the host certificate with Rustls and WebPKI roots. Browser transport supports WS. A path is allowed; URL credentials, query and fragment are refused. Default connect/write/publish-OK/NIP-11 deadline is15 seconds, configurable1..30. There is no idle subscription deadline or automatic reconnect/replay.
+NIP-01 client beside the existing programmable relay. Native WS and WSS use one WebSocket connection; WSS verifies the host certificate with Rustls and WebPKI roots. Browser transport supports WS. A path is allowed; URL credentials, query and fragment are refused. Default connect/write/publish-OK/NIP-11 deadline is15 seconds, configurable1..30. There is no idle subscription deadline or automatic reconnect/replay.
 
 The model chooses public event content and filters. NetGet signs with one startup secret_key, or a fresh generated identity, using the existing pure RelayKey SHA256/BIP-340 implementation. The key never enters actions, events, status, diagnostic text or the handler prompt; owned task contexts discard their private startup parameter copy. nostr_connected includes only the public signing identity. No key file/helper, arbitrary private-key action, supplied id/signature or raw WebSocket action is offered.
 
@@ -22,8 +22,19 @@ Bounds:128KiB messages/frames/NIP-11 bodies,64KiB content,2000 tags of1..32 stri
 
 Two registered owned tasks: session and event dispatcher. The command channel exists before connected/manual dispatch. Queues8 and four handler followups bound retention/work; queue overflow ends the session explicitly. Relay reads/pings continue during manual/model handling and a pending owned NIP-11 future. Pending writes have whole deadlines and service queued disconnects; other commands refuse while writing. Removal aborts both tasks and owned socket/HTTP futures. Local shape/cap errors refuse without wire side effects; malformed/binary/invalidly-signed relay data fails the session with fixed diagnostics. Shared AppState memory and ordinary event rules remain the only generic memory mechanism.
 
-Independent required peers: nak0.20.7 (fiatjaf.com/nostr and coder/websocket; no shared framing or crypto) as an owned in-memory relay and CLI producer/consumer/verifier; rust-nostr0.45.1 through Python nostr_sdk fetches and verifies the client's public event. Existing relay-server tests retain independent nak/SDK and Wireshark evidence. Client tests include real static/script/model/injection paths, shared memory, a NetGet pair, native auth-required refusal and cancellation. No skip-if-missing peers. Experimental does not claim complete Nostr/NIP coverage, positive WSS/browser runtime evidence or client capture/conformance.
+Independent required peers: nak0.20.7 (fiatjaf.com/nostr and coder/websocket; no shared framing or crypto) as an owned in-memory relay and CLI producer/consumer/verifier; rust-nostr0.45.1 through Python nostr_sdk fetches and verifies the client's public event. Existing relay-server tests retain independent nak/SDK and Wireshark evidence. Client tests include real static/script/model/injection paths, shared memory, a NetGet pair, native auth-required refusal and cancellation. No skip-if-missing peers. No claim of complete Nostr/NIP coverage, positive WSS/browser runtime evidence or client capture/conformance.
 
 Primary specifications: [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md), [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md), [pinned nak serve source](https://github.com/fiatjaf/nak/blob/v0.20.7/serve.go). Verification is under tests/client/nostr; run the programme Cargo guard.
 
 Batching is On: relay messages raised while the model answers wait in the dispatcher queue (8), and with batching on the dispatcher drains everything waiting into one call_llm_for_client_batch call, one event each; off, one event per call. Each received event carries its own id and subscription, and a batch's follow-ups are as deep as its deepest event, so the four-followup bound holds. Draining also empties sooner the queue whose overflow ends the session. tests/client/nostr/batching_test.rs is the off/on pair.
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/nostr/`:
+
+1. the peer is nak 0.20.7 as relay and CLI, and rust-nostr's nostr_sdk — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: `nak` fetches from the relay, by author, the note the mocked model published, and verifies its signature. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

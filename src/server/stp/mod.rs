@@ -42,6 +42,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::{console_debug, console_error, console_info, console_trace};
@@ -566,8 +567,7 @@ impl StpServer {
         {
             Ok(execution_result) => {
                 for message in &execution_result.messages {
-                    info!("{}", message);
-                    let _ = status_tx.send(format!("[INFO] {}", message));
+                    Log::to(&status_tx).info(message);
                 }
 
                 let mut frames_sent = 0usize;

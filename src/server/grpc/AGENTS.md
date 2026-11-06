@@ -265,7 +265,7 @@ first test hang for its whole 70-second window and fail.
 - **Schema is fixed at startup.** `descriptor_pool` is an immutable `Arc` with no reload path.
 - Legacy unary accepts methods other than POST; new streaming/reflection routes require POST
   and application/grpc over HTTP/2.
-- Receiver TLS, mTLS, token checking, streaming retries, fuzzing and pcap evidence are unproved.
+- Receiver TLS, mTLS, token checking and streaming retries are unproved. The pcap oracle reads the two grpcurl unary calls only (not streaming, gzip or reflection), and `fuzz/fuzz_targets/grpc_message.rs` fuzzes the unary decode path (`decode_grpc_frame`, `DynamicMessage::decode`, `value_codec`) against a recursive schema.
 - The three async actions `reload_schema`, `list_services` and `describe_method` have been
   **removed**. All three built an `ActionResult::Custom` that no consumer matched, so they did
   nothing on any path, and `reload_schema` was unimplementable against an immutable pool.

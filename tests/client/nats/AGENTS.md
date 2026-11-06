@@ -13,8 +13,8 @@
 ## The test the rating rests on
 
 `test_nats_client_round_trips_through_the_official_nats_server` is the only test here with
-independent peers at **both** ends. The official Go `nats-server` (spawned on an ephemeral
-loopback port with `-a 127.0.0.1 -p -1`) routes the traffic, and `async-nats` 0.50 is the
+independent peers at **both** ends. The official Go `nats-server` (spawned on a loopback port
+through `tests/helpers/real_server.rs`) routes the traffic, and `async-nats` 0.50 is the
 client that sends the request and reads the reply. NetGet is in the middle and is the only
 thing under test.
 
@@ -36,7 +36,7 @@ The reply **quotes the request** (`"the model saw: ping from async-nats"`), buil
 
 ### It hard-fails when the binary is missing
 
-`RealNatsServer::start()` returns an `Err` naming the reason. It deliberately does **not**
+`official_nats_server()` returns an `Err` naming the binary and its package. It deliberately does **not**
 print `SKIP: nats-server is not installed` and return `Ok(())` — on a runner without the binary
 that is a silent pass, and this client's rating would then rest on nothing. That gate is
 exactly what keeps `kubernetes`, `oci_registry`, `maven` and `websocket` at Experimental;
@@ -65,10 +65,19 @@ accepted at all.
 
 ### Process hygiene
 
-`RealNatsServer` kills and reaps the child in `Drop`, so a panicking assertion cannot leak a
-broker into later runs. The port comes from `-p -1` and is read back out of the startup log
-rather than picked by binding a probe socket, so there is no window in which another test can
-take it.
+Both real-broker tests (`e2e_test.rs` and `jetstream_test.rs`) start `nats-server` through
+`RealServer`, which kills it on every exit path including a panic, retries on a fresh port if
+another process took the probed one, and counts it ready only once its log says
+`Server is ready` **and** a TCP connect succeeds.
+
+`RealServer` also drains the broker's stdout and stderr for as long as it runs, and that is the
+part that matters. `nats-server` is a Go program, and a Go program that writes to a closed
+stderr pipe dies of SIGPIPE. A helper that reads stderr only up to
+`Listening for client connections` and then drops the pipe leaves the broker to die on its next
+log line — normally the `Server is ready` written microseconds later — and on CI that refused the
+peer's connect in 4 of 30 `registry-audit` runs. Measured locally: with the read end closed, the first log line after it
+(a `-D` connection notice) kills `nats-server` with signal 13 and the next connect is refused.
+Never start a Go peer with a piped stderr that nothing reads.
 
 ## The three same-project tests, and what they are worth
 

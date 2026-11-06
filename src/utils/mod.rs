@@ -11,6 +11,7 @@ pub mod gre;
 pub mod json_budget;
 pub mod line_reader;
 pub mod mptcp;
+pub mod outbox;
 pub mod redact;
 pub mod redis_keys;
 pub mod resp;

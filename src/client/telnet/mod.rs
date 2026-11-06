@@ -43,8 +43,7 @@ const SE: u8 = 240; // Subnegotiation End
 ///
 /// The server-side machine exists because a server has two LLM entry points and genuinely can
 /// be re-entered. Copying its shape here bought nothing and described a concurrency this
-/// client does not have. (The root `CLAUDE.md` notes the same thing about
-/// `state/machine.rs`: a generic `StateMachine<S>` nothing uses, hand-rolled everywhere.)
+/// client does not have.
 struct ClientData {
     memory: String,
 }

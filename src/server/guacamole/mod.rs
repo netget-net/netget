@@ -22,7 +22,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use wire::Instruction;
 
 /// The handshake, select to connect, must finish within this.
@@ -481,7 +480,13 @@ async fn session(
     }
 
     // One writer, fed by the session and by a keepalive, so a slow model never starves it.
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    // Bounded: every `clipboard` and `blob` instruction is acknowledged at once, so a client
+    // that sends without reading is cut off rather than queued for (`utils::outbox`).
+    let (tx, mut rx) = crate::utils::outbox::channel(
+        format!("Guacamole connection {id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+        String::len,
+    );
     let _ = tx.send(out);
     let writer_ctx = ctx.clone();
     ctx.state
@@ -564,7 +569,7 @@ fn instruction(
     line: &mut String,
     mask: &mut u32,
     streams: &mut HashMap<String, Vec<u8>>,
-    tx: &mpsc::UnboundedSender<String>,
+    tx: &crate::utils::outbox::OutboxSender<String>,
 ) -> Result<Option<(&'static EventType, Value)>> {
     Ok(match ins.opcode.as_str() {
         "key" if ins.arg(1) == "1" => {
@@ -648,7 +653,7 @@ fn instruction(
 fn inject(
     d: &mut Display,
     command: ClientCommand,
-    tx: &mpsc::UnboundedSender<String>,
+    tx: &crate::utils::outbox::OutboxSender<String>,
     log: &Log,
 ) -> bool {
     let action = command.action.clone();

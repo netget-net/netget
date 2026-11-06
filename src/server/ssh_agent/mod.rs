@@ -20,6 +20,7 @@ use super::connection::ConnectionId;
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ActionResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::SshAgentProtocol;
 use crate::state::app_state::AppState;
@@ -436,11 +437,8 @@ impl SshAgentServer {
                     Err(e) => {
                         // A listener error (EMFILE, the socket torn down) recurs immediately,
                         // so continuing would spin a hot loop flooding the status channel.
-                        error!("SSH Agent accept failed, listener stopped: {}", e);
-                        let _ = status_tx.send(format!(
-                            "[ERROR] SSH Agent accept failed, listener stopped: {}",
-                            e
-                        ));
+                        Log::to(&status_tx)
+                            .error(format!("SSH Agent accept failed, listener stopped: {}", e));
                         break;
                     }
                 }

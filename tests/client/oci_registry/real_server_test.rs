@@ -253,3 +253,66 @@ async fn native_https_refuses_an_independent_untrusted_certificate() -> crate::h
     );
     Ok(())
 }
+
+/// Condition 4 of the client bar, from the registry's side: the mocked model lists the tags
+/// crane's registry holds, picks `second` out of that listing, and fetches its manifest. The
+/// registry's own request log shows that fetch, and the digest the client verified is the one
+/// of the manifest the test pushed.
+#[tokio::test]
+async fn mocked_model_picks_a_tag_from_the_listing_and_crane_serves_its_manifest(
+) -> crate::helpers::E2EResult<()> {
+    use crate::helpers::{mock_builder::MockLlmBuilder, mock_ollama::MockOllamaServer};
+    let peer = daemon().await?;
+    let origin = format!("http://{}", peer.addr());
+    let (manifest, _, _) = seed(&origin).await;
+    let config = MockLlmBuilder::new()
+        .on_event("oci_connected")
+        .respond_with_actions(json!([
+            {"type":"oci_request","operation":"tags","repository":"library/demo"}
+        ]))
+        .expect_calls(1)
+        .and()
+        .on_event("oci_result")
+        .and_event_data_contains("operation", "tags")
+        .and_event_data_contains("data", "second")
+        .respond_with_actions(json!([
+            {"type":"oci_request","operation":"manifest","repository":"library/demo","reference":"second"}
+        ]))
+        .expect_calls(1)
+        .and()
+        .on_event("oci_result")
+        .and_event_data_contains("operation", "manifest")
+        .and_event_data_contains("reference", "second")
+        .and_event_data_contains("data", &manifest)
+        .respond_with_actions(json!([]))
+        .expect_calls(1)
+        .and()
+        .build();
+    let mock = MockOllamaServer::start(config).await?;
+    let state = netget::state::AppState::new_with_options(false, mock.base_url());
+    state.set_ollama_model(Some("mock".into())).await;
+    let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let id = netget::cli::management::ClientForm {
+        protocol: "oci-registry".into(),
+        remote_addr: Some(origin),
+        instruction: Some("List library/demo's tags and fetch the second one".into()),
+        ..Default::default()
+    }
+    .create(&state, netget::llm::OllamaClient::new(mock.base_url()), tx)
+    .await?;
+    mock.wait_for_expectations(30).await;
+    mock.verify_calls().await?;
+    let (tags_entry, _) = event(&state, id, "oci_result", 0).await;
+    let (_, result) = event(&state, id, "oci_result", tags_entry).await;
+    assert_eq!(result["operation"], "manifest", "{result}");
+    assert_eq!(result["reference"], "second", "{result}");
+    assert_eq!(result["data"]["digest"], manifest);
+    assert_eq!(result["data"]["digest_verified"], true);
+    assert!(
+        peer.log().contains("GET /v2/library/demo/manifests/second"),
+        "crane's registry did not log the model's manifest fetch: {}",
+        peer.log()
+    );
+    state.remove_client(id).await;
+    Ok(())
+}

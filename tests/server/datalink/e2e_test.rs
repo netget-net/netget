@@ -278,7 +278,10 @@ fn datalink_event_payload_decodes_a_loopback_frame_for_its_link_type() {
         .map(|p| p.name.clone())
         .collect();
     for key in data.as_object().unwrap().keys() {
-        assert!(declared.contains(key), "'{key}' is not declared: {declared:?}");
+        assert!(
+            declared.contains(key),
+            "'{key}' is not declared: {declared:?}"
+        );
     }
 }
 

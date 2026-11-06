@@ -348,7 +348,10 @@ async fn handle_connection(
     // the read loop can never interleave with one produced by an action running for a
     // different connection (a cross-connection Basic.Deliver, for instance). The writer
     // task is also the one place every outbound byte passes, so it owns the sent counters.
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = crate::utils::outbox::bytes_channel(
+        format!("AMQP connection {connection_id}"),
+        crate::utils::outbox::OutboxLimits::DEFAULT,
+    );
     let writer_status_tx = status_tx.clone();
     let writer_write_half = write_half.clone();
     let writer_state = app_state.clone();
@@ -489,7 +492,7 @@ struct Session {
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
     peer_addr: SocketAddr,
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     status_tx: mpsc::UnboundedSender<String>,
     app_state: Arc<AppState>,
     llm_client: OllamaClient,
@@ -1602,7 +1605,7 @@ enum HandlerOutcome {
 /// Periodically emit a heartbeat frame, at half the negotiated interval as the spec
 /// recommends. The task ends when the connection's writer channel is dropped.
 async fn spawn_heartbeat(
-    out_tx: mpsc::UnboundedSender<Vec<u8>>,
+    out_tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     heartbeat_secs: u16,
     app_state: Arc<AppState>,
     server_id: crate::state::ServerId,

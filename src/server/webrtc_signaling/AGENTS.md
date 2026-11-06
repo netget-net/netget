@@ -14,8 +14,9 @@
 >
 > The fix is a per-connection writer task. The sink is owned by that task; everything that
 > wants to write — this connection's read loop, and any other peer relaying towards it —
-> queues on an `mpsc::UnboundedSender<Message>` stored in the peer registry. The read loop
-> keeps running for the life of the connection.
+> queues on a bounded `utils::outbox::OutboxSender<Message>` stored in the peer registry (a
+> peer that stops reading while others relay to it is cut off at 4096 messages or 8 MiB).
+> The read loop keeps running for the life of the connection.
 >
 > Also fixed: the three event types called neither `.with_actions(...)` nor
 > `.with_no_actions()`, so `call_llm` offered the model nothing protocol-specific;
@@ -346,7 +347,7 @@ wire.
 
 Each connected peer is tracked with:
 - **peer_id**: Unique identifier (chosen by peer, unauthenticated)
-- **out_tx**: `mpsc::UnboundedSender<Message>` into that connection's writer task — *not*
+- **out_tx**: `utils::outbox::OutboxSender<Message>` into that connection's writer task — *not*
   the `SplitSink` itself. Storing the sink is what broke the relay; see the banner.
 - **remote_addr**: TCP address of peer
 - **connection_id**: NetGet connection tracking ID

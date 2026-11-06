@@ -21,7 +21,6 @@ use crate::protocol::{Event, EventLogContext};
 use crate::state::app_state::AppState;
 use crate::state::ServerId;
 use anyhow::{Context as AnyhowContext, Result};
-use std::sync::Arc;
 use tracing::{debug, error, warn};
 
 /// The offered actions that answer the peer: every protocol action, without any note-keeping
@@ -94,9 +93,6 @@ pub async fn call_llm_with_actions(
     custom_actions: Vec<ActionDefinition>,
     event_data: Option<serde_json::Value>,
 ) -> Result<ExecutionResult> {
-    // NOTE: Easy protocol handling is done in call_llm() since it requires an Event object
-    // This function (call_llm_with_actions) is for legacy code paths that don't have Event objects
-
     // TRY EVENT HANDLER FIRST if configured
     let event_type_id = crate::scripting::ScriptManager::extract_context_type(event_description);
 
@@ -143,7 +139,7 @@ pub async fn call_llm_with_actions(
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
-        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+        .with_server(server_id, |server| server.feedback_instructions.is_some())
         .await
         .unwrap_or(false);
 
@@ -510,9 +506,8 @@ pub async fn call_llm_batch(
     .await
 }
 
-/// Whether a batch may be answered by one model call: the instance batches, it is not driven
-/// by an easy-protocol layer, and no event in it matches a rule other than an `llm` one with
-/// the same instruction as the rest.
+/// Whether a batch may be answered by one model call: the instance batches, and no event in it
+/// matches a rule other than an `llm` one with the same instruction as the rest.
 ///
 /// Public because a protocol that owes one reply per message must know this *before* it
 /// collects a batch (`crate::server::command_batch::one_model_call_answers`): when it is false
@@ -527,7 +522,7 @@ pub async fn batch_goes_to_the_model(
         .server_conversation_settings(server_id)
         .await
         .is_some_and(|(_, batching)| batching);
-    if !batching || state.get_easy_for_server(server_id).await.is_some() {
+    if !batching {
         return false;
     }
     routes_to_one_model_call(
@@ -671,7 +666,7 @@ async fn call_llm_inner(
     // Get client address from connection state if available
     let client_addr = if let Some(conn_id) = connection_id {
         state
-            .with_server_mut(server_id, |server| {
+            .with_server(server_id, |server| {
                 server.connections.get(&conn_id).map(|c| c.remote_addr)
             })
             .await
@@ -706,51 +701,6 @@ async fn call_llm_inner(
     // spawned under a bounded semaphore inside `dispatch_pipes`, so this does not
     // block the response path.
     crate::pipe::dispatch_pipes(state, server_id, event).await;
-
-    // TRY EASY PROTOCOL HANDLER FIRST if this server is managed by an easy protocol
-    if let Some(easy_id) = state.get_easy_for_server(server_id).await {
-        use crate::protocol::EASY_REGISTRY;
-        if let Some(easy_instance) = state.get_easy_instance(easy_id).await {
-            if let Some(easy_protocol) = EASY_REGISTRY.get_by_name(&easy_instance.protocol_name) {
-                // Call Easy protocol handler
-                let actions = easy_protocol
-                    .handle_event(
-                        event.clone(),
-                        easy_instance.user_instruction.clone(),
-                        Arc::new(llm_client.clone()),
-                        Arc::new(state.clone()),
-                    )
-                    .await
-                    .context("Easy protocol handler failed")?;
-
-                // Execute actions and return result
-                let result = crate::llm::execute_actions(
-                    actions,
-                    state,
-                    Some(protocol),
-                    Some(server_id),
-                    None, // client_id
-                )
-                .await?;
-
-                // Log event completion
-                if !private_payloads {
-                    log_ctx.log_complete(event_status_tx, &result.protocol_results);
-                }
-                record_event_access_log(
-                    state,
-                    server_id,
-                    connection_id,
-                    protocol,
-                    event,
-                    &result,
-                    crate::state::app_state::answered_by::EASY,
-                )
-                .await;
-                return Ok(result);
-            }
-        }
-    }
 
     // TRY EVENT HANDLER FIRST if configured (includes scripts and static responses)
     let handler_instruction: Option<String>;
@@ -912,7 +862,7 @@ async fn call_llm_inner(
 
     // Add provide_feedback action only if server has feedback_instructions configured
     let has_feedback_instructions = state
-        .with_server_mut(server_id, |server| server.feedback_instructions.is_some())
+        .with_server(server_id, |server| server.feedback_instructions.is_some())
         .await
         .unwrap_or(false);
 

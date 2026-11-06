@@ -52,16 +52,21 @@ async fn cli(home: &Path, args: &[&str], input: Option<String>) -> (String, Stri
         .env_clear()
         .env("HOME", home)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .stdin(std::process::Stdio::piped())
+        // No input means no stdin at all: nak 0.21 reads events and filters from a piped
+        // stdin instead of its arguments, so an empty pipe would make it do nothing.
+        .stdin(if input.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn().expect("required nak CLI");
-    let mut stdin = child.stdin.take().unwrap();
     if let Some(input) = input {
+        let mut stdin = child.stdin.take().unwrap();
         stdin.write_all(input.as_bytes()).await.unwrap();
     }
-    drop(stdin);
     let output = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
         .await
         .expect("owned nak CLI deadline")
@@ -292,6 +297,33 @@ async fn mocked_model_selects_native_publish_and_common_memory_without_private_k
         state.get_memory_for_client(id).await.as_deref(),
         Some("Nostr shared memory")
     );
+    // Condition 4 from the relay's side: fiatjaf's `nak` fetches from `nak serve` the note the
+    // model chose, signed by the key the client was started with, and verifies it.
+    let (author, _) = cli(&peer.dir().join("home"), &["key", "public", SECRET], None).await;
+    let (stdout, _) = cli(
+        &peer.dir().join("home"),
+        &[
+            "req",
+            "-k",
+            "1",
+            "-a",
+            author.trim(),
+            "-l",
+            "5",
+            &format!("ws://{}", peer.addr()),
+        ],
+        None,
+    )
+    .await;
+    let stored = events(&stdout);
+    assert_eq!(stored.len(), 1, "{stdout}");
+    assert_eq!(stored[0]["content"], "model film");
+    cli(
+        &peer.dir().join("home"),
+        &["verify"],
+        Some(stored[0].to_string()),
+    )
+    .await;
     for call in mock.recorded_calls().await {
         assert!(!call.context.prompt.contains(SECRET));
     }

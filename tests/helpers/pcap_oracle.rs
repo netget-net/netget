@@ -273,6 +273,13 @@ pub struct PcapOracle {
     /// Extra dissector names accepted in `frame.protocols`, for the handful of
     /// cases where the chain names a sub-dissector rather than the `-d` target.
     extra_names: Vec<String>,
+    /// An NSS key log (`SSLKEYLOGFILE`) handed to tshark as `tls.keylog_file`, so a TLS
+    /// stream is decrypted and the protocol inside it dissected. See
+    /// [`PcapOracle::tls_keylog`].
+    keylog: Option<std::path::PathBuf>,
+    /// Dissectors that must appear in every direction that carried bytes. See
+    /// [`PcapOracle::require_named`].
+    required_names: Vec<String>,
 }
 
 impl PcapOracle {
@@ -312,6 +319,40 @@ impl PcapOracle {
             close_stream: true,
             peer_input_is_context: false,
             extra_names: Vec::new(),
+            keylog: None,
+            required_names: Vec::new(),
+        }
+    }
+
+    /// Decrypt TLS with the session secrets in `path`, an NSS key log as written by any
+    /// client that honours `SSLKEYLOGFILE` (GnuTLS, so `kdig`; OpenSSL 3.5's `s_client
+    /// -keylogfile`; NSS; rustls' `KeyLogFile`).
+    ///
+    /// Without it a TLS protocol's oracle judges only the record layer — the handshake and
+    /// ciphertext lengths — and says nothing about the bytes the server encrypted. With it,
+    /// tshark dissects the application data as the protocol it is (ALPN, or the port's TLS
+    /// registration), and an expert info inside it fails the oracle like any other. Pair it
+    /// with [`PcapOracle::require_named`], or a key log that did not match the session (a
+    /// client that ignored the variable, say) decrypts nothing and the oracle passes on the
+    /// record layer alone.
+    pub fn tls_keylog(mut self, path: &std::path::Path) -> Self {
+        self.keylog = Some(path.to_path_buf());
+        self
+    }
+
+    /// Require `name` in `frame.protocols` of what the server sent — the inner protocol of a
+    /// tunnel or of decrypted TLS, which the `wire_for` dissector check cannot see because the
+    /// outer one (`tls`) is present either way. Only the server's direction: a DoH GET carries
+    /// its query base64url-encoded in the request path, where no DNS dissector reads it.
+    pub fn require_named(mut self, name: &str) -> Self {
+        self.required_names.push(name.to_string());
+        self
+    }
+
+    fn tshark_options(&self) -> Vec<String> {
+        match &self.keylog {
+            Some(p) => vec!["-o".to_string(), format!("tls.keylog_file:{}", p.display())],
+            None => Vec::new(),
         }
     }
 
@@ -501,7 +542,7 @@ impl PcapOracle {
             Framing::Ethernet | Framing::IpProto(_) => None,
         });
 
-        let mut packets = dissect_file(&path, decode_as.as_deref())?;
+        let mut packets = dissect_file_with(&path, decode_as.as_deref(), &self.tshark_options())?;
         for p in &mut packets {
             p.dir = dirs
                 .get((p.number as usize).saturating_sub(1))
@@ -573,6 +614,39 @@ impl PcapOracle {
             }
         }
 
+        // 3. Every required inner dissector engaged in what NetGet sent.
+        for name in &self.required_names {
+            {
+                let want_dir = Dir::FromServer;
+                let carried = self
+                    .chunks
+                    .iter()
+                    .any(|(d, b)| *d == want_dir && !b.is_empty());
+                let seen = packets.iter().any(|p| {
+                    p.dir == Some(want_dir) && p.protocols.split(':').any(|tok| tok == name)
+                });
+                if carried && !seen {
+                    failures.push(format!(
+                        "no {} packet was dissected as `{name}`, which this oracle was told to \
+                         require{} (chains seen: {})",
+                        want_dir.label(),
+                        if self.keylog.is_some() {
+                            " — with a TLS key log, that usually means the log did not match \
+                             the session and nothing was decrypted"
+                        } else {
+                            ""
+                        },
+                        packets
+                            .iter()
+                            .filter(|p| p.dir == Some(want_dir))
+                            .map(|p| p.protocols.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
+        }
+
         Ok(PcapReport {
             packets,
             failures,
@@ -593,7 +667,10 @@ impl PcapOracle {
         std::fs::write(&path, &pcap).map_err(|e| format!("write pcap: {e}"))?;
         let wire = wire_for(&self.protocol);
         let mut cmd = Command::new("tshark");
-        cmd.arg("-r").arg(&path).arg("-n");
+        cmd.arg("-r")
+            .arg(&path)
+            .arg("-n")
+            .args(self.tshark_options());
         if let Some(name) = wire.decode_as {
             let clause = match self.framing {
                 Framing::Tcp => Some(format!("tcp.port=={},{}", self.port, name)),
@@ -910,13 +987,24 @@ pub fn dissect_file(
     path: &std::path::Path,
     decode_as: Option<&str>,
 ) -> Result<Vec<PacketVerdict>, String> {
+    dissect_file_with(path, decode_as, &[])
+}
+
+/// [`dissect_file`] with extra tshark arguments ahead of the field selection — `-o` preference
+/// overrides such as `tls.keylog_file:<path>`.
+pub fn dissect_file_with(
+    path: &std::path::Path,
+    decode_as: Option<&str>,
+    options: &[String],
+) -> Result<Vec<PacketVerdict>, String> {
     require_tshark();
     let mut cmd = Command::new("tshark");
     cmd.arg("-r")
         .arg(path)
         // No name resolution: a test must not perform a DNS lookup, and
         // resolution is the slowest thing tshark does.
-        .arg("-n");
+        .arg("-n")
+        .args(options);
     if let Some(d) = decode_as {
         cmd.arg("-d").arg(d);
     }

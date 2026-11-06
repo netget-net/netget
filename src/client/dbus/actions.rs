@@ -356,11 +356,11 @@ impl Protocol for DbusClientProtocol {
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation("The D-Bus server's wire codec (src/server/dbus/wire.rs) over a Unix socket or TCP: SASL EXTERNAL (as the process's uid) then ANONYMOUS, Hello, calls matched to replies by serial with a timeout, incoming calls answered by the model and failed closed when it does not, signals both ways")
             .llm_control("Which methods to call with which arguments, which names to own and signals to subscribe to, and the answer to every call made to it")
-            .e2e_testing("tests/client/dbus: dbus-daemon (the reference bus) with a python dbus-next service, dbus-send calling the names NetGet owns, and dbus-monitor; NetGet's own D-Bus server for the peer-to-peer path")
+            .e2e_testing("tests/client/dbus/real_server_test.rs on dbus-daemon (the reference bus) with a python dbus-next service and dbus-send: a handler chain calls Greet, then Record with the greeting the service returned, and the service's own file holds that text; dbus-send calls the names NetGet owns and the Announced signal arrives. NetGet's own D-Bus server covers the peer-to-peer path. Fails rather than skips without dbus-daemon, dbus-send or dbus-next")
             .notes("No Unix file descriptors and no DBUS_COOKIE_SHA1, so a TCP bus must allow ANONYMOUS. At most 64 calls await replies at once. Messages are bounded at 1 MiB and nesting at 32 like the server. Model turns follow from one another at most eight deep.")
             .max_inbound_bytes(wire::MAX_MESSAGE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))

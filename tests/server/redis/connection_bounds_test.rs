@@ -30,7 +30,7 @@
 //! answers. Loopback only.
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features redis --test server -- \
+//!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite --test server -- \
 //!       redis::connection_bounds --test-threads=100
 
 use std::time::Duration;
@@ -241,5 +241,121 @@ async fn the_default_leaves_a_silent_peer_alone_for_longer_than_a_person_takes()
              speak first"
         ),
         Ok(Err(e)) => panic!("read failed on a connection that should still be open: {e}"),
+    }
+}
+
+/// Every connection of server `id` the server counts as live.
+async fn active_connections(state: &AppState, id: ServerId) -> usize {
+    state
+        .get_server(id)
+        .await
+        .map(|s| {
+            s.connections
+                .values()
+                .filter(|c| c.status == netget::state::server::ConnectionStatus::Active)
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// One `PING` on `stream`, and whatever came back within five seconds.
+async fn ping_on(stream: &mut TcpStream) -> Vec<u8> {
+    if stream.write_all(b"*1\r\n$4\r\nPING\r\n").await.is_err() {
+        return Vec::new();
+    }
+    let mut buf = [0u8; 128];
+    match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
+        Ok(Ok(n)) => buf[..n].to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// `MAX_CONNECTIONS`: that many live peers are admitted, one more is told what real Redis says
+/// in the same situation and closed, and a peer that hangs up gives its slot back — a cap that
+/// only ever fills would be a countdown to refusing everyone.
+#[tokio::test]
+async fn the_connection_cap_refuses_one_past_it_and_a_closed_peer_frees_its_slot() {
+    use netget::server::redis::MAX_CONNECTIONS;
+
+    let state = new_state().await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let id = ServerForm {
+        protocol: "redis".to_string(),
+        port: Some(0),
+        instruction: Some(String::new()),
+        event_handlers: Some(vec![serde_json::json!({
+            "event_pattern": "redis_command",
+            "handler": {
+                "type": "static",
+                "actions": [{"type": "redis_simple_string", "value": "PONG"}]
+            }
+        })]),
+        ..Default::default()
+    }
+    .create(&state, tx)
+    .await
+    .expect("create redis server");
+    let port = wait_for_port(&state, id).await;
+
+    // Silent peers: the default first-byte bound is 300 seconds, so none of them is closed for
+    // idling while the test runs.
+    let mut held = Vec::with_capacity(MAX_CONNECTIONS);
+    for _ in 0..MAX_CONNECTIONS {
+        held.push(
+            TcpStream::connect(("127.0.0.1", port))
+                .await
+                .expect("connect"),
+        );
+    }
+    // All of them admitted before the next arrives, so the next is the one past the cap.
+    let admitted = tokio::time::timeout(Duration::from_secs(30), async {
+        while active_connections(&state, id).await < MAX_CONNECTIONS {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        admitted.is_ok(),
+        "only {} of {MAX_CONNECTIONS} connections were admitted",
+        active_connections(&state, id).await
+    );
+
+    let mut over = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let mut refusal = Vec::new();
+    let closed =
+        tokio::time::timeout(Duration::from_secs(10), over.read_to_end(&mut refusal)).await;
+    assert!(
+        closed.is_ok(),
+        "connection {} was neither refused nor closed: the cap of {MAX_CONNECTIONS} is not \
+         enforced",
+        MAX_CONNECTIONS + 1
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&refusal),
+        "-ERR max number of clients reached\r\n",
+        "the peer past the cap must be told, in real Redis's own words, why it was closed"
+    );
+
+    // The refusal cost an admitted peer nothing.
+    assert_eq!(ping_on(&mut held[0]).await, b"+PONG\r\n");
+
+    // Hang one up: its slot is returned once the server has seen it go.
+    drop(held.pop());
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut fresh = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        if ping_on(&mut fresh).await == b"+PONG\r\n" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a peer that hung up never gave its slot back: every new connection is still \
+             refused at the cap"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

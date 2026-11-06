@@ -139,3 +139,17 @@ Mutation-checked: compressing with a 15-bit window regardless of the negotiation
 test; keeping the compression context when no-context-takeover was agreed fails it too;
 removing the inflate bound fails the bomb test. CI: the `websocket-deflate-pairs` job in
 `protocol-pairs.yml`.
+
+## Stable conditions 2 and 3: the pcap oracle and the fuzz target
+
+**Condition 2.** `deflate_real_client_test.rs::python_websockets_reads_compressed_frames_from_netget`
+runs through a recording relay, and the pcap oracle reads the session with Wireshark's `http`
+and `websocket` dissectors — the upgrade, the 101 with its `Sec-WebSocket-Extensions`, and every
+frame after it, which tshark inflates itself. `require_named("websocket")` fails it if no frame
+was dissected. The other peers' sessions (node `ws`, websocat) are not captured.
+
+**Condition 3.** `fuzz/fuzz_targets/websocket_session.rs` drives the whole inbound stack —
+`parse_request_head`, `validate_upgrade`, `deflate::negotiate`, then `DeflateStream` under
+tungstenite's server-role decoder on an in-memory socket. WebSocket does not nest; the corpus
+carries a 64 MiB decompression bomb in one frame, a frame declaring 2^63 - 1 bytes and a
+20 000-fragment message. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 3 986 executions, no crash.

@@ -6,9 +6,9 @@
 //!   (FPOpenFork, FPGetForkParms, FPRead), a write (FPCreateFile, FPOpenFork, FPSetForkParms,
 //!   FPWrite) — and `asip-status`, which decodes FPGetSrvrInfo. Their AFP client library is
 //!   netatalk's own (`test/testsuite/afpcmd.c`), written against netatalk's server.
-//! - **Nmap's AFP library** (Lua, `nselib/afp.lua`): `afp-serverinfo`, `afp-showmount` and
-//!   `afp-ls`, logging in as a guest with No User Authent and listing with FPEnumerateExt2,
-//!   Unix privileges and dates.
+//! - **Nmap's AFP library** (Lua, `nselib/afp.lua`): `afp-serverinfo` and `afp-ls`, logging in
+//!   as a guest with No User Authent and listing every volume with FPEnumerateExt2, Unix
+//!   privileges and dates.
 //!
 //! They fail, rather than skip, when a peer is missing: `brew install netatalk nmap` on macOS;
 //! on Ubuntu `sudo apt-get install nmap` and `sh scripts/test-peers/build-netatalk.sh <dir>`
@@ -186,9 +186,10 @@ async fn nmaps_afp_scripts_read_the_server_and_list_a_volume_as_a_guest() -> E2E
     let s = support::start(support::policy(), json!({"server_name": "Studio"})).await;
     let (relay, streams) = recording_relay::tcp_relay(s.addr()).await;
     let port = relay.port();
-    // Nmap runs its AFP scripts on port 548 or a port its services file calls "afp". A data
-    // directory holding only that file overrides the services file and nothing else
-    // (`--servicedb` would also imply a fast scan, which refuses `-p`).
+    // afp-serverinfo and afp-ls run on port 548 or a port Nmap's services file calls "afp". A
+    // data directory holding only that file overrides the services file and nothing else
+    // (`--servicedb` would also imply a fast scan, which refuses `-p`). afp-showmount is not
+    // run: its portrule is `portnumber(548)` alone, so it never runs on an ephemeral port.
     let dir = tempfile::tempdir()?;
     std::fs::write(
         dir.path().join("nmap-services"),
@@ -199,9 +200,13 @@ async fn nmaps_afp_scripts_read_the_server_and_list_a_volume_as_a_guest() -> E2E
         .arg(dir.path())
         .args([
             "--script",
-            "afp-serverinfo,afp-showmount,afp-ls",
+            "afp-serverinfo,afp-ls",
+            // A guest login is asked for by name. Nmap 7.99 made `Helper:Login()` with no user
+            // default to DHCAST128 (nselib/afp.lua, "Add DHX2 UAM", September 2026), which
+            // this server refuses, and afp-ls then prints nothing; earlier versions ignore
+            // the argument and log in with No User Authent anyway.
             "--script-args",
-            "ls.maxfiles=0",
+            "ls.maxfiles=0,afp.uam=NoUserAuth",
             "127.0.0.1",
         ]);
     let out = run_tool(c, "nmap", NMAP).await?;
@@ -210,7 +215,7 @@ async fn nmaps_afp_scripts_read_the_server_and_list_a_volume_as_a_guest() -> E2E
     assert!(out.contains("Machine Type: NetGet"), "{out}");
     assert!(out.contains("UAMs: No User Authent"), "{out}");
     assert!(out.contains("AFP3.4"), "{out}");
-    // afp-showmount: both volumes. afp-ls: the root of each, with Unix modes and sizes.
+    // afp-ls: both volumes, and the root of each with Unix modes and sizes.
     assert!(out.contains("Share"), "{out}");
     assert!(out.contains("Archive"), "{out}");
     let line = |name: &str| {

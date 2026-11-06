@@ -34,8 +34,8 @@ fn default_log_level() -> String {
 /// terminal" - only trailing-argument prompts worked non-interactively, despite
 /// `cat prompt.txt | netget` being advertised in --help.
 ///
-/// Reading is lazy as well as once: `--mcp`, `--mcp-http`, `--simple`,
-/// `--client` and `--server` all return before either accessor is called, so
+/// Reading is lazy as well as once: `--mcp`, `--mcp-http`, `--client` and
+/// `--server` all return before either accessor is called, so
 /// stdin is never touched in the modes that need it for their own protocol. An
 /// interactive terminal is left alone entirely.
 ///
@@ -465,21 +465,6 @@ pub struct Args {
     )]
     pub mock_config_file: Option<std::path::PathBuf>,
 
-    /// Start a simple protocol (simplified LLM interface for "dumb" models)
-    #[clap(
-        long = "simple",
-        value_name = "PROTOCOL",
-        help = "Start a simple protocol server (e.g., http). Use --simple-list to see available protocols."
-    )]
-    pub simple_protocol: Option<String>,
-
-    /// List available simple protocols
-    #[clap(
-        long = "simple-list",
-        help = "List available simple protocols that can be started with --simple"
-    )]
-    pub simple_list: bool,
-
     /// Connect a protocol client to a remote server (non-interactive)
     #[clap(
         long = "client",
@@ -583,7 +568,7 @@ pub struct Args {
 
     /// Connect an agent to a running --mcp-http --llm-agent process. Emits compact
     /// requests as JSON lines on stdout and reads answers as JSON lines on stdin.
-    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "simple_protocol", "load_file", "llm_agent"])]
+    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "load_file", "llm_agent"])]
     pub agent_connect: Option<String>,
 
     /// Run as MCP STDIO server (for Claude Desktop/Code integration)

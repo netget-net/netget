@@ -1469,6 +1469,69 @@ write("gre_packet", "ends_inside_sequence", gre(0x6558, b"", key=1, seq=2)[:10])
 write("gre_packet", "routing_bit", bytes([0x40, 0, 0x65, 0x58]) + arp_request)
 write("gre_packet", "version_1", bytes([0x30, 1, 0x88, 0x0B, 0, 0, 0, 0, 0, 0, 0, 0]))
 
+
+# --- mysql_stmt_execute: COM_STMT_EXECUTE parameter blocks -----------------
+# Seed layout (see the target): count, flags (bit 0 = previous types follow), long-data
+# mask, [previous types], then the payload after the 0x17 command byte.
+def mysql_exec(count, payload, prev_types=None, long_mask=0):
+    head = bytes([count, 1 if prev_types is not None else 0, long_mask])
+    return head + (bytes(prev_types) if prev_types is not None else b"") + payload
+
+
+def mysql_exec_payload(stmt, nulls, types, values, bound=1):
+    p = struct.pack("<IBI", stmt, 0, 1)
+    if nulls:
+        bitmap = bytearray((len(nulls) + 7) // 8)
+        for i, n in enumerate(nulls):
+            if n:
+                bitmap[i // 8] |= 1 << (i % 8)
+        p += bytes(bitmap) + bytes([bound])
+        if bound:
+            p += bytes(types)
+    return p + values
+
+
+def mysql_lenenc_str(b):
+    if len(b) < 0xFB:
+        return bytes([len(b)]) + b
+    return b"\xfc" + struct.pack("<H", len(b)) + b
+
+
+MY_TYPES = [0x08, 0, 0x08, 0x80, 0x03, 0, 0x01, 0, 0x05, 0, 0x04, 0, 0xFD, 0, 0xF6, 0,
+            0x06, 0, 0x0C, 0, 0x0A, 0, 0x0B, 0, 0xFC, 0]
+MY_VALUES = (struct.pack("<q", 42) + struct.pack("<Q", 2**64 - 1) + struct.pack("<i", -7)
+             + b"\xff" + struct.pack("<d", 2.5) + struct.pack("<f", 0.1)
+             + mysql_lenenc_str("alice ⟩".encode()) + mysql_lenenc_str(b"12.50")
+             + bytes([11]) + struct.pack("<HBBBBBI", 2026, 10, 31, 12, 34, 56, 789)
+             + bytes([4]) + struct.pack("<HBB", 2026, 1, 2)
+             + bytes([12, 1]) + struct.pack("<IBBBI", 1, 2, 3, 4, 5)
+             + mysql_lenenc_str(b"\xff\xfe\x00" * 100))
+write("mysql_stmt_execute", "every_type",
+      mysql_exec(13, mysql_exec_payload(1, [False] * 13, MY_TYPES, MY_VALUES)))
+write("mysql_stmt_execute", "no_params", mysql_exec(0, mysql_exec_payload(2, [], [], b"")))
+write("mysql_stmt_execute", "rebound_types",
+      mysql_exec(2, mysql_exec_payload(3, [False, True], [], struct.pack("<i", 5), bound=0),
+                 prev_types=[0x03, 0, 0xFD, 0]))
+write("mysql_stmt_execute", "long_data",
+      mysql_exec(2, mysql_exec_payload(4, [False, False], [0x03, 0, 0xFC, 0],
+                                       struct.pack("<i", 9)), long_mask=0b10))
+write("mysql_stmt_execute", "many_nulls",
+      mysql_exec(200, mysql_exec_payload(5, [True] * 200, [0x06, 0] * 200, b"")))
+# The shapes that panic opensrv-mysql's ParamParser, and lying lengths.
+write("mysql_stmt_execute", "no_bitmap", mysql_exec(2, struct.pack("<IBI", 1, 0, 1)))
+write("mysql_stmt_execute", "short_types",
+      mysql_exec(2, struct.pack("<IBI", 1, 0, 1) + b"\x00\x01\x08\x00"))
+write("mysql_stmt_execute", "bad_type",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x42, 0], b"\x00" * 4)))
+write("mysql_stmt_execute", "never_bound",
+      mysql_exec(1, mysql_exec_payload(1, [False], [], b"\x00" * 8, bound=0)))
+write("mysql_stmt_execute", "u64_max_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0],
+                                       b"\xfe" + struct.pack("<Q", 2**64 - 1) + b"abc")))
+write("mysql_stmt_execute", "ff_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0], b"\xff\x00")))
+write("mysql_stmt_execute", "bad_temporal_length",
+      mysql_exec(1, mysql_exec_payload(1, [False], [0x0C, 0], b"\x05" + b"\x00" * 5)))
 # --- SNMP: the recursion rasn actually has --------------------------------
 # rasn 0.18 recurses on a *constructed OCTET STRING* (`24 80`), and `community` is one; the
 # `30 80` bomb above nests SEQUENCEs, which the guard refuses for the same reason but which
@@ -1590,6 +1653,382 @@ write("ctap2_cbor", "tag_depth_bomb", bytes([0xc6]) * 10000 + b"\x00")
 write("ctap2_cbor", "indefinite_array", bytes([0x9f, 0x01, 0x02, 0xff]))
 write("ctap2_cbor", "huge_declared_len", bytes([0x5b]) + b"\xff" * 8)
 write("ctap2_cbor", "huge_declared_count", bytes([0xbb, 0x7f]) + b"\xff" * 7)
+
+# --- Shared helpers for the W15 targets ----------------------------------------
+# Named apart from the protobuf helpers above: `pb_varint` is defined twice in this file with
+# two signatures, and the later one wins.
+import gzip
+import zlib
+
+
+def pbv(n):
+    """Protobuf base-128 varint (n >= 0)."""
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def pbld(field, payload):
+    return pbv((field << 3) | 2) + pbv(len(payload)) + payload
+
+
+def pbint(field, n):
+    return pbv(field << 3) + pbv(n)
+
+
+def grpc_frame(msg, declared=None):
+    n = len(msg) if declared is None else declared
+    return b"\x00" + struct.pack(">I", n) + msg
+
+
+def nest_bomb(levels, wrap):
+    """Build `levels` of nesting from the inside out without quadratic copying of the head."""
+    inner = b""
+    for _ in range(levels):
+        inner = wrap(inner)
+    return inner
+
+
+# --- MQTT: the broker's own decoder ---------------------------------------------
+def mqtt_varint(n):
+    out = bytearray()
+    while True:
+        b = n % 128
+        n //= 128
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def mqtt_str(s):
+    b = s.encode() if isinstance(s, str) else s
+    return struct.pack(">H", len(b)) + b
+
+
+def mqtt_pkt(first, body):
+    return bytes([first]) + mqtt_varint(len(body)) + body
+
+
+def mqtt_props(*entries):
+    body = b"".join(entries)
+    return mqtt_varint(len(body)) + body
+
+
+MQTT_CONNECT_311 = mqtt_pkt(0x10, mqtt_str("MQTT") + bytes([4, 0x02]) + struct.pack(">H", 60)
+                            + mqtt_str("fuzz-311"))
+MQTT_CONNECT_5 = mqtt_pkt(
+    0x10,
+    mqtt_str("MQTT") + bytes([5, 0xC6]) + struct.pack(">H", 30)
+    + mqtt_props(b"\x11" + struct.pack(">I", 120),            # session expiry
+                 b"\x21" + struct.pack(">H", 10),             # receive maximum
+                 b"\x27" + struct.pack(">I", 65536),          # maximum packet size
+                 b"\x26" + mqtt_str("k") + mqtt_str("v"))     # user property
+    + mqtt_str("fuzz-5")
+    + mqtt_props(b"\x18" + struct.pack(">I", 5))              # will delay interval
+    + mqtt_str("will/topic") + mqtt_str(b"gone")
+    + mqtt_str("user") + mqtt_str(b"pass"))
+write("mqtt_packet", "connect_311", MQTT_CONNECT_311)
+write("mqtt_packet", "connect_5_will_props", MQTT_CONNECT_5)
+write("mqtt_packet", "session_311",
+      MQTT_CONNECT_311
+      + mqtt_pkt(0x32, mqtt_str("a/b") + struct.pack(">H", 1) + b"payload")
+      + mqtt_pkt(0x82, struct.pack(">H", 2) + mqtt_str("a/#") + b"\x01" + mqtt_str("+/x") + b"\x00")
+      + mqtt_pkt(0xA2, struct.pack(">H", 3) + mqtt_str("a/#"))
+      + bytes([0xC0, 0x00]) + bytes([0xE0, 0x00]))
+write("mqtt_packet", "session_5",
+      MQTT_CONNECT_5
+      + mqtt_pkt(0x34, mqtt_str("t") + struct.pack(">H", 7)
+                 + mqtt_props(b"\x01\x01", b"\x03" + mqtt_str("text/plain"),
+                              b"\x23" + struct.pack(">H", 4), b"\x09" + mqtt_str(b"corr"))
+                 + b"{\"v\":1}")
+      + mqtt_pkt(0x82, struct.pack(">H", 8) + mqtt_props(b"\x0b" + mqtt_varint(17))
+                 + mqtt_str("s/+") + b"\x2e")
+      + mqtt_pkt(0xA2, struct.pack(">H", 9) + mqtt_props() + mqtt_str("s/+"))
+      + mqtt_pkt(0xE0, b"\x04" + mqtt_props(b"\x1f" + mqtt_str("bye"))))
+# Size lies: the varint's legal maximum (268 435 455), a five-byte varint, and v5 property
+# blocks whose declared length runs past their packet.
+write("mqtt_packet", "remaining_length_max", bytes([0x10, 0xFF, 0xFF, 0xFF, 0x7F]) + b"\x00" * 16)
+write("mqtt_packet", "remaining_length_five_bytes", bytes([0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]))
+write("mqtt_packet", "property_length_lie",
+      mqtt_pkt(0x10, mqtt_str("MQTT") + bytes([5, 0x02]) + struct.pack(">H", 30)
+               + mqtt_varint(0x0FFFFFFF) + b"\x11"))
+write("mqtt_packet", "string_length_lie",
+      MQTT_CONNECT_311 + mqtt_pkt(0x30, b"\xff\xff" + b"t"))
+write("mqtt_packet", "duplicate_properties",
+      mqtt_pkt(0x10, mqtt_str("MQTT") + bytes([5, 0x02]) + struct.pack(">H", 30)
+               + mqtt_props(*([b"\x26" + mqtt_str("k") + mqtt_str("v")] * 200
+                              + [b"\x11" + struct.pack(">I", 1)] * 2))
+               + mqtt_str("dup")))
+# The long axis: one SUBSCRIBE carrying 30 000 filters, under the 256 KiB packet cap.
+write("mqtt_packet", "subscribe_30000_filters",
+      MQTT_CONNECT_311 + mqtt_pkt(0x82, struct.pack(">H", 1)
+                                  + (mqtt_str("a") + b"\x00") * 30000))
+
+# --- Kafka: kafka-protocol's request decoders + NetGet's bounded batch decoder ----
+def k_str(s):
+    b = s.encode()
+    return struct.pack(">h", len(b)) + b
+
+
+def k_compact_str(s):
+    b = s.encode()
+    return pbv(len(b) + 1) + b
+
+
+def k_header(api_key, version, corr, flexible):
+    h = struct.pack(">hhi", api_key, version, corr) + k_str("fuzz")
+    return h + (b"\x00" if flexible else b"")
+
+
+def zz(n):
+    """Zigzag varint, as Kafka's record fields use."""
+    return pbv((n << 1) ^ (n >> 63) if n < 0 else n << 1)
+
+
+def k_record(value, key=None, offset_delta=0):
+    body = (b"\x00" + zz(0) + zz(offset_delta)
+            + (zz(-1) if key is None else zz(len(key)) + key)
+            + zz(len(value)) + value + zz(0))
+    return zz(len(body)) + body
+
+
+def crc32c_bytes(data):
+    return struct.pack(">I", crc32c_py(data))
+
+
+def k_batch(records_bytes, count, compression=0, record_count=None):
+    after_crc = (struct.pack(">hiqqqhi", compression, count - 1, 0, 0, -1, -1, -1)
+                 + struct.pack(">i", count if record_count is None else record_count)
+                 + records_bytes)
+    tail = struct.pack(">i", 0) + b"\x02" + crc32c_bytes(after_crc) + after_crc
+    return struct.pack(">q", 0) + struct.pack(">i", len(tail)) + tail
+
+
+def k_produce_v3(records):
+    body = (struct.pack(">h", -1) + struct.pack(">hi", 1, 30000)
+            + struct.pack(">i", 1) + k_str("orders")
+            + struct.pack(">i", 1) + struct.pack(">i", 0)
+            + struct.pack(">i", len(records)) + records)
+    return k_header(0, 3, 7, False) + body
+
+
+write("kafka_request", "api_versions_v3",
+      k_header(18, 3, 1, True) + k_compact_str("netget-fuzz") + k_compact_str("1.0") + b"\x00")
+write("kafka_request", "api_versions_v0", k_header(18, 0, 2, False))
+write("kafka_request", "metadata_v1",
+      k_header(3, 1, 3, False) + struct.pack(">i", 1) + k_str("orders"))
+write("kafka_request", "metadata_v1_all_topics", k_header(3, 1, 4, False) + struct.pack(">i", -1))
+write("kafka_request", "offset_commit_v2",
+      k_header(8, 2, 5, False) + k_str("group") + struct.pack(">i", 1) + k_str("member")
+      + struct.pack(">q", -1) + struct.pack(">i", 1) + k_str("orders")
+      + struct.pack(">i", 1) + struct.pack(">iq", 0, 42) + struct.pack(">h", -1))
+two_records = k_record(b"hello", key=b"k") + k_record(b"world", offset_delta=1)
+write("kafka_request", "produce_v3_plain", k_produce_v3(k_batch(two_records, 2)))
+write("kafka_request", "produce_v3_gzip",
+      k_produce_v3(k_batch(gzip.compress(two_records, mtime=0), 2, compression=1)))
+# The decompression bomb: one record of 64 MiB of zeros, gzipped to ~64 KiB. Four times
+# MAX_INFLATED_PRODUCE_BYTES, so decode_record_batches must refuse it as too large.
+bomb_record = k_record(b"\x00" * (64 * 1024 * 1024))
+write("kafka_request", "produce_gzip_inflation_bomb",
+      k_produce_v3(k_batch(gzip.compress(bomb_record, compresslevel=9, mtime=0), 1,
+                           compression=1)))
+del bomb_record
+# Size lies: an array count, a bytes length and a record count of i32::MAX.
+write("kafka_request", "metadata_topic_count_lie",
+      k_header(3, 1, 6, False) + struct.pack(">i", 0x7FFFFFFF) + k_str("x"))
+write("kafka_request", "produce_records_length_lie",
+      k_header(0, 3, 8, False) + struct.pack(">h", -1) + struct.pack(">hi", 1, 30000)
+      + struct.pack(">i", 1) + k_str("orders") + struct.pack(">i", 1) + struct.pack(">i", 0)
+      + struct.pack(">i", 0x7FFFFFFF) + b"\x00" * 16)
+write("kafka_request", "produce_record_count_lie",
+      k_produce_v3(k_batch(k_record(b"x"), 1, record_count=0x7FFFFFFF)))
+write("kafka_request", "api_versions_compact_length_lie",
+      k_header(18, 3, 9, True) + pbv(0x7FFFFFFF) + b"x")
+
+# --- etcd: unary_message + the generated prost decoders ---------------------------
+# The first byte picks the method: 0 Range, 1 Put, 2 DeleteRange, 3 Txn, 4 Compact.
+def etcd(method, msg, declared=None):
+    return bytes([method]) + grpc_frame(msg, declared)
+
+
+write("etcd_request", "range", etcd(0, pbld(1, b"/config/") + pbld(2, b"/config0")
+                                    + pbint(3, 10) + pbint(4, 0)))
+write("etcd_request", "put", etcd(1, pbld(1, b"k") + pbld(2, b"v") + pbint(3, 7) + pbint(4, 1)))
+write("etcd_request", "delete_range", etcd(2, pbld(1, b"k") + pbld(2, b"l") + pbint(3, 1)))
+compare = pbint(1, 0) + pbint(2, 3) + pbld(3, b"k") + pbld(7, b"v")
+write("etcd_request", "txn",
+      etcd(3, pbld(1, compare) + pbld(2, pbld(2, pbld(1, b"k") + pbld(2, b"v2")))
+           + pbld(3, pbld(1, pbld(1, b"k")))))
+write("etcd_request", "compact", etcd(4, pbint(1, 42) + pbint(2, 1)))
+# TxnRequest -> success RequestOp -> request_txn TxnRequest, 20 000 times: the depth bomb
+# prost's recursion limit refuses at 100.
+write("etcd_request", "txn_depth_bomb",
+      etcd(3, nest_bomb(20000, lambda inner: pbld(2, pbld(4, inner)))))
+# An unknown field (15) of wire type 3, as 20 000 nested groups.
+write("etcd_request", "txn_group_bomb", etcd(3, b"\x7b" * 20000 + b"\x7c" * 20000))
+write("etcd_request", "frame_length_lie", etcd(0, pbld(1, b"k"), declared=0xFFFFFFFF))
+write("etcd_request", "field_length_lie", etcd(1, b"\x0a" + pbv(0xFFFFFFFF) + b"k"))
+
+# --- gRPC: decode_grpc_frame + prost-reflect + the bounded JSON conversion --------
+# Against the target's own schema: message Node { 1 name, 2 count, 3 repeated Node children,
+# 4 map<string, Node> by_name, 5 Node child, 6 double, 7 bool, 8 enum Kind, 9 packed sint32,
+# 10 fixed64, oneof { 11 text, 12 Node nested }, 13 bytes, 14 float, 15 uint32 }.
+leaf = pbld(1, b"a") + pbint(7, 1)
+node = (pbld(1, b"root") + pbint(2, 42) + pbld(3, leaf) + pbld(3, pbld(1, b"b"))
+        + pbld(4, pbld(1, b"key") + pbld(2, leaf))
+        + pbld(5, pbv((6 << 3) | 1) + struct.pack("<d", 1.5))
+        + pbint(8, 2) + pbld(9, zz(-1) + zz(2) + zz(-300))
+        + pbv((10 << 3) | 1) + struct.pack("<Q", 2**63)
+        + pbld(11, b"chosen") + pbld(13, b"\x00\xff")
+        + pbv((14 << 3) | 5) + struct.pack("<f", -0.25) + pbint(15, 2**32 - 1))
+write("grpc_message", "node_every_field", grpc_frame(node))
+write("grpc_message", "oneof_nested", grpc_frame(pbld(12, leaf) + pbld(11, b"last-wins")))
+write("grpc_message", "empty", grpc_frame(b""))
+write("grpc_message", "deep_inside_prost_limit",
+      grpc_frame(nest_bomb(90, lambda inner: pbld(5, inner))))
+write("grpc_message", "nested_child_bomb",
+      grpc_frame(nest_bomb(20000, lambda inner: pbld(5, inner))))
+write("grpc_message", "nested_map_bomb",
+      grpc_frame(nest_bomb(20000, lambda inner: pbld(4, pbld(1, b"k") + pbld(2, inner)))))
+# Field 20, wire type 3: 20 000 nested unknown groups.
+write("grpc_message", "unknown_group_bomb",
+      grpc_frame(pbv((20 << 3) | 3) * 20000 + pbv((20 << 3) | 4) * 20000))
+write("grpc_message", "frame_length_lie", grpc_frame(leaf, declared=0xFFFFFFFF))
+write("grpc_message", "field_length_lie", grpc_frame(b"\x0a" + pbv(0xFFFFFFFF) + b"a"))
+write("grpc_message", "packed_length_lie", grpc_frame(b"\x4a" + pbv(0x7FFFFFFF) + b"\x01"))
+
+# --- PostgreSQL: pgwire's frontend decoder (vendor/pgwire) ------------------------
+def pg_msg(tag, body, declared=None):
+    n = len(body) + 4 if declared is None else declared
+    return bytes([tag]) + struct.pack(">i", n) + body
+
+
+def pg_startup(params=(("user", "netget"), ("database", "netget")), declared=None):
+    body = struct.pack(">i", 196608)
+    for k, v in params:
+        body += k.encode() + b"\0" + v.encode() + b"\0"
+    body += b"\0"
+    n = len(body) + 4 if declared is None else declared
+    return struct.pack(">i", n) + body
+
+
+PG_STARTUP = pg_startup()
+write("pgwire_frontend", "startup", PG_STARTUP)
+write("pgwire_frontend", "ssl_then_startup",
+      struct.pack(">ii", 8, 80877103) + PG_STARTUP + pg_msg(ord("Q"), b"SELECT 1\0"))
+write("pgwire_frontend", "gss_then_startup", struct.pack(">ii", 8, 80877104) + PG_STARTUP)
+write("pgwire_frontend", "cancel_request", struct.pack(">iiii", 16, 80877102, 1234, 5678))
+write("pgwire_frontend", "simple_query",
+      PG_STARTUP + pg_msg(ord("Q"), b"SELECT id, name FROM users WHERE id = 1\0")
+      + pg_msg(ord("X"), b""))
+write("pgwire_frontend", "password", PG_STARTUP + pg_msg(ord("p"), b"secret\0"))
+bind = (b"\0stmt\0" + struct.pack(">h", 1) + struct.pack(">h", 0)
+        + struct.pack(">h", 2) + struct.pack(">i", 1) + b"7" + struct.pack(">i", -1)
+        + struct.pack(">h", 1) + struct.pack(">h", 1))
+write("pgwire_frontend", "extended_query",
+      PG_STARTUP
+      + pg_msg(ord("P"), b"stmt\0SELECT $1, $2\0" + struct.pack(">h", 2) + struct.pack(">ii", 23, 25))
+      + pg_msg(ord("B"), bind)
+      + pg_msg(ord("D"), b"P\0") + pg_msg(ord("E"), b"\0" + struct.pack(">i", 0))
+      + pg_msg(ord("C"), b"Sstmt\0") + pg_msg(ord("H"), b"") + pg_msg(ord("S"), b""))
+write("pgwire_frontend", "copy_data",
+      PG_STARTUP + pg_msg(ord("d"), b"1\tada\n") + pg_msg(ord("c"), b"")
+      + pg_msg(ord("f"), b"aborted\0"))
+# vendor/pgwire/README.md's first row: six bytes after the handshake that panic upstream.
+write("pgwire_frontend", "query_without_nul", PG_STARTUP + pg_msg(ord("Q"), b"x"))
+# Size lies.
+write("pgwire_frontend", "startup_length_lie", pg_startup(declared=0x7FFFFFFF))
+write("pgwire_frontend", "query_length_lie", PG_STARTUP + pg_msg(ord("Q"), b"x\0", declared=0x7FFFFFFF))
+write("pgwire_frontend", "copydata_length_3", PG_STARTUP + pg_msg(ord("d"), b"", declared=3))
+write("pgwire_frontend", "bind_param_count_lie",
+      PG_STARTUP + pg_msg(ord("B"), b"\0\0" + struct.pack(">hH", 0, 0xFFFF)))
+write("pgwire_frontend", "bind_param_length_lie",
+      PG_STARTUP + pg_msg(ord("B"), b"\0\0" + struct.pack(">hhi", 0, 1, 0x7FFFFFFF) + b"5"))
+# The long axis: a Bind with 60 000 NULL parameters.
+write("pgwire_frontend", "bind_60000_params",
+      PG_STARTUP + pg_msg(ord("B"), b"\0\0" + struct.pack(">hH", 0, 60000)
+                          + struct.pack(">i", -1) * 60000 + struct.pack(">h", 0)))
+
+# --- WebSocket: head parser, deflate negotiation, DeflateStream, tungstenite ------
+WS_KEY_HEADERS = ("GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                  "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                  "Sec-WebSocket-Version: 13\r\n")
+
+
+def ws_head(*extensions, extra=""):
+    h = WS_KEY_HEADERS + extra
+    for e in extensions:
+        h += "Sec-WebSocket-Extensions: " + e + "\r\n"
+    return (h + "\r\n").encode()
+
+
+def ws_frame(opcode, payload, fin=True, rsv1=False, mask=b"\x37\xfa\x21\x3d", declared=None):
+    b0 = (0x80 if fin else 0) | (0x40 if rsv1 else 0) | opcode
+    n = len(payload) if declared is None else declared
+    if n < 126:
+        hdr = bytes([b0, 0x80 | n])
+    elif n <= 0xFFFF:
+        hdr = bytes([b0, 0x80 | 126]) + struct.pack(">H", n)
+    else:
+        hdr = bytes([b0, 0x80 | 127]) + struct.pack(">Q", n)
+    return hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+
+def ws_deflate(data):
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    out = c.compress(data) + c.flush(zlib.Z_SYNC_FLUSH)
+    return out[:-4] if out.endswith(b"\x00\x00\xff\xff") else out
+
+
+DEFLATE_OFFER = "permessage-deflate; client_max_window_bits"
+write("websocket_session", "plain_text_ping_close",
+      ws_head(extra="Sec-WebSocket-Protocol: chat, superchat\r\n")
+      + ws_frame(1, b"hello") + ws_frame(2, b"\x00\x01\x02") + ws_frame(9, b"ping")
+      + ws_frame(8, struct.pack(">H", 1000) + b"bye"))
+write("websocket_session", "deflate_text",
+      ws_head(DEFLATE_OFFER) + ws_frame(1, ws_deflate(b"hello hello hello"), rsv1=True)
+      + ws_frame(1, b"uncompressed too"))
+compressed = ws_deflate(b"fragmented and compressed " * 20)
+write("websocket_session", "deflate_fragmented",
+      ws_head("permessage-deflate; client_no_context_takeover; server_max_window_bits=10")
+      + ws_frame(1, compressed[:10], fin=False, rsv1=True)
+      + ws_frame(9, b"interleaved ping")
+      + ws_frame(0, compressed[10:]))
+write("websocket_session", "negotiation_parameters",
+      ws_head("permessage-deflate; server_max_window_bits=8; client_max_window_bits=16",
+              "x-webkit-deflate-frame, permessage-deflate; server_no_context_takeover; "
+              "client_max_window_bits=9", "permessage-deflate; unknown_param")
+      + ws_frame(1, ws_deflate(b"{}"), rsv1=True))
+# The decompression bomb: 64 MiB of zeros in one ~64 KiB compressed frame, 64 times the
+# server's 1 MiB DEFAULT_MAX_MESSAGE_SIZE. Codec::inflate must stop at the limit.
+write("websocket_session", "deflate_inflation_bomb",
+      ws_head(DEFLATE_OFFER) + ws_frame(2, ws_deflate(b"\x00" * (64 * 1024 * 1024)), rsv1=True))
+# Size lie: a 127-length frame declaring 2^63 - 1 bytes.
+write("websocket_session", "frame_length_lie",
+      ws_head(DEFLATE_OFFER) + ws_frame(1, b"x", declared=2**63 - 1))
+write("websocket_session", "frame_length_lie_plain", ws_head() + ws_frame(2, b"x", declared=2**63 - 1))
+# The long axis: one message as 20 000 one-byte fragments, compressed and not.
+write("websocket_session", "fragment_chain",
+      ws_head() + ws_frame(1, b"a", fin=False)
+      + b"".join(ws_frame(0, b"a", fin=False) for _ in range(19998)) + ws_frame(0, b"a"))
+# Poorly compressible, so the compressed message is ~900 bytes and as many one-byte frames.
+deflated = ws_deflate(bytes((i * 7919 + (i >> 3)) % 251 for i in range(20000)))
+write("websocket_session", "deflate_fragment_chain",
+      ws_head(DEFLATE_OFFER) + ws_frame(1, deflated[:1], fin=False, rsv1=True)
+      + b"".join(ws_frame(0, deflated[i:i + 1], fin=False) for i in range(1, len(deflated) - 1))
+      + ws_frame(0, deflated[-1:]))
+# RSV1 on a continuation frame is a protocol error (RFC 7692 §6.1).
+write("websocket_session", "rsv1_on_continuation",
+      ws_head(DEFLATE_OFFER) + ws_frame(1, compressed[:10], fin=False, rsv1=True)
+      + ws_frame(0, compressed[10:], rsv1=True))
+write("websocket_session", "unmasked_frame",
+      ws_head() + bytes([0x81, 0x05]) + b"hello")
 
 total = sum(len(files) for _, _, files in os.walk(CORPUS))
 print("seeded %d corpus files across %d targets" %

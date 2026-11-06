@@ -146,10 +146,10 @@ impl Protocol for GearmanClientProtocol {
     }
     fn metadata(&self) -> crate::protocol::metadata::ProtocolMetadataV2 {
         use crate::protocol::metadata::*;
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental).privilege_requirement(PrivilegeRequirement::None).well_known_port(4730)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta).privilege_requirement(PrivilegeRequirement::None).well_known_port(4730)
         .implementation("Tokio TCP; shared binary codec, continuous bounded response reader, correlated foreground jobs and selected worker assignments")
         .llm_control("Priority/background job submission, status/echo/exceptions; selected worker ability registration, grab/grab_unique, sleep/noop and typed work outcomes")
-        .e2e_testing("tests/client/gearman: independent gearmand plus gearman CLI producer/worker, NetGet submitter/server pair, framing/correlation/bounds/cancellation and mocked model")
+        .e2e_testing("tests/client/gearman/real_server_test.rs against the gearmand C daemon with the gearman CLI as producer and worker: the mocked model submits a job whose workload the CLI worker transforms (CHOSEN BY MODEL comes back only if gearmand delivered the model's workload), a script worker answers CLI-submitted jobs the CLI producer prints, and the advertised static/script examples run against a CLI worker; plus framing, correlation, bounds and cancellation. Fails rather than skips without gearmand or the CLI")
         .notes("Plain TCP, UTF-8 outbound payloads; binary inbound payloads expose null text and exact byte count. No TLS/auth, admin, scheduled/reduce jobs, timed abilities, reconnect or persistent job storage. At most64 foreground jobs/assigned handles and64 abilities; frame body1MiB, partial-frame/write/request deadline15s, bounded queues16, followups4. Idle sleeping workers and jobs may wait; disconnect/removal cancels every owned task. NetGet server remains model-as-worker and refuses worker clients.")
         .max_inbound_bytes(crate::server::gearman::wire::MAX_PACKET_BYTES).history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
         .batching(crate::protocol::metadata::BatchingMode::Unsupported)

@@ -22,6 +22,7 @@ pub mod actions;
 use crate::llm::action_helper::call_llm_batch;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -128,9 +129,8 @@ impl ReverseShellServer {
                             ConnectionId::new(app_state.get_next_unified_id().await);
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
 
-                        info!("Reverse-shell operator connected from {}", remote_addr);
-                        let _ = status_tx.send(format!(
-                            "[INFO] Reverse-shell operator connected from {}",
+                        Log::to(&status_tx).info(format!(
+                            "Reverse-shell operator connected from {}",
                             remote_addr
                         ));
 

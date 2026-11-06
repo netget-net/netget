@@ -110,3 +110,21 @@ second, a test asserts nothing at all about LLM interaction.
   always empty. Compare-and-swap (the distributed-lock pattern) works; reading a
   value out of a transaction result does not.
 - **Concurrency, large values, many keys.**
+
+## Stable conditions 2 and 3: the pcap oracle and the fuzz target
+
+**Condition 2.** `real_client_test.rs` puts a recording relay
+(`tests/helpers/recording_relay.rs`) between `etcdctl` and the server and runs the pcap oracle
+over every connection it recorded — six, one per command. Wireshark's `http2` dissector and its
+`grpc` sub-dissector read the preface, both SETTINGS exchanges, the HPACK headers, the
+length-prefixed messages and the trailers of the Put, Range (single and `--prefix`) and
+DeleteRange success paths. tshark has no `rpc.proto`, so it checks each protobuf message's
+wire structure, not its field names. Txn and the error paths are not in that capture.
+
+**Condition 3.** `fuzz/fuzz_targets/etcd_request.rs` drives `etcd::unary_message` and the
+prost decoder of each KV method, with decode → encode → decode asserted equal. `TxnRequest` is
+recursive (`RequestOp.request_txn`), so the corpus carries a 20 000-level `txn_depth_bomb` and
+a 20 000-level unknown-group bomb; prost's recursion limit (100) refuses both. That limit is
+not NetGet's: any crate in the build that enables prost's `no-recursion-limit` feature removes
+it for every decoder in the process, and these seeds are what would catch it. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS):
+20 314 executions, no crash.

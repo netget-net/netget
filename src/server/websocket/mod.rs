@@ -66,13 +66,13 @@ use actions::{
 };
 
 /// Largest HTTP request head accepted before the upgrade. Real handshakes are well under 2 KiB.
-const MAX_REQUEST_HEAD: usize = 16 * 1024;
+pub const MAX_REQUEST_HEAD: usize = 16 * 1024;
 
 /// How long a client has to finish sending its request head after connecting.
 const HANDSHAKE_TIMEOUT_SECS: u64 = 15;
 
-const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
-const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
+pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+pub const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const MAX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
 
 /// How long an upgraded connection may go without a single frame from the peer.
@@ -515,7 +515,7 @@ struct ConnCtx {
     llm_client: OllamaClient,
     app_state: Arc<AppState>,
     status_tx: mpsc::UnboundedSender<String>,
-    out_tx: mpsc::UnboundedSender<WsOut>,
+    out_tx: crate::utils::outbox::OutboxSender<WsOut>,
     protocol: Arc<WebSocketProtocol>,
     data: Arc<Mutex<ConnData>>,
     subprotocol: Option<String>,
@@ -769,7 +769,13 @@ impl WebSocketServer {
         let offered = head.offered_subprotocols();
         let path = head.path().to_string();
 
-        let (out_tx, out_rx) = mpsc::unbounded_channel::<WsOut>();
+        // Bounded: a peer that stops reading while it is sent to (its own answers, or a
+        // broadcast to every connection) is cut off rather than queued for (`utils::outbox`).
+        let (out_tx, out_rx) = crate::utils::outbox::channel(
+            format!("WebSocket connection {connection_id}"),
+            crate::utils::outbox::OutboxLimits::DEFAULT,
+            WsOut::weight,
+        );
         actions::register_connection(
             server_id,
             connection_id,
@@ -1096,7 +1102,7 @@ impl WebSocketServer {
     #[allow(clippy::too_many_arguments)]
     async fn run_connection(
         ws_stream: WebSocketStream<deflate::DeflateStream<TcpStream>>,
-        mut out_rx: mpsc::UnboundedReceiver<WsOut>,
+        mut out_rx: crate::utils::outbox::OutboxReceiver<WsOut>,
         permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
         ctx: ConnCtx,
         path: String,

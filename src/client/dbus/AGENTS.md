@@ -24,3 +24,14 @@ the bound with the fail-closed error rather than silence.
 
 Not implemented: Unix file descriptors, DBUS_COOKIE_SHA1, reading `DBUS_SESSION_BUS_ADDRESS`
 (pass the socket explicitly).
+
+## Maturity: Beta
+
+All four conditions of the client bar hold, on the real-server tests in `tests/client/dbus/`:
+
+1. the peer is dbus-daemon with a python dbus-next service — third-party, and not a library this client is built on;
+2. a missing peer fails the test, never skips it;
+3. a real session, completed against that server;
+4. the client acts on the model's answer, asserted from the server's side: the service's own file holds the text the handler built from the service's reply. Emptying the loop over the model's actions fails it.
+
+Verified 1 November 2026 by running the suite against the installed peer and by that mutation. The CI job that installs the peer is in `.github/workflows/protocol-pairs.yml`.

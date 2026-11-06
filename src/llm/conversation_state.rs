@@ -318,16 +318,6 @@ impl ConversationState {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
     }
 
-    /// Check if any server protocols have been documented
-    pub fn has_server_docs(&self) -> bool {
-        !self.documented_server_protocols.is_empty()
-    }
-
-    /// Check if any client protocols have been documented
-    pub fn has_client_docs(&self) -> bool {
-        !self.documented_client_protocols.is_empty()
-    }
-
     /// Get all documented server protocols
     pub fn get_documented_server_protocols(&self) -> &HashSet<String> {
         &self.documented_server_protocols

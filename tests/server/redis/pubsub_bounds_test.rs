@@ -11,7 +11,7 @@ use netget::cli::management::ServerForm;
 use netget::client::redis::resp::{encode_command, read_reply, Reply};
 use netget::server::redis::pubsub::{
     MAX_CHANNEL_BYTES, MAX_MESSAGE_BYTES, MAX_PATTERNS_PER_SERVER,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_SERVER,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_SERVER, SUBSCRIBER_OUTPUT_LIMIT_BYTES,
 };
 use netget::state::app_state::AppState;
 use netget::state::ServerId;
@@ -295,9 +295,16 @@ async fn a_subscriber_that_stops_reading_is_disconnected() {
     }
     let dropped_after =
         dropped_after.expect("128 MiB queued and the slow subscriber was never dropped");
+    // Each delivered frame is the 1 MiB payload plus its `message`/channel framing, so seven
+    // fit the 8 MiB queue and the eighth does not. Whatever the kernel has already taken off
+    // the queue comes on top; on a loaded runner that can be nothing at all, because a frame
+    // stays counted until the writer has finished putting it on the socket.
+    let frame =
+        MAX_MESSAGE_BYTES + b"*3\r\n$7\r\nmessage\r\n$8\r\nfirehose\r\n$1048576\r\n\r\n".len();
+    let fit = SUBSCRIBER_OUTPUT_LIMIT_BYTES / frame;
     assert!(
-        dropped_after >= 8,
-        "dropped after only {dropped_after} MiB — the limit is 8 MiB of queued messages"
+        dropped_after >= fit,
+        "dropped after only {dropped_after} MiB — the 8 MiB queue holds {fit} messages"
     );
     assert_eq!(
         publisher

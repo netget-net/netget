@@ -590,6 +590,37 @@ impl GrpcServer {
     }
 }
 
+/// The message inside a unary request body.
+///
+/// Frame format: 1 byte compression flag + 4 bytes length (big-endian) + payload. `pub` so
+/// `fuzz/fuzz_targets/grpc_message.rs` drives the same framing the server does.
+pub fn decode_grpc_frame(frame: &[u8]) -> Result<Vec<u8>> {
+    if frame.len() < 5 {
+        bail!("Frame too short (need at least 5 bytes)");
+    }
+
+    let compressed = frame[0];
+    if compressed != 0 {
+        bail!("Compression not supported");
+    }
+
+    let length = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
+
+    // Compare against the bytes remaining rather than computing `5 + length`. On a 32-bit
+    // target that addition wraps: a length of 0xFFFFFFFF gives `5 + length == 4`, the
+    // guard passes, and `frame[5..4]` panics with start > end.
+    let available = frame.len() - 5;
+    if length > available {
+        bail!(
+            "frame declares {} bytes but only {} follow the header",
+            length,
+            available
+        );
+    }
+
+    Ok(frame[5..5 + length].to_vec())
+}
+
 /// Dynamic gRPC service that handles requests using LLM
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
@@ -941,7 +972,7 @@ impl DynamicGrpcService {
         };
 
         // Decode gRPC frame (5-byte header: compression flag + 4-byte length + payload)
-        let request_payload = match Self::decode_grpc_frame(&body_bytes) {
+        let request_payload = match decode_grpc_frame(&body_bytes) {
             Ok(payload) => payload,
             Err(e) => {
                 debug!("Failed to decode gRPC frame: {}", e);
@@ -1009,35 +1040,6 @@ impl DynamicGrpcService {
         }
 
         Ok((parts[0].to_string(), parts[1].to_string()))
-    }
-
-    /// Decode gRPC frame from bytes
-    /// Frame format: 1 byte compression flag + 4 bytes length (big-endian) + payload
-    fn decode_grpc_frame(frame: &[u8]) -> Result<Vec<u8>> {
-        if frame.len() < 5 {
-            bail!("Frame too short (need at least 5 bytes)");
-        }
-
-        let compressed = frame[0];
-        if compressed != 0 {
-            bail!("Compression not supported");
-        }
-
-        let length = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
-
-        // Compare against the bytes remaining rather than computing `5 + length`. On a 32-bit
-        // target that addition wraps: a length of 0xFFFFFFFF gives `5 + length == 4`, the
-        // guard passes, and `frame[5..4]` panics with start > end.
-        let available = frame.len() - 5;
-        if length > available {
-            bail!(
-                "frame declares {} bytes but only {} follow the header",
-                length,
-                available
-            );
-        }
-
-        Ok(frame[5..5 + length].to_vec())
     }
 
     /// Encode payload into gRPC frame

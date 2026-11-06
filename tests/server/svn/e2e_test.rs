@@ -1,14 +1,7 @@
-// These were all `#[ignore]`d for a documentation-read retry that no longer happens.
-//
-// `REQUIRE_DOCS_FOR_OPEN_ACTIONS` (src/events/handler.rs) is a compile-time `false`, and every
-// `DocumentationRequired` path is behind it, so the forced second round-trip whose synthetic
-// prompt dropped the original instruction — the thing that made these unmockable — is gone.
-// Four of the five passed unchanged once the ignore was lifted; the fifth failed only because
-// it still carried a mock rule for the retry, which now never matches.
-//
 // Lesson worth keeping: an `#[ignore]` citing a defect elsewhere goes stale silently when that
-// defect is fixed, and nothing re-checks it. Re-run ignored tests with `--include-ignored`
-// after landing an infrastructure fix.
+// defect is fixed, and nothing re-checks it. These tests sat ignored behind a forced
+// read-the-docs retry on `open_server` long after it stopped firing. Re-run ignored tests with
+// `--include-ignored` after landing an infrastructure fix.
 mod svn_e2e_test {
     use crate::helpers::{E2EResult, NetGetConfig};
     use std::time::Duration;

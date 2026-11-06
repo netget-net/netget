@@ -27,7 +27,7 @@ TLS fixture needs openssl. Test commands use the programme shared run_cargo.py g
 Legacy checks remain: five mocked unary schema/routing checks; two mandatory grpcurl
 unary success/error checks; failure/status classification and connection bounds. Raw HTTP/2
 reqwest/prost probes are useful for framing but cannot inspect trailers and are not an
-independent gRPC implementation. The expanded scope is Experimental; no pcap/fuzz claim.
+independent gRPC implementation. The expanded scope is Experimental; the pcap oracle covers the two grpcurl unary calls and `fuzz/fuzz_targets/grpc_message.rs` the unary decode path (see the end of this file).
 
 ## Unary trailers regression evidence
 
@@ -56,3 +56,19 @@ Final server suite: 24 passed, 0 failed/ignored at 100 threads, 38.52s (includes
 unary/status/connection checks). Log: programme logs/item68-grpc-server-full.log.
 Earlier fixture compile errors, incorrect status/header expectations and the missing
 second tonic readiness poll remain in the preparatory logs; none is claimed as a pass.
+
+## Stable conditions 2 and 3: the pcap oracle and the fuzz target
+
+The rating is Experimental, so these are evidence for the surface rather than a step toward
+Stable; condition 1 is the expanded scope's to settle first.
+
+**Condition 2.** Both grpcurl tests in `real_client_test.rs` run through a recording relay and
+the pcap oracle reads each connection with Wireshark's `http2` and `grpc` dissectors: the
+success shape (HEADERS, a DATA frame with the message, trailing HEADERS) and the Trailers-Only
+error shape. Streaming, gzip and reflection traffic (the grpcio peer tests) are not captured.
+
+**Condition 3.** `fuzz/fuzz_targets/grpc_message.rs` drives `grpc::decode_grpc_frame`,
+`DynamicMessage::decode` against a deliberately recursive schema, `value_codec`'s bounded JSON
+conversion and `stream_codec::to_json`. Its corpus carries three 20 000-level bombs (nested
+`child`, nested map values, nested unknown groups) for prost's recursion limit and a 90-level
+message for `MAX_VALUE_DEPTH` (32). run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 18 666 executions, no crash.

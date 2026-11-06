@@ -23,7 +23,7 @@
 //! pipelining — redis-cli, like redis-rs, sends one RESP array per command and waits.
 //!
 //! Run with:
-//!   ./cargo-isolated.sh test --no-default-features --features redis \
+//!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite \
 //!       --test server -- server::redis::real_client --test-threads=8
 
 use crate::helpers::{self, E2EResult, NetGetConfig};

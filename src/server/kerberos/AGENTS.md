@@ -134,10 +134,12 @@ DES, RC4, DES3, RFC 8009 (aes-sha2), FAST, PKINIT, SPAKE, PAC, cross-realm, rene
 validation (BADOPTION), postdating, S4U, user-to-user, kpasswd, and any database: principals
 exist only in the startup parameter.
 
-## Maturity: Experimental (both roles)
+## Maturity: Beta (server); the client is Experimental
 
-The evidence is two independent clients completing real sessions — MIT krb5 1.22 (kinit over
-UDP, kvno) and Heimdal 1.5.1 (Apple; kinit over TCP, kgetcred) — with MIT `kvno -k` decrypting
-the service ticket with a keytab `ktutil` derived from the password, and tshark's dissector
-reading both directions. Not Beta because nobody has reviewed it beyond the tests and the pair
-job (`kerberos` in protocol-pairs.yml) has not yet run on Ubuntu's MIT 1.20 / Heimdal 7.8.
+The evidence is two independent clients completing real sessions — MIT krb5 (kinit over UDP,
+kvno) and Heimdal (kinit over TCP, kgetcred), each taking an AS and a TGS exchange — with MIT
+`kvno -k` decrypting the service ticket with a keytab `ktutil` derived from the password, and
+tshark's dissector reading both directions. Both run on macOS (MIT 1.22, Apple's Heimdal 1.5.1)
+and in the `kerberos` job of protocol-pairs.yml on Ubuntu 24.04 (MIT 1.20, Heimdal 7.8). Not
+Stable: there is no fuzz target (`codec_test.rs` pushes 6000 mutated requests through
+`Kdc::analyze`, which is not coverage-guided).

@@ -33,13 +33,14 @@ use hyper::{body::Incoming, header::HeaderValue, Request, Response, StatusCode};
 #[cfg(not(target_arch = "wasm32"))]
 use prost::Message;
 
-// Include generated protobuf code
+// Generated protobuf code. `pub` so `fuzz/fuzz_targets/etcd_request.rs` can drive the prost
+// decoders this server hands every request body to.
 #[cfg(not(target_arch = "wasm32"))]
-mod etcdserverpb {
+pub mod etcdserverpb {
     include!(concat!(env!("OUT_DIR"), "/etcdserverpb.rs"));
 }
 #[cfg(not(target_arch = "wasm32"))]
-mod mvccpb {
+pub mod mvccpb {
     include!(concat!(env!("OUT_DIR"), "/mvccpb.rs"));
 }
 
@@ -199,6 +200,57 @@ fn llm_failure(
         status,
         crate::utils::WireFailure::classify(&e).prefixed_text(),
     )
+}
+
+/// Why a unary gRPC request body is not exactly one usable message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryFrameError {
+    /// Fewer than the 5 bytes of the length-prefixed message header.
+    TooShort(usize),
+    /// The compressed-flag byte is set; this server implements no message encoding.
+    Compressed,
+    /// The header declares more bytes than the body carries.
+    Truncated { declared: usize, available: usize },
+}
+
+impl std::fmt::Display for UnaryFrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooShort(n) => write!(f, "gRPC frame too short: {n} bytes"),
+            Self::Compressed => f.write_str("compressed gRPC messages are not supported"),
+            Self::Truncated {
+                declared,
+                available,
+            } => write!(
+                f,
+                "gRPC frame declares {declared} bytes but only {available} follow the header"
+            ),
+        }
+    }
+}
+
+/// The protobuf message inside a unary request body: one compressed-flag byte, a 4-byte
+/// big-endian length, then the message.
+///
+/// The declared length is honoured rather than taking everything after byte 5: the tail may
+/// hold a second message (which this unary server does not handle), and a short declared
+/// length would otherwise feed trailing bytes into the protobuf decoder.
+pub fn unary_message(body: &[u8]) -> std::result::Result<&[u8], UnaryFrameError> {
+    if body.len() < 5 {
+        return Err(UnaryFrameError::TooShort(body.len()));
+    }
+    if body[0] != 0 {
+        return Err(UnaryFrameError::Compressed);
+    }
+    let declared = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;
+    let available = body.len() - 5;
+    if declared > available {
+        return Err(UnaryFrameError::Truncated {
+            declared,
+            available,
+        });
+    }
+    Ok(&body[5..5 + declared])
 }
 
 /// A failure to be reported to the client as a gRPC status rather than as a transport error.
@@ -740,40 +792,15 @@ impl EtcdServer {
         })?;
         let whole_body = whole_body.to_bytes();
 
-        // Parse gRPC frame: 1 byte compression flag + 4 byte big-endian length + message.
-        if whole_body.len() < 5 {
-            return Err(GrpcFailure::new(
-                GRPC_INTERNAL,
-                format!("gRPC frame too short: {} bytes", whole_body.len()),
-            ));
-        }
-
-        if whole_body[0] != 0 {
-            // The message is compressed; nothing here can decompress it, and silently
-            // handing the compressed bytes to prost would decode as garbage.
-            return Err(GrpcFailure::new(
-                GRPC_UNIMPLEMENTED,
-                "compressed gRPC messages are not supported".to_string(),
-            ));
-        }
-
-        // Honour the declared length rather than taking "everything after byte 5": the tail
-        // may hold a second frame (which this unary server does not handle) and a short
-        // declared length would otherwise feed trailing bytes into the protobuf decoder.
-        let declared =
-            u32::from_be_bytes([whole_body[1], whole_body[2], whole_body[3], whole_body[4]])
-                as usize;
-        let available = whole_body.len() - 5;
-        if declared > available {
-            return Err(GrpcFailure::new(
-                GRPC_INTERNAL,
-                format!(
-                    "gRPC frame declares {} bytes but only {} follow the header",
-                    declared, available
-                ),
-            ));
-        }
-        let msg_bytes = &whole_body[5..5 + declared];
+        let msg_bytes = unary_message(&whole_body).map_err(|e| {
+            let status = match e {
+                // The message is compressed; nothing here can decompress it, and silently
+                // handing the compressed bytes to prost would decode as garbage.
+                UnaryFrameError::Compressed => GRPC_UNIMPLEMENTED,
+                UnaryFrameError::TooShort(_) | UnaryFrameError::Truncated { .. } => GRPC_INTERNAL,
+            };
+            GrpcFailure::new(status, e.to_string())
+        })?;
 
         // Route to appropriate handler based on path
         let response_bytes = match path.as_str() {

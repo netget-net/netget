@@ -1,21 +1,30 @@
 # Redis Protocol E2E Tests
 
-Twelve files, all declared in `tests/server/redis/mod.rs`.
+Sixteen files, all declared in `tests/server/redis/mod.rs`.
 
 | File | Tests | What it proves | LLM calls |
 |---|---|---|---|
-| `connection_bounds_test.rs` | 3 | Both read deadlines, from a raw socket | 0 |
+| `connection_bounds_test.rs` | 4 | Both read deadlines, and the 256-connection cap (refusal text, slot returned on close), from raw sockets | 0 |
+| `frame_bounds_test.rs` | 5 | The 64 MiB frame cap, `MAX_BULK_LEN`, `MAX_RESP_ELEMENTS` and `MAX_REPLY_DEPTH` at their boundaries, and that an unfinished frame is scanned once | 0 |
+| `failure_decision_test.rs` | 2 | Each failure case's wire form and its `decision=` tag: model refusal, empty answer, failed backend (`-ERR`), saturated backend (`-LOADING`) | 0 |
+| `pcap_oracle_test.rs` | 2 | Every RESP2 success-path reply shape, Rust's own replies and cluster replies, read by Wireshark's `resp` dissector, values included | 0 |
+| `verb_coverage_test.rs` | 3 | Sharded pub/sub, `UNSUBSCRIBE`/`PUNSUBSCRIBE`, `RESET`, subscribed-mode `PING` and cluster introspection/refusals through redis-cli, redis-rs and redis-py | 0 |
 | `e2e_test.rs` | 6 | Every RESP2 reply type, through `redis-rs` | 13 |
 | `real_client_test.rs` | 2 | A whole session through the real `redis-cli` binary; `redis_command`'s `args` keep a quoted multi-word argument whole, split the unquoted one, and hex-encode a non-UTF-8 one (named in `hex_args`) | 8 + 4 |
 | `resp_framing_test.rs` | 3 | Model output cannot split a frame; `stop_server` stops sessions | 0 |
 | `llm_failure_test.rs` | 1 | The RESP error a client sees when the backend fails | 1 |
 | `peer_inject_test.rs` | 1 | Dashboard injection reaches the socket | 0 |
-| `resp3_test.rs` | 2 | `HELLO 3` and every RESP3 type through redis-cli `-3` and redis-py 5, the RESP2 downgrades, a push, and credentials in `HELLO` | 0 |
+| `resp3_test.rs` | 3 | `HELLO 3` and every RESP3 type through redis-cli `-3`, redis-py 5 and redis-rs (the big number's second reader), the RESP2 downgrades, a push, and credentials in `HELLO` | 0 |
 | `resp_depth_test.rs` | 4 | A RESP nesting bomb or an impossible declared length is refused before the decoder, and the process survives | 0 |
 | `pubsub_test.rs` | 2 | Pub/sub through redis-cli (RESP2 and `-3`) and redis-rs (RESP2 `PubSub`, RESP3 push sender) | 0 |
 | `pubsub_bounds_test.rs` | 6 | Subscribed mode, every pub/sub bound, the slow-consumer disconnect, fail-closed subscribe/publish | 0 |
 | `cluster_test.rs` | 2 | Three NetGet servers as a cluster, through `redis-cli -c`, `redis-cli --cluster check` and redis-rs's `ClusterClient`; a bad topology refuses to start | 0 |
 | `keys_oracle_test.rs` | 1 | Hash slots and glob matching equal a real `redis-server`'s `CLUSTER KEYSLOT` and `KEYS` | 0 |
+
+The server is Stable on this suite; which test carries which of the six conditions is in
+"Maturity: the six conditions" at the foot of `src/server/redis/AGENTS.md`. Every external
+peer — redis-cli, redis-server, redis-py 5 (`NETGET_REDIS_PYTHON`), tshark — fails the test
+when absent rather than skipping.
 
 ## Running
 
@@ -24,11 +33,11 @@ makes cargo list its targets and exit having run nothing — and it exits 0, so 
 looks like a pass. Filter after `--`:
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features redis \
+./cargo-isolated.sh test --no-default-features --features mcp-stdio,sqlite \
     --test server -- server::redis --test-threads=100
 ```
 
-## What the Beta rating rests on
+## The two RESP2 clients
 
 `e2e_test.rs` drives **redis-rs** (`redis` 0.27, a dev-dependency), an
 independent implementation of RESP2 — not the `redis-protocol` crate the server
@@ -189,8 +198,9 @@ assertion is on the exact shape — `["unsubscribe", null, 0]` with nothing held
 in subscribed mode, the exact `Can't execute` and bound errors. Every bound was verified by
 mutation: removing the per-connection, distinct-pattern, server-wide, channel-length,
 message-size or output-limit check makes its test fail. The slow-consumer test publishes 1 MiB
-messages at a subscriber that never reads until a publish counts 0; it must take at least 8
-of them (the queue limit is 8 MiB, plus whatever the kernel buffers), then `NUMSUB` is 0 and
+messages at a subscriber that never reads until a publish counts 0; it must take at least 7
+of them — what the 8 MiB queue holds of 1 MiB payloads plus their framing, plus whatever the
+kernel has taken, which on a loaded machine can be nothing — then `NUMSUB` is 0 and
 the subscriber's socket reaches EOF.
 
 The fail-closed test points the server at an unreachable model with only `redis_subscribe`
@@ -227,13 +237,16 @@ right.
 
 - **RESP3 is tested in `resp3_test.rs` only**, with a python handler: redis-cli `-3`
   renders map, set, double, boolean, verbatim and null (7.0 has no case for a big number
-  and stops with "Unknown reply type: 13", so redis-py carries that one), and redis-py's
-  pure-Python RESP3 parser reads them all, plus a push before a reply. `redis-py` must be
+  and stops with "Unknown reply type: 13"), and redis-py's pure-Python RESP3 parser and
+  redis-rs's `Value` read them all, the big number included; redis-py also reads a push
+  before a reply. Wireshark 4.6's `resp` dissector has no RESP3 types, so the pcap oracle
+  covers RESP2 only. `redis-py` must be
   importable from `NETGET_REDIS_PYTHON` (default `python3`); the test fails otherwise.
 - **Inline commands** (`PING\r\n` typed into `nc`) are not tested; only RESP
   arrays decode, and both redis-cli and redis-rs always send arrays.
-- **Pipelining** — the read loop processes several frames from one read in order,
-  each with its own LLM call, but no test sends two commands in one write.
+- **Pipelining** — the read loop processes several frames from one read in order, each with
+  its own LLM call. Only `frame_bounds_test.rs` sends two commands in one write (a frame at a
+  bound with a `PING` behind it); neither real client pipelines.
 - **AUTH / SELECT / MULTI** reach the model as ordinary commands with no special handling,
   and nothing asserts on them.
 - **Cluster-wide `PUBLISH`** — a fake cluster has no bus, so nothing asserts a publish on one
