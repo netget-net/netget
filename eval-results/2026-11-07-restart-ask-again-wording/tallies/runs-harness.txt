@@ -1,0 +1,54 @@
+seed 42: OK  reached_end=True hellos=1 lines=38 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-42-olnybh_2
+seed 43: BAD reached_end=False hellos=1 lines=22 rc=0 60s lines=['hello', 'Paris', '2', 'Please answer the question.', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-43-flta787y
+seed 44: BAD reached_end=False hellos=1 lines=35 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-44-7w3wmrsy
+seed 45: BAD reached_end=False hellos=1 lines=36 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-45-0av_4v44
+seed 46: OK  reached_end=True hellos=1 lines=19 rc=0 60s lines=['hello', 'Paris', '4', 'blue', 'goodbye', 'Please answer the question.', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-46-rdhabn_f
+seed 47: BAD reached_end=False hellos=1 lines=21 rc=0 60s lines=['hello', 'Paris', '42', 'clear', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-47-hci4bx1n
+seed 48: BAD reached_end=False hellos=1 lines=38 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-48-ibhgbv_c
+seed 49: BAD reached_end=False hellos=1 lines=1 rc=0 60s lines=['hello'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-m2-49-1hjfr6jj
+quiz/m2: 2/8 ok
+seed 42: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-42-zv9ycn77
+seed 43: BAD restart rc=0 60s lines=['PING', 'GET mykey', 'quit'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-43-tqgh5cpr
+seed 44: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-44-k1odgzbg
+seed 45: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-45-qa7_ka4o
+seed 46: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-46-evjxqiac
+seed 47: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-47-al9k9ysg
+seed 48: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-48-yxdk0wxq
+seed 49: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-m2-49-e340s4qj
+redis/m2: 7/8 ok
+seed 42: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-42-xwevmps8
+seed 43: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-43-gofbjeww
+seed 44: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-44-gwh82ks_
+seed 45: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-45-h9ohfyx0
+seed 46: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-46-vrr9vq76
+seed 47: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-47-_95wbtzz
+seed 48: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-48-1tawecj2
+seed 49: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-m2-49-z9scwi8a
+again/m2: 8/8 ok
+seed 42: OK  reached_end=True hellos=1 lines=37 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-42-dner5r25
+seed 43: BAD reached_end=False hellos=1 lines=22 rc=0 60s lines=['hello', 'Paris', '2', 'Please answer the question.', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-43-wf740566
+seed 44: BAD reached_end=False hellos=1 lines=37 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-44-clf6lfoy
+seed 45: BAD reached_end=False hellos=1 lines=39 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-45-b2rnnrtb
+seed 46: OK  reached_end=True hellos=1 lines=20 rc=0 60s lines=['hello', 'Paris', '4', 'blue', 'goodbye', 'Please answer the question.', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-46-acx08thn
+seed 47: BAD reached_end=False hellos=1 lines=21 rc=0 60s lines=['hello', 'Paris', '42', 'clear', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-47-j_ak19bz
+seed 48: BAD reached_end=False hellos=1 lines=23 rc=0 60s lines=['hello', 'Paris', '2', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer', 'answer'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-48-h80evh9f
+seed 49: BAD reached_end=False hellos=1 lines=1 rc=0 60s lines=['hello'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-quiz-w5-49-8akj4q7_
+quiz/w5: 2/8 ok
+seed 42: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-42-a9aw1ssw
+seed 43: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-43-ecbt64bz
+seed 44: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-44-ibvliqe7
+seed 45: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-45-v95f_0rr
+seed 46: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-46-eoqbrnwh
+seed 47: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-47-xxcmmnt5
+seed 48: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-48-26vahelu
+seed 49: OK  ok rc=0 60s lines=['PING', 'GET mykey'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-redis-w5-49-2h3gmseu
+redis/w5: 8/8 ok
+seed 42: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-42-go7voprm
+seed 43: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-43-9vezpj_0
+seed 44: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-44-47otgcwv
+seed 45: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-45-rb5q4qom
+seed 46: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-46-7qusvwe4
+seed 47: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-47-ctic15lh
+seed 48: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-48-xu525iuq
+seed 49: OK  pings=3 lines=3 rc=0 60s lines=['PING', 'PING', 'PING'] dir=/var/folders/jk/0lz5v5jj33g0p8x5xmyhvwz80000gn/T/tl-again-w5-49-07a6ykk8
+again/w5: 8/8 ok

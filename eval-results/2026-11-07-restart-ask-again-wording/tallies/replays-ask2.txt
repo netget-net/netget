@@ -1,0 +1,374 @@
+seed  21 None "QUIT"
+seed  22 wait_for_more
+seed  23 (none)
+seed  24 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  25 (none)
+seed  26 (none)
+seed  27 (none)
+seed  28 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  29 (none)
+seed  30 wait_for_more
+seed  31 wait_for_more
+seed  32 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  33 (none)
+seed  34 wait_for_more
+seed  35 execute_redis_command "GET mykey"
+seed  36 (none)
+seed  37 wait_for_more
+seed  38 (none)
+seed  39 execute_redis_command "QUIT"
+seed  40 (none)
+TALLY 00004-api_generate.req.json - {'(none)': 9, 'wait_for_more': 5, 'execute_redis_command "PING"; execute_redis_command "GET mykey"': 3, 'None "QUIT"': 1, 'execute_redis_command "GET mykey"': 1, 'execute_redis_command "QUIT"': 1}
+seed  21 wait_for_more
+seed  22 (none)
+seed  23 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  24 (none)
+seed  25 wait_for_more
+seed  26 wait_for_more
+seed  27 (none)
+seed  28 execute_redis_command "GET mykey"
+seed  29 wait_for_more
+seed  30 (none)
+seed  31 (none)
+seed  32 (none)
+seed  33 execute_redis_command "EXIT"
+seed  34 wait_for_more
+seed  35 (none)
+seed  36 execute_redis_command "GET mykey"
+seed  37 wait_for_more
+seed  38 (none)
+seed  39 execute_redis_command "GET mykey"
+seed  40 execute_redis_command "PING"
+TALLY 00004-api_generate.req.json ask_W3.py {'(none)': 8, 'wait_for_more': 6, 'execute_redis_command "GET mykey"': 3, 'execute_redis_command "PING"; execute_redis_command "GET mykey"': 1, 'execute_redis_command "EXIT"': 1, 'execute_redis_command "PING"': 1}
+seed   1 execute_redis_command "DISCONNECT"
+seed   2 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed   3 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed   4 wait_for_more
+seed   5 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed   6 wait_for_more
+seed   7 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed   8 wait_for_more
+seed   9 wait_for_more
+seed  10 wait_for_more
+seed  11 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  12 (none)
+seed  13 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  14 execute_redis_command "QUIT"
+seed  15 wait_for_more
+seed  16 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  17 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  18 execute_redis_command "PONG"; wait_for_more
+seed  19 (none)
+seed  20 execute_redis_command "SET mykey \"new value\""
+seed  21 (none)
+seed  22 execute_redis_command "PING"
+seed  23 execute_redis_command "GET mykey"
+seed  24 wait_for_more
+seed  25 execute_redis_command "QUIT"
+seed  26 wait_for_more
+seed  27 (none)
+seed  28 execute_redis_command "GET mykey"
+seed  29 wait_for_more
+seed  30 execute_redis_command "QUIT"
+seed  31 execute_redis_command "QUIT"
+seed  32 wait_for_more
+seed  33 wait_for_more
+seed  34 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  35 execute_redis_command "DISCONNECT"
+seed  36 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  37 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  38 execute_redis_command "GET mykey"
+seed  39 wait_for_more
+seed  40 (none)
+TALLY 00004-api_generate.req.json ask_W4.py {'wait_for_more': 12, 'execute_redis_command "PING"; execute_redis_command "GET mykey"': 11, '(none)': 5, 'execute_redis_command "QUIT"': 4, 'execute_redis_command "GET mykey"': 3, 'execute_redis_command "DISCONNECT"': 2, 'execute_redis_command "PONG"; wait_for_more': 1, 'execute_redis_command "SET mykey \\"new value\\""': 1, 'execute_redis_command "PING"': 1}
+seed   1 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed   2 execute_redis_command "PING"; wait_for_more
+seed   3 (none)
+seed   4 (none)
+seed   5 (none)
+seed   6 wait_for_more
+seed   7 (none)
+seed   8 (none)
+seed   9 (none)
+seed  10 (none)
+seed  11 (none)
+seed  12 (none)
+seed  13 (none)
+seed  14 (none)
+seed  15 wait_for_more
+seed  16 (none)
+seed  17 (none)
+seed  18 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  19 (none)
+seed  20 execute_redis_command "PING"
+seed  21 (none)
+seed  22 (none)
+seed  23 (none)
+seed  24 wait_for_more
+seed  25 (none)
+seed  26 (none)
+seed  27 wait_for_more
+seed  28 (none)
+seed  29 execute_redis_command "QUIT"
+seed  30 (none)
+seed  31 (none)
+seed  32 (none)
+seed  33 (none)
+seed  34 wait_for_more
+seed  35 wait_for_more
+seed  36 (none)
+seed  37 execute_redis_command "PING"; execute_redis_command "GET mykey"
+seed  38 (none)
+seed  39 (none)
+seed  40 execute_redis_command "GET mykey"
+TALLY 00004-api_generate.req.json ask_W5.py {'(none)': 27, 'wait_for_more': 6, 'execute_redis_command "PING"; execute_redis_command "GET mykey"': 3, 'execute_redis_command "PING"; wait_for_more': 1, 'execute_redis_command "PING"': 1, 'execute_redis_command "QUIT"': 1, 'execute_redis_command "GET mykey"': 1}
+seed  21 wait_for_more
+seed  22 wait_for_more
+seed  23 (none)
+seed  24 (none)
+seed  25 (none)
+seed  26 (none)
+seed  27 (none)
+seed  28 wait_for_more
+seed  29 (none)
+seed  30 (none)
+seed  31 wait_for_more
+seed  32 wait_for_more
+seed  33 (none)
+seed  34 (none)
+seed  35 (none)
+seed  36 (none)
+seed  37 (none)
+seed  38 disconnect
+seed  39 (none)
+seed  40 (none)
+TALLY 00007-api_generate.req.json - {'(none)': 14, 'wait_for_more': 5, 'disconnect': 1}
+seed  21 (unparseable)
+seed  22 (none)
+seed  23 (none)
+seed  24 (none)
+seed  25 wait_for_more
+seed  26 wait_for_more
+seed  27 (none)
+seed  28 (none)
+seed  29 (none)
+seed  30 (none)
+seed  31 (none)
+seed  32 (none)
+seed  33 wait_for_more
+seed  34 wait_for_more
+seed  35 wait_for_more
+seed  36 (none)
+seed  37 wait_for_more
+seed  38 wait_for_more
+seed  39 (none)
+seed  40 wait_for_more
+TALLY 00007-api_generate.req.json ask_W3.py {'(none)': 11, 'wait_for_more': 8, '(unparseable)': 1}
+seed   1 execute_redis_command "GET anotherkey"
+seed   2 wait_for_more
+seed   3 wait_for_more
+seed   4 wait_for_more
+seed   5 (none)
+seed   6 wait_for_more
+seed   7 wait_for_more
+seed   8 execute_redis_command "SET mykey \"hello\""
+seed   9 wait_for_more
+seed  10 wait_for_more
+seed  11 (none)
+seed  12 wait_for_more
+seed  13 execute_redis_command "GET mykey"
+seed  14 execute_redis_command "QUIT"
+seed  15 (none)
+seed  16 wait_for_more
+seed  17 wait_for_more
+seed  18 (none)
+seed  19 wait_for_more
+seed  20 execute_redis_command "PING"; execute_redis_command "GET mykey"; wait_for_more
+seed  21 (none)
+seed  22 (none)
+seed  23 execute_redis_command "PING"
+seed  24 (none)
+seed  25 execute_redis_command "DISCONNECT"
+seed  26 (none)
+seed  27 execute_redis_command "QUIT"
+seed  28 execute_redis_command "PING"
+seed  29 wait_for_more
+seed  30 execute_redis_command "QUIT"
+seed  31 execute_redis_command "STOP"
+seed  32 execute_redis_command "PING"
+seed  33 disconnect
+seed  34 wait_for_more
+seed  35 wait_for_more
+seed  36 (none)
+seed  37 wait_for_more
+seed  38 wait_for_more
+seed  39 execute_redis_command "PING"
+seed  40 execute_redis_command "PING"; execute_redis_command "GET mykey"
+TALLY 00007-api_generate.req.json ask_W4.py {'wait_for_more': 16, '(none)': 9, 'execute_redis_command "PING"': 4, 'execute_redis_command "QUIT"': 3, 'execute_redis_command "GET anotherkey"': 1, 'execute_redis_command "SET mykey \\"hello\\""': 1, 'execute_redis_command "GET mykey"': 1, 'execute_redis_command "PING"; execute_redis_command "GET mykey"; wait_for_more': 1, 'execute_redis_command "DISCONNECT"': 1, 'execute_redis_command "STOP"': 1, 'disconnect': 1, 'execute_redis_command "PING"; execute_redis_command "GET mykey"': 1}
+seed   1 wait_for_more
+seed   2 (none)
+seed   3 (none)
+seed   4 (none)
+seed   5 (none)
+seed   6 (none)
+seed   7 (none)
+seed   8 wait_for_more
+seed   9 (none)
+seed  10 (none)
+seed  11 (none)
+seed  12 (none)
+seed  13 wait_for_more
+seed  14 wait_for_more
+seed  15 (none)
+seed  16 (none)
+seed  17 (none)
+seed  18 (none)
+seed  19 (none)
+seed  20 (none)
+seed  21 (none)
+seed  22 (none)
+seed  23 (none)
+seed  24 (none)
+seed  25 (none)
+seed  26 (none)
+seed  27 (none)
+seed  28 (none)
+seed  29 wait_for_more
+seed  30 (none)
+seed  31 (none)
+seed  32 (none)
+seed  33 wait_for_more
+seed  34 (none)
+seed  35 (none)
+seed  36 execute_redis_command "PING"
+seed  37 (none)
+seed  38 wait_for_more
+seed  39 disconnect
+seed  40 (none)
+TALLY 00007-api_generate.req.json ask_W5.py {'(none)': 31, 'wait_for_more': 7, 'execute_redis_command "PING"': 1, 'disconnect': 1}
+seed   1 send_command "BYE"
+seed   2 send_command "4"
+seed   3 send_command "4"
+seed   4 send_command "BYE"
+seed   5 disconnect
+seed   6 send_command "BYE"
+seed   7 disconnect
+seed   8 disconnect
+seed   9 send_command "bye"
+seed  10 disconnect
+seed  11 disconnect
+seed  12 send_command "goodbye"; disconnect
+seed  13 send_command "help"
+seed  14 send_command "BYE"
+seed  15 send_command "BYE"
+seed  16 disconnect
+seed  17 disconnect
+seed  18 disconnect
+seed  19 send_command "bye"
+seed  20 send_command "BYE"
+TALLY 00040-api_generate.req.json ask_W4.py {'disconnect': 8, 'send_command "BYE"': 6, 'send_command "4"': 2, 'send_command "bye"': 2, 'send_command "goodbye"; disconnect': 1, 'send_command "help"': 1}
+seed   1 disconnect
+seed   2 command "4"
+seed   3 disconnect
+seed   4 (none)
+seed   5 disconnect
+seed   6 disconnect
+seed   7 send_command "help"
+seed   8 disconnect
+seed   9 disconnect
+seed  10 (unparseable)
+seed  11 disconnect
+seed  12 send_command "BYE"; disconnect
+seed  13 send_command " "
+seed  14 (none)
+seed  15 (none)
+seed  16 disconnect
+seed  17 disconnect
+seed  18 disconnect
+seed  19 disconnect
+seed  20 (none)
+TALLY 00040-api_generate.req.json ask_W5.py {'disconnect': 11, '(none)': 4, 'command "4"': 1, 'send_command "help"': 1, '(unparseable)': 1, 'send_command "BYE"; disconnect': 1, 'send_command " "': 1}
+seed   1 send_command "PING"
+seed   2 send_command "PING"
+seed   3 send_command "PING"
+seed   4 send_command "PING"
+seed   5 send_command "PING"
+seed   6 send_command "PING"
+seed   7 send_command "PING"
+seed   8 send_command "PING"
+seed   9 send_command "PING"
+seed  10 send_command "PING"
+seed  11 send_command "PING"
+seed  12 send_command "PING"
+seed  13 send_command "PING"
+seed  14 send_command "PING"
+seed  15 send_command "PING"
+seed  16 send_command "PING"
+seed  17 send_command "PING"
+seed  18 send_command "PING"
+seed  19 send_command "PING"
+seed  20 send_command "PING"
+TALLY 00008-api_generate.req.json ask_W4.py {'send_command "PING"': 20}
+seed   1 (none)
+seed   2 disconnect
+seed   3 (none)
+seed   4 send_command "PING"
+seed   5 disconnect
+seed   6 send_command "PING"
+seed   7 disconnect
+seed   8 disconnect
+seed   9 disconnect
+seed  10 disconnect
+seed  11 disconnect
+seed  12 send_command "PING"
+seed  13 send_command "PING"
+seed  14 send_command "PING"
+seed  15 disconnect
+seed  16 send_command "PING"
+seed  17 disconnect
+seed  18 disconnect
+seed  19 send_command "PING"
+seed  20 send_command "PING"
+TALLY 00008-api_generate.req.json ask_W5.py {'disconnect': 10, 'send_command "PING"': 8, '(none)': 2}
+seed   1 send_text "Paris"
+seed   2 send_command "answer"
+seed   3 send_text "Paris"
+seed   4 send_command "answer"
+seed   5 send_text "Paris"
+seed   6 (none)
+seed   7 send_command "answer"
+seed   8 send_text "Paris"
+seed   9 send_command "answer: Paris"
+seed  10 send_text "Paris"
+seed  11 send_text "Paris"
+seed  12 send_text "Paris"
+seed  13 send_text "Paris"
+seed  14 send_text "Paris"
+seed  15 wait_for_more
+seed  16 send_text "Paris"
+seed  17 send_text "Paris"
+seed  18 send_text "Paris"
+seed  19 send_text "Paris"
+seed  20 send_command "answer: Paris"
+TALLY 00004-api_generate.req.json ask_W4.py {'send_text "Paris"': 13, 'send_command "answer"': 3, 'send_command "answer: Paris"': 2, '(none)': 1, 'wait_for_more': 1}
+seed   1 send_text "Paris"
+seed   2 send_text "Paris"
+seed   3 send_text "Paris"
+seed   4 send_text "Paris"
+seed   5 send_command "Paris"
+seed   6 send_text "Paris"
+seed   7 send_command "Paris"
+seed   8 send_command "Paris"
+seed   9 (unparseable)
+seed  10 send_text "Paris"
+seed  11 send_text "Paris"
+seed  12 send_text "Paris"
+seed  13 wait_for_more
+seed  14 send_text "Paris"
+seed  15 send_command "Paris"
+seed  16 send_command "answer1"
+seed  17 send_text "Paris"
+seed  18 send_text "Paris"
+seed  19 send_text "Paris"
+seed  20 send_command "paris"
+TALLY 00004-api_generate.req.json ask_W5.py {'send_text "Paris"': 12, 'send_command "Paris"': 4, '(unparseable)': 1, 'wait_for_more': 1, 'send_command "answer1"': 1, 'send_command "paris"': 1}

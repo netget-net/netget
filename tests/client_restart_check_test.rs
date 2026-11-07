@@ -124,8 +124,10 @@ async fn asked_again(rx: &mut UnboundedReceiver<BridgeRequest>, done: &str) -> B
     assert_eq!(event_of(&again), "redis_response_received");
     let prompt = prompt_of(&again);
     assert!(
-        prompt.contains("not to be sent again") && prompt.contains(done),
-        "asked again, told {done} is done:\n{prompt}"
+        prompt.contains("Those lines or commands must not be sent again")
+            && prompt.contains("execute_redis_command is still the way to send anything new")
+            && prompt.contains(done),
+        "asked again, told {done} is done and its action is not:\n{prompt}"
     );
     again
 }

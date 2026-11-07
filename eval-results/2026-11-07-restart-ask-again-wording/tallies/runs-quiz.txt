@@ -1,0 +1,18 @@
+  seed 42: q1_line=True clean=True model_sent_paris=True end=True hellos=1 line_acts=41 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 43: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=23 unterminated_acts=0 wire=['hello', 'Paris', '2', 'Please answer the question.', 'answer', 'answer']
+  seed 44: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=36 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 45: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=38 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 46: q1_line=True clean=True model_sent_paris=True end=True hellos=1 line_acts=20 unterminated_acts=0 wire=['hello', 'Paris', '4', 'blue', 'goodbye', 'Please answer the question.']
+  seed 47: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=21 unterminated_acts=0 wire=['hello', 'Paris', '42', 'clear', 'answer', 'answer']
+  seed 48: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=43 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 49: q1_line=False clean=False model_sent_paris=False end=False hellos=1 line_acts=1 unterminated_acts=0 wire=['hello']
+results-quiz-m2.json {'q1_line': 7, 'q1_clean': 7, 'end': 2, 'hello_extra': 0, 'unterminated': 0, 'line_acts': 223, 'model_q1': 7} n=8
+  seed 42: q1_line=True clean=True model_sent_paris=True end=True hellos=1 line_acts=38 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 43: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=23 unterminated_acts=0 wire=['hello', 'Paris', '2', 'Please answer the question.', 'answer', 'answer']
+  seed 44: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=40 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 45: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=42 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 46: q1_line=True clean=True model_sent_paris=True end=True hellos=1 line_acts=22 unterminated_acts=0 wire=['hello', 'Paris', '4', 'blue', 'goodbye', 'Please answer the question.']
+  seed 47: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=21 unterminated_acts=0 wire=['hello', 'Paris', '42', 'clear', 'answer', 'answer']
+  seed 48: q1_line=True clean=True model_sent_paris=True end=False hellos=1 line_acts=24 unterminated_acts=0 wire=['hello', 'Paris', '2', 'answer', 'answer', 'answer']
+  seed 49: q1_line=False clean=False model_sent_paris=False end=False hellos=1 line_acts=1 unterminated_acts=0 wire=['hello']
+results-quiz-w5.json {'q1_line': 7, 'q1_clean': 7, 'end': 2, 'hello_extra': 0, 'unterminated': 0, 'line_acts': 211, 'model_q1': 7} n=8
