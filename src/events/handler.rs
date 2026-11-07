@@ -707,8 +707,12 @@ impl EventHandler {
                     // Update conversation state if server state changed
                     if state_changed && !should_retry {
                         conversation.update_current_state(&self.state, None).await;
-                        Log::to(&status_tx)
-                            .debug("Updated conversation state after server changes");
+                        // On the status channel too: the e2e harness reads this line from
+                        // stdout as the sign that startup finished (tests/helpers/netget.rs).
+                        Log::to(&status_tx).debug_to(
+                            crate::logging::emit::Sink::Both,
+                            "Updated conversation state after server changes",
+                        );
                     }
 
                     // If we should retry, add error to conversation and retry
