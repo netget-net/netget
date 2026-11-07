@@ -356,6 +356,12 @@ entity. Prefer `update_server` over a second `start_server` when a server alread
 `update_server`, `update_client`) are hot-applied too; a changed setting starts an empty cache,
 and the setting (not the cached answers) survives a restart. See "Reusing the model's answers".
 
+`restart_check` (on `start_client` and `update_client`; on unless `false`) is hot-applied and
+survives a reconnect: before a client re-sends, in answer to an event, the actions it opened its
+session with, the model is asked once whether its instruction calls for that, and the repeat is
+dropped unless it names a trigger found in both the instruction and the message
+(`src/client/restart_check.rs`; root `AGENTS.md`, "A client that starts its instruction over").
+
 ## Reusing the model's answers (`export_rules`, memoisation)
 
 Both features live in `src/llm/answer_reuse.rs` (shared) and `src/llm/rule_export.rs`, and

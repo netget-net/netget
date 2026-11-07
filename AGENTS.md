@@ -1003,17 +1003,62 @@ next peer would have been greeted as Zed. A line written `key: value` replaces t
 with that key in either scope (`common::append_memory_lines`), so the same fact appended twice
 reads once. `tests/connection_memory_test.rs` drives two telnet peers through the bridge.
 
-**A client's history is worded as progress, and its first turn is in it — but that does not
-stop a small model restarting a script.** `ExchangeHistory::render_for_client` lists each entry
-as "you did:" under a header saying all of it is done, and the initial call with no event is
-recorded as `client_started` (`tests/client_session_progress_test.rs`). Measured 31 October
-2026 with llama3.1:8b, a redis client told "Send PING, then GET mykey, then stop sending
-commands" re-sent the script on replies in 6 of 8 seeded runs before and 6 of 8 after, with both
-commands listed as sent directly above the reply. A paragraph in the client system prompt
-framing the instruction as a plan under way made it worse (the connect event, which has no
-history, came back empty or as an echoed transcript in 5 of 8) and was removed. A scripted
-client should be a script or static handler (`--client-handlers`); a structural answer for the
-model path is still open.
+**A client that starts its instruction over is caught after the model answers, not argued out
+of it before.** A client's instruction is usually a script ("Send PING, then GET mykey, then
+stop sending commands") and the model is asked again on every reply; llama3.1:8b answers reply
+after reply by sending the script again, in 8 of 8 seeded runs (seeds 42–49, 6 November 2026),
+with both commands listed as already sent directly above the reply. The history is worded as
+progress (`ExchangeHistory::render_for_client`: "you did:" under a header saying all of it is
+done, and the first call with no event is recorded as `client_started`,
+`tests/client_session_progress_test.rs`), and that is accurate but does not stop it; a
+paragraph in the client system prompt framing the instruction as a plan under way made the
+connect event come back empty or as an echoed transcript in 5 of 8 and was removed.
+
+What does stop it is `client::restart_check`, in the one choke point every client calls
+(`llm_budget::call_llm_for_client_inner`), between the model's answer and the wire:
+
+- The client's **opening** is the wire actions of its first model answer that sent anything
+  (`wait_for_more` sends nothing); a new instruction clears it.
+- A model answer to an event that **begins with the opening's first actions**, verbatim and in
+  order (`PING; GET mykey` again, or `PING` alone), is held, and the model is asked one
+  question offering `skip_repeat` or `send_again` (a budgeted call, `Event: client_restart_check`).
+- `send_again` must name a `trigger`, and NetGet checks it instead of trusting the choice: the
+  word must appear, as whole words, in the instruction **and** in the event's values ("each time
+  the server answers AGAIN" and the message `AGAIN`). A bare yes/no was measured and was not
+  enough — the model said "send again" to a PONG. An unfounded trigger counts as `skip_repeat`.
+- On `skip_repeat` the repeated actions are dropped and the rest of the answer is sent. When
+  nothing is left — the whole answer was the restart — the model is asked once more for the same
+  event, told the opening is done, and that answer is sent without any opening action. Without
+  this second turn a conversation stalls: a quiz client that answered question 1 with "hello"
+  again fell silent in 6 of 8 runs.
+- A question that cannot be asked or answered (budget spent, model error, unreadable answer)
+  sends the answer as it was. History records what was actually sent.
+
+It is a per-client setting, `restart_check` (on by default; `ClientForm`, `open_client`, MCP
+`start_client`/`update_client`, `ConversationOverrides`, hot-applied). It knows no protocol: it
+compares JSON actions the client's own model produced. What it costs: a repeat the instruction
+does not name a trigger for — a retry the model decides on by itself after an error — is
+dropped, so a client relying on that should set `restart_check: false`.
+
+Measured with llama3.1:8b, seeds 42–49, each run 60 s (`--load`, `--llm-seed`, `batching: false`,
+servers answered by script handlers), check off → on:
+
+| Case | Off | On |
+|---|---|---|
+| redis: "Send PING, then GET mykey, then stop sending commands." — exactly PING, GET on the wire | 0 of 8 (the script again on every reply until the run ended) | 7 of 8 (the eighth sent a literal `STOP`; nothing restarted) |
+| telnet, legitimate repeats: "Send PING. Each time the server answers AGAIN, send PING again. When it answers DONE, disconnect." — exactly 3 PINGs | 0 of 8 (seven sent 4–14 PINGs, DONE ignored; one never sent its first) | 7 of 8 (the eighth never sent its first PING, off or on) |
+| telnet quiz (conversational): "Say hello, then answer each question… When it says BYE, disconnect." — extra hellos on the wire / reached the last question / model answered question 1 | 105 / 1 of 8 / 7 of 8 | 19 / 3 of 8 / 8 of 8 |
+
+One quiz number goes the other way, and why matters: the answer to question 1 reached the
+server as a line in 7 of 8 runs off and 4 of 8 on. In the four the model answered with the
+telnet client's `send_text`, which sends no line ending; off, the restarted `hello` line that
+followed it happened to end the line (`Parishello`). That is the model picking the wrong telnet
+action, not the check — but a measurement of conversation over telnet should read the model's
+actions, not only the server's lines.
+
+A scripted client is still better written as a script or static handler (`--client-handlers`),
+which costs no model call at all. `tests/client_restart_check_test.rs` drives the mechanism
+through the bridge backend.
 
 **`notify_operator` is a note on the operator's screen and is never offered beside a wire
 answer.** It was `show_message`, and offered beside `send_telnet_line` it was taken for the
