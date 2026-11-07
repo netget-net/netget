@@ -1630,7 +1630,7 @@ of the test file**, not out of this table):
 | `event_action_declarations_test` | actions the model can never see, and advertised names the executor cannot run | — |
 | `well_known_port_declaration_test` | a server with no declared well-known port and no stated reason; a `PrivilegedPort(n)` or transport disagreeing with it | `NO_WELL_KNOWN_PORT` — finished answers, not a queue |
 | `startup_param_defaults_test` | a declared parameter `default` written as a literal instead of the constant the code uses (the type check is a registry walk) | **empty** |
-| `hand_rolled_dual_logging_ratchet_test` | a server `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | **empty**, `src/server/` only |
+| `hand_rolled_dual_logging_ratchet_test` | a `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | **empty** under `src/server/`; outside the protocol trees, one reasoned status-only site (`NOT_DUAL_LOGGING`) |
 
 A third check worth understanding: `event_action_declarations_test` probes each advertised
 name with a bare `{"type": name}`, which finds *unknown action* but can never find a wrong
@@ -2044,7 +2044,8 @@ cannot disagree with the file. `Log::to(&status_tx).info(format!(…))`; ERROR/W
 both sinks, DEBUG/TRACE stay in the file unless routed with `debug_to(Sink::Both, …)`. Levels:
 ERROR critical, WARN non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads. A tracing
 macro beside a hand-typed `status_tx.send(format!("[INFO] …"))` is the form it replaces, and
-`tests/hand_rolled_dual_logging_ratchet_test.rs` allows none of it under `src/server/`. Where the
+`tests/hand_rolled_dual_logging_ratchet_test.rs` allows none of it under `src/server/` or outside
+the protocol trees, bar the status-only sites its `NOT_DUAL_LOGGING` list names. Where the
 operator and the file need different detail, write one line both read — the subject, the
 `decision=` tag, what is safe on the dashboard — and a second DEBUG/TRACE line for what only the
 file should hold (a full error chain, a payload, a statement that may carry a credential).

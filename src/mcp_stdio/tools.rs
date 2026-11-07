@@ -1120,8 +1120,7 @@ impl NetGetMcpService {
             crate::llm::model_selection::resolve_configured_model(&llm_client, configured_model)
                 .await;
         if let Some(notice) = &resolved.notice {
-            tracing::warn!("Model: {}", notice);
-            let _ = status_tx.send(format!("[WARN] Model: {}", notice));
+            crate::logging::emit::Log::to(&status_tx).warn(format!("Model: {}", notice));
         }
         app_state.set_model_notice(resolved.notice);
         if let Some(model) = resolved.model {
