@@ -16,6 +16,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::{Event, StartupParams};
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -645,8 +646,10 @@ impl DynamoDbClient {
                         ),
                     },
                     Err(e) => {
-                        let _ = status_tx
-                            .send(format!("[ERROR] DynamoDB operation {} failed: {}", name, e));
+                        Log::to(status_tx).error(format!(
+                            "DynamoDB client {} operation {} failed: {}",
+                            client_id, name, e
+                        ));
                         // A failed operation is `Rejected`, not `Executed`. Both used to be
                         // `Executed`, so in the dashboard a DynamoDB rejection, an
                         // unconvertible attribute and a completed write rendered identically

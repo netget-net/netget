@@ -35,6 +35,7 @@ use crate::client::modbus::actions::{
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::modbus::codec::{
     encode_adu, encode_request, exception_name, parse_response, try_parse_adu, ModbusRequest,
@@ -518,10 +519,8 @@ async fn run_turns(
                         Ok(Applied::Disconnect) => return,
                         Ok(_) => {}
                         Err(e) => {
-                            error!("Modbus client {client_id} action failed: {e}");
-                            let _ = status_tx.send(format!(
-                                "[ERROR] Modbus client {client_id} action failed: {e}"
-                            ));
+                            Log::to(&status_tx)
+                                .error(format!("Modbus client {client_id} action failed: {e}"));
                         }
                     }
                 }

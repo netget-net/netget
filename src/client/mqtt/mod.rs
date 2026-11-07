@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::logging::emit::Log;
 use crate::protocol::StartupParams;
 
 use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
@@ -1195,9 +1196,8 @@ async fn command_loop(
 
         let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
         if let Err(e) = &outcome {
-            error!("MQTT client {} injected action failed: {}", client_id, e);
-            let _ = status_tx.send(format!(
-                "[WARN] Client {} injected action failed: {}",
+            Log::to(&status_tx).warn(format!(
+                "MQTT client {} injected action failed: {}",
                 client_id, e
             ));
         }

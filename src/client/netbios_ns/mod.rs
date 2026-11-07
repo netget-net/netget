@@ -48,6 +48,7 @@ pub mod wire;
 
 pub use actions::NetbiosNsClientProtocol;
 
+use crate::logging::emit::Log;
 use crate::utils::clock::Instant;
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
@@ -328,9 +329,8 @@ impl NetbiosNsClient {
                 match Self::apply_action(protocol, transport, action, client_id, status_tx).await {
                     Ok(applied) => applied,
                     Err(e) => {
-                        error!("NetBIOS-NS client {} action error: {}", client_id, e);
-                        let _ = status_tx.send(format!(
-                            "[WARN] NetBIOS-NS client {} action failed: {}",
+                        Log::to(status_tx).warn(format!(
+                            "NetBIOS-NS client {} action failed: {}",
                             client_id, e
                         ));
                         continue;
@@ -815,12 +815,8 @@ impl NetbiosNsClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "NetBIOS-NS client {} injected action failed: {}",
-                    client_id, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     client_id, e
                 ));
             }

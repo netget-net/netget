@@ -108,11 +108,10 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
    next tagged release.
 
-6. **Logging long tail.** Dual logging goes through the `Log` facade
-    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`) in every server and everywhere
-    outside the protocol trees, and `tests/hand_rolled_dual_logging_ratchet_test.rs` allows no
-    hand-rolled `[LEVEL]` send there except the status-only sites its `NOT_DUAL_LOGGING` list
-    names. `src/client/` (about 107 sites, counted 6 November 2026) is the remaining tail.
+6. **Logging long tail — closed.** Dual logging goes through the `Log` facade
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`) everywhere in `src/`, the
+    `console_*` macros included, and `tests/hand_rolled_dual_logging_ratchet_test.rs` allows no
+    hand-rolled `[LEVEL]` send except the status-only sites its `NOT_DUAL_LOGGING` list names.
 
 7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 

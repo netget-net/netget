@@ -552,11 +552,8 @@ impl ArpClient {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    error!("ARP client {} action failed: {}", client_id, e);
-                    let _ = status_tx.send(format!(
-                        "[WARN] ARP client {} action failed: {}",
-                        client_id, e
-                    ));
+                    Log::to(&status_tx)
+                        .warn(format!("ARP client {} action failed: {}", client_id, e));
                 }
             }
         }
@@ -601,9 +598,8 @@ impl ArpClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("ARP client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "ARP client {} injected action failed: {}",
                     client_id, e
                 ));
             }

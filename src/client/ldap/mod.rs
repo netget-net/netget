@@ -4,6 +4,7 @@ pub mod actions;
 pub use actions::LdapClientProtocol;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -252,9 +253,8 @@ impl LdapClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("LDAP client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "LDAP client {} injected action failed: {}",
                     client_id, e
                 ));
             }

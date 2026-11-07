@@ -4,11 +4,12 @@ pub mod actions;
 pub use actions::CassandraClientProtocol;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::client::cassandra::actions::{
     CASSANDRA_CLIENT_CONNECTED_EVENT, CASSANDRA_CLIENT_RESULT_RECEIVED_EVENT,
@@ -297,12 +298,8 @@ impl CassandraClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "Cassandra client {} injected action failed: {}",
-                    client_id, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     client_id, e
                 ));
             }
@@ -367,16 +364,17 @@ impl CassandraClient {
                     query,
                 }) => {
                     if depth >= MAX_FOLLOWUP_DEPTH {
-                        warn!(
-                            "Cassandra client {} stopped a follow-up chain at depth {}: '{}' \
-                             returned {} row(s) but the result is not being reported, so the \
-                             model will not answer it",
-                            client_id, depth, query, row_count
-                        );
-                        let _ = status_tx.send(format!(
-                            "[WARN] Cassandra client {} hit the follow-up depth limit ({}); the \
-                             last query ran but its rows were not reported",
-                            client_id, MAX_FOLLOWUP_DEPTH
+                        let log = Log::to(&status_tx);
+                        log.warn(format!(
+                            "Cassandra client {} hit the follow-up depth limit ({}); the last \
+                             query ran and returned {} row(s) but its rows were not reported, \
+                             so the model will not answer it",
+                            client_id, MAX_FOLLOWUP_DEPTH, row_count
+                        ));
+                        log.debug(format!(
+                            "Cassandra client {} follow-up chain stopped at depth {} after \
+                             '{}'",
+                            client_id, depth, query
                         ));
                     } else {
                         Self::report_result(

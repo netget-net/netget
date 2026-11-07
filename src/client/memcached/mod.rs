@@ -39,6 +39,7 @@ use crate::client::memcached::wire::{parse_reply, stats_json, Expect, Reply, Req
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -463,9 +464,8 @@ async fn run_turns(
                             Ok(Applied::Disconnect) => return,
                             Ok(_) => {}
                             Err(e) => {
-                                error!("Memcached client {client_id} action failed: {e}");
-                                let _ = status_tx.send(format!(
-                                    "[ERROR] Memcached client {client_id} action failed: {e}"
+                                Log::to(&status_tx).error(format!(
+                                    "Memcached client {client_id} action failed: {e}"
                                 ));
                             }
                         }

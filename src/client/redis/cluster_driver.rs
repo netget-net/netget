@@ -13,6 +13,7 @@ use crate::client::redis::actions::{
 };
 use crate::llm::actions::client_trait::Client;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
@@ -119,12 +120,8 @@ async fn ask(
                 {
                     Ok(work) => queue.extend(work),
                     Err(e) => {
-                        error!(
+                        Log::to(&status_tx).error(format!(
                             "Redis cluster client {} could not execute action: {}",
-                            client_id, e
-                        );
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Redis client {} action failed: {}",
                             client_id, e
                         ));
                     }

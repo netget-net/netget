@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info, trace, warn};
+use tracing::{error, info, trace};
 
 #[cfg(not(target_arch = "wasm32"))]
 use mongodb::{
@@ -23,6 +23,7 @@ use crate::client::mongodb::actions::{
 use crate::llm::actions::client_trait::Client;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -325,9 +326,8 @@ impl MongodbClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("MongoDB client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "MongoDB client {} injected action failed: {}",
                     client_id, e
                 ));
             }
@@ -391,15 +391,11 @@ impl MongodbClient {
         {
             Applied::Ran { event, detail } => {
                 if depth >= MAX_FOLLOWUP_DEPTH {
-                    warn!(
-                        "MongoDB client {} stopped a follow-up chain at depth {}: '{}' ran but \
-                         its result is not being reported, so the model will not answer it",
-                        client_id, depth, detail
-                    );
-                    let _ = status_tx.send(format!(
-                        "[WARN] MongoDB client {} hit the follow-up depth limit ({}); the last \
-                         operation ran but its result was not reported",
-                        client_id, MAX_FOLLOWUP_DEPTH
+                    Log::to(status_tx).warn(format!(
+                        "MongoDB client {} hit the follow-up depth limit ({}); the last \
+                         operation ('{}') ran but its result was not reported, so the model \
+                         will not answer it",
+                        client_id, MAX_FOLLOWUP_DEPTH, detail
                     ));
                 } else {
                     Self::raise_result_event(

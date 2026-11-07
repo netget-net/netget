@@ -10,6 +10,7 @@ use crate::client::mssql::actions::{
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
@@ -499,9 +500,8 @@ impl MssqlClient {
                 .await;
 
             if let Err(e) = &outcome {
-                error!("MSSQL client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "MSSQL client {} injected action failed: {}",
                     client_id, e
                 ));
             }

@@ -572,9 +572,8 @@ impl OpenApiClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("OpenAPI client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "OpenAPI client {} injected action failed: {}",
                     client_id, e
                 ));
             }

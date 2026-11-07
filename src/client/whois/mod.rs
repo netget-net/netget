@@ -14,6 +14,7 @@ pub mod actions;
 pub use actions::WhoisClientProtocol;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -314,9 +315,8 @@ impl WhoisClient {
             Err(e) => {
                 // Stay connected: the operator can still inject the query from the
                 // dashboard, and the server will close on its own otherwise.
-                error!("LLM error for WHOIS client {}: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] WHOIS client {} LLM error: {} (still connected; a query can be \
+                Log::to(&status_tx).warn(format!(
+                    "WHOIS client {} LLM error: {} (still connected; a query can be \
                      injected)",
                     client_id, e
                 ));
@@ -579,9 +579,8 @@ impl WhoisClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("WHOIS client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "WHOIS client {} injected action failed: {}",
                     client_id, e
                 ));
             }
