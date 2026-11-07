@@ -1,103 +1,65 @@
-//! The vendored pgwire in `vendor/pgwire` is the one Cargo builds, and it refuses malformed
-//! frontend messages instead of panicking on them.
+//! NetGet's pgwire fork (`netget-pgwire`, github.com/netget-net/pgwire) is the one Cargo
+//! builds, still carries its patches, and refuses malformed frontend messages instead of
+//! panicking on them. The fork's NETGET.md lists every change.
 //!
 //! pgwire 0.35.0's framer checks a message's declared length only from above and then hands
 //! the body decoder the *whole* receive buffer; the decoders read with `Buf::get_*` and
 //! `split_to`, which panic when the bytes are not there. So a `Query` with no NUL, a `Close`
 //! with no body or a `Bind` whose parameter length runs past the message panicked the
 //! connection task (IMPROVEMENTS #77), and a short message could be decoded out of the bytes
-//! of the message after it. `vendor/pgwire/README.md` has the patch.
+//! of the message after it.
 //!
-//! Two halves, like `vendored_hyper_patch_test.rs`:
+//! Two halves, like `vendored_kafka_protocol_patch_test.rs`:
 //!
-//! - Cargo must actually build the copy. `[patch.crates-io]` silently stops applying (it is
-//!   listed under `[[patch.unused]]`) when something wants a different pgwire.
+//! - Cargo must build the fork, at the version whose patches were checked, and upstream
+//!   `pgwire` must not be in the graph at all.
 //! - The decoder itself, driven through pgwire's public `PgWireFrontendMessage::decode` with
 //!   every malformed shape found. Against upstream 0.35.0 most of these cases panic; each
 //!   runs under `catch_unwind` so a regression names the case rather than aborting the run.
 //!   The wire-level counterpart is `tests/server/postgresql/decoder_panic_test.rs`.
 
-use std::fs;
+#[path = "helpers/fork_source.rs"]
+mod fork_source;
+
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
 
 use bytes::{BufMut, BytesMut};
+use fork_source::{assert_fork_is_built, fork_dir, read_fork};
 use pgwire::error::PgWireError;
 use pgwire::messages::{DecodeContext, PgWireFrontendMessage};
 
-fn read(rel: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
-}
+const FORK: &str = "netget-pgwire";
 
-fn manifest_version(manifest: &str) -> String {
-    let mut in_package = false;
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_package = line == "[package]";
-            continue;
-        }
-        if in_package {
-            if let Some(v) = line.strip_prefix("version = ") {
-                return v.trim_matches('"').to_string();
-            }
-        }
-    }
-    panic!("vendor/pgwire/Cargo.toml has no [package] version");
+#[test]
+fn cargo_builds_the_pgwire_fork_from_crates_io() {
+    assert_fork_is_built("pgwire", "0.35.0");
+    let locked = fork_source::locked_packages(FORK);
+    assert!(
+        locked.iter().all(|(_, source)| source.as_deref()
+            == Some("registry+https://github.com/rust-lang/crates.io-index")),
+        "Cargo.lock resolves {FORK} from {locked:?}, not crates.io: a local [patch] or path \
+         dependency is standing in for the published fork"
+    );
 }
 
 #[test]
-fn cargo_builds_the_vendored_pgwire_at_the_vendored_version() {
-    let root = read("Cargo.toml");
-    // The section header is a line of its own; match the line, not the words, which comments
-    // may also contain.
-    let patch = root
-        .split_once("\n[patch.crates-io]\n")
-        .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
-        .unwrap_or("");
-    assert!(
-        patch
-            .lines()
-            .any(|l| l.trim() == r#"pgwire = { path = "vendor/pgwire" }"#),
-        "Cargo.toml's [patch.crates-io] must point pgwire at vendor/pgwire (vendor/pgwire/README.md)"
-    );
-
-    let vendored = manifest_version(&read("vendor/pgwire/Cargo.toml"));
-    let lock = read("Cargo.lock");
-    let locked: Vec<(String, Option<String>)> = lock
-        .split("[[package]]")
-        .skip(1)
-        .filter_map(|entry| {
-            let field = |key: &str| {
-                entry.lines().find_map(|l| {
-                    l.strip_prefix(&format!("{key} = "))
-                        .map(|v| v.trim_matches('"').to_string())
-                })
-            };
-            (field("name")? == "pgwire").then(|| (field("version").unwrap(), field("source")))
-        })
-        .collect();
-    assert!(!locked.is_empty(), "Cargo.lock has no pgwire at all");
-    for (version, source) in &locked {
-        assert!(
-            source.is_none() && *version == vendored,
-            "Cargo.lock resolves pgwire {version} from {} but vendor/pgwire is {vendored}: the \
-             patched decoder is not the one being built. Re-vendor and re-apply the patch as \
-             vendor/pgwire/README.md describes, or restore the [patch.crates-io] entry.",
-            source.as_deref().unwrap_or("a path")
-        );
+fn pgwire_fork_keeps_its_version_licenses_and_patches() {
+    let manifest = read_fork(FORK, "Cargo.toml");
+    assert!(manifest.contains("name = \"netget-pgwire\""));
+    assert!(manifest.contains("version = \"0.35.0\""));
+    assert!(manifest.contains("license = \"MIT/Apache-2.0\""));
+    for file in ["LICENSE-APACHE", "LICENSE-MIT", "NETGET.md"] {
+        assert!(fork_dir(FORK).join(file).is_file(), "{file} missing");
     }
-    let unused = lock.split("[[patch.unused]]").skip(1).any(|entry| {
-        entry
-            .lines()
-            .take_while(|l| !l.starts_with("[["))
-            .any(|l| l.trim() == r#"name = "pgwire""#)
-    });
+    let codec = read_fork(FORK, "src/messages/codec.rs");
     assert!(
-        !unused,
-        "Cargo.lock lists vendor/pgwire under [[patch.unused]]: Cargo is building crates.io's \
-         pgwire, which panics on malformed messages."
+        codec.contains("pub(crate) fn decode_frontend_packet")
+            || codec.contains("pub fn decode_frontend_packet"),
+        "the fork's codec.rs lost decode_frontend_packet, the end-of-message check"
+    );
+    assert!(
+        codec.contains("fn split_declared"),
+        "the fork's codec.rs lost split_declared, the checked split for declared lengths"
     );
 }
 
@@ -240,7 +202,7 @@ fn malformed_frontend_messages_are_refused_not_panicked_on() {
     assert!(
         failures.is_empty(),
         "every malformed message must be PgWireError::InvalidMessageFormat \
-         (vendor/pgwire/README.md):\n  {}",
+         (the fork's NETGET.md):\n  {}",
         failures.join("\n  ")
     );
 }
