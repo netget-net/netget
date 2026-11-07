@@ -298,7 +298,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (63 servers as of 6 November 2026, after `redis` went to Stable;
+- **Beta** — human-reviewed, works against real clients (64 servers as of 6 November 2026, after `redis` went to Stable and `profinet` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -306,11 +306,13 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   `iscsi` (libiscsi and the Linux kernel initiator), `srt` (libsrt's srt-live-transmit) and
   `rsync` (the stock rsync client). What held most of them back was a note saying the pair job
   "had not run in CI", written when the protocol landed and never revisited after the job
-  passed — check `gh run list --workflow protocol-pairs.yml` before believing one. Two were
-  checked and **not** promoted: `db2` (Derby's JDBC client and IBM's CLI driver both pass, but
-  the server returns no result set, so a SELECT fails — the `openvpn` case below) and
-  `profinet` (profinet-py and pnio_dcp pass in the `profinet` pair job, but the test needs
-  Linux and CAP_NET_RAW, so nobody reviewing on macOS has seen it pass). Running the suites
+  passed — check `gh run list --workflow protocol-pairs.yml` before believing one. `db2` was
+  checked and **not** promoted: Derby's JDBC client and IBM's CLI driver both pass, but the
+  server returns no result set, so a SELECT fails — the `openvpn` case below. **`profinet` is
+  Beta on evidence that exists only in CI**: profinet-py and pnio_dcp pass its real-peer test
+  in the `profinet` pair job (job 116898932856), but that test needs Linux and CAP_NET_RAW, so
+  it cannot run on macOS and no local check reaches the raw transport — re-run the pair job
+  after touching it. Running the suites
   also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
   guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
   named, `afp-showmount`, had never run at all on an ephemeral port.
