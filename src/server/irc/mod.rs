@@ -210,15 +210,10 @@ impl IrcServer {
                                         // Refused by the protocol before any model call, so
                                         // it is neither the model's answer nor a backend
                                         // failure and carries its own token.
-                                        error!(
+                                        Log::to(&status_clone).error(format!(
                                             "IRC connection {} sent {} bytes with no newline \
                                              (limit {}), closing decision=refused_body_too_large",
                                             connection_id, n, MAX_IRC_READ_LINE
-                                        );
-                                        let _ = status_clone.send(format!(
-                                            "[ERROR] IRC connection {} exceeded {} bytes with no \
-                                             newline decision=refused_body_too_large",
-                                            connection_id, MAX_IRC_READ_LINE
                                         ));
                                         let reply = format!(
                                             "ERROR :Closing link: message exceeds {MAX_IRC_READ_LINE} bytes\r\n"
@@ -322,9 +317,7 @@ impl IrcServer {
                                 {
                                     Ok(execution_result) => {
                                         for message in &execution_result.messages {
-                                            info!("{}", message);
-                                            let _ =
-                                                status_clone.send(format!("[INFO] {}", message));
+                                            Log::to(&status_clone).info(message);
                                         }
 
                                         Log::to(&status_clone).debug(format!(
@@ -419,18 +412,13 @@ impl IrcServer {
                                             decision,
                                             failures
                                         );
+                                        let log = Log::to(&status_clone);
                                         if decision == "fail_closed_bad_action" {
-                                            error!("{}", summary);
-                                            let _ =
-                                                status_clone.send(format!("[ERROR] {}", summary));
+                                            log.error(summary);
                                         } else if decision == "model_silent" {
-                                            tracing::warn!("{}", summary);
-                                            let _ =
-                                                status_clone.send(format!("[WARN] {}", summary));
+                                            log.warn(summary);
                                         } else {
-                                            info!("{}", summary);
-                                            let _ =
-                                                status_clone.send(format!("[INFO] {}", summary));
+                                            log.info(summary);
                                         }
 
                                         // Actually end the link the model asked to end.
@@ -470,19 +458,21 @@ impl IrcServer {
                                             "fail_closed_llm_error"
                                         };
                                         let command = irc_command_token(&line);
-                                        error!(
-                                            "IRC {} on connection {} from {} decision={}: {}",
-                                            command, connection_id, remote_addr, token, e
-                                        );
-                                        let _ = status_clone.send(format!(
-                                            "[ERROR] IRC {} on connection {} from {} decision={}",
-                                            command, connection_id, remote_addr, token
-                                        ));
                                         let (reply, close) = irc_failure_reply(&command, &e);
-                                        let _ = status_clone.send(format!(
-                                            "[ERROR] IRC connection {} replying: {}",
+                                        let log = Log::to(&status_clone);
+                                        log.error(format!(
+                                            "IRC {} on connection {} from {} decision={}: {}; \
+                                             replying: {}",
+                                            command,
                                             connection_id,
+                                            remote_addr,
+                                            token,
+                                            crate::utils::truncate_for_log(&e.to_string(), 200),
                                             reply.trim_end()
+                                        ));
+                                        log.debug(format!(
+                                            "IRC connection {} LLM error chain: {:#}",
+                                            connection_id, e
                                         ));
                                         {
                                             let mut write = write_half_arc.lock().await;

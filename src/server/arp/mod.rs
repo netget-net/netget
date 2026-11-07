@@ -378,10 +378,8 @@ impl ArpServer {
                                                     "ARP reply (hex): {}", hex::encode(output_data)
                                                 ));
                                             } else {
-                                                error!("Failed to queue ARP reply");
-                                                let _ = status_clone.send(
-                                                    "[ERROR] Failed to queue ARP reply".to_string(),
-                                                );
+                                                Log::to(&status_clone)
+                                                    .error("Failed to queue ARP reply");
                                             }
                                         }
                                     }

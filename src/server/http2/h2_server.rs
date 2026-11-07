@@ -281,7 +281,8 @@ impl H2Server {
         // Fail-open parsing: surface any dropped rule loudly, since the effect
         // is that more requests reach the LLM, not fewer.
         for warning in filter.warnings() {
-            let _ = status_tx.send(format!("[ERROR] HTTP/2 request_filter: {}", warning));
+            crate::logging::emit::Log::to(&status_tx)
+                .error(format!("HTTP/2 request_filter: {}", warning));
         }
 
         // Create TLS acceptor if TLS is enabled
@@ -687,8 +688,8 @@ pub async fn handle_h2_request(
                 let _ = body_stream.flow_control().release_capacity(chunk.len());
             }
             Some(Err(e)) => {
-                warn!("Error reading request body: {}", e);
-                let _ = status_tx.send(format!("[WARN] Error reading body: {}", e));
+                crate::logging::emit::Log::to(&status_tx)
+                    .warn(format!("HTTP/2 error reading request body: {}", e));
                 break;
             }
             None => {
@@ -785,20 +786,13 @@ pub async fn handle_h2_request(
         .await;
 
     // Log request
-    debug!(
+    crate::logging::emit::Log::to(&status_tx).debug(format!(
         "HTTP/2 request: {} {} {} ({} bytes) from {:?}",
         method,
         uri,
         version,
         body_bytes.len(),
         connection_id
-    );
-    let _ = status_tx.send(format!(
-        "[DEBUG] HTTP/2 request: {} {} {} ({} bytes)",
-        method,
-        uri,
-        version,
-        body_bytes.len()
     ));
 
     // Apply the per-server request filter before spending an LLM call: only

@@ -109,11 +109,11 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    next tagged release.
 
 6. **Logging long tail.** Server dual logging goes through the `Log` facade
-    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`). The sites still sending a
-    `[LEVEL]` line by hand are listed, per file, in the baseline of
-    `tests/hand_rolled_dual_logging_ratchet_test.rs`, which may only shrink; nearly all of them
-    are pairs whose file and TUI halves say different things on purpose (error detail in the
-    file, a decision tag or a shortened key on the TUI), so each is a per-protocol decision.
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`), and
+    `tests/hand_rolled_dual_logging_ratchet_test.rs` allows no hand-rolled `[LEVEL]` send under
+    `src/server/`. Outside it the hand-rolled form remains: about 107 sites in `src/client/`, 70
+    in `src/events/`, 31 in `src/cli/`, 22 in `src/llm/` and 11 in `src/protocol/` (counted
+    6 November 2026 with the ratchet's own scan); the ratchet does not cover them yet.
 
 7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 

@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
@@ -139,18 +139,12 @@ impl SyslogServer {
                                     // dropped the message, the model answered nothing at all,
                                     // or it asked for real work.
                                     let decision = Self::decision_tag(&execution_result);
-                                    debug!(
+                                    Log::to(&status_clone).debug(format!(
                                         "Syslog message from {} decision={} ({} protocol results, {} failed actions)",
                                         peer_addr,
                                         decision,
                                         execution_result.protocol_results.len(),
                                         execution_result.failures.len()
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] Syslog message from {} decision={} ({} protocol results)",
-                                        peer_addr,
-                                        decision,
-                                        execution_result.protocol_results.len()
                                     ));
                                 }
                                 Err(e) => {

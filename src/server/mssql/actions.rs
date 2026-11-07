@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// MSSQL protocol action handler
 pub struct MssqlProtocol {
@@ -256,14 +255,8 @@ impl MssqlProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'rows' array")?;
 
-        debug!(
-            "MSSQL query response: {} columns, {} rows",
-            columns.len(),
-            rows.len()
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] MSSQL → Result set: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "MSSQL → Result set: {} columns, {} rows",
             columns.len(),
             rows.len()
         ));
@@ -324,12 +317,8 @@ impl MssqlProtocol {
             }
         };
 
-        debug!("MSSQL error response: {} - {}", error_number, message);
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] MSSQL ✗ Error {}: {}",
-            error_number, message
-        ));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("MSSQL ✗ Error {}: {}", error_number, message));
 
         Ok(ActionResult::Custom {
             name: "mssql_error".to_string(),
@@ -347,12 +336,8 @@ impl MssqlProtocol {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        debug!("MSSQL OK response: rows_affected={}", rows_affected);
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] MSSQL → OK: {} rows affected",
-            rows_affected
-        ));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("MSSQL → OK: {} rows affected", rows_affected));
 
         Ok(ActionResult::Custom {
             name: "mssql_ok".to_string(),

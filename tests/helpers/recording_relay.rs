@@ -13,9 +13,9 @@ pub type Recording = Arc<Mutex<Vec<(bool, Vec<u8>)>>>;
 
 /// Hand one recorded stream to an oracle, each chunk in the direction it travelled.
 pub fn replay(
-    mut oracle: crate::helpers::pcap_oracle::PcapOracle,
+    mut oracle: super::pcap_oracle::PcapOracle,
     chunks: &[(bool, Vec<u8>)],
-) -> crate::helpers::pcap_oracle::PcapOracle {
+) -> super::pcap_oracle::PcapOracle {
     for (to_server, bytes) in chunks {
         oracle = if *to_server {
             oracle.to_server(bytes)

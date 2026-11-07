@@ -104,9 +104,9 @@ async fn exchange(port: u16, bytes: Vec<u8>, deadline: Duration) -> (Vec<u8>, bo
     let (mut read_half, mut write_half) = stream.into_split();
     let writer = tokio::spawn(async move {
         let _ = write_half.write_all(&bytes).await;
-        // Hold the write half open: a FIN from this side would end the session for a reason
-        // other than the bound under test.
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        // Hold the write half open until the reader is done and aborts this task: a FIN from
+        // this side would end the session for a reason other than the bound under test.
+        std::future::pending::<()>().await;
     });
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
@@ -461,7 +461,8 @@ async fn bytes_arriving_while_a_command_is_answered_are_under_the_frame_cap() {
             }
             counter.fetch_add(part.len(), Ordering::SeqCst);
         }
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        // Hold the write half open until the reader aborts this task.
+        std::future::pending::<()>().await;
     });
 
     let mut out = Vec::new();

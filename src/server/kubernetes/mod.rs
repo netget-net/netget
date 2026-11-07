@@ -302,8 +302,8 @@ impl KubernetesServer {
                                 app_state_for_close
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_for_close.send(format!(
-                                    "[INFO] Kubernetes API connection {connection_id} closed"
+                                crate::logging::emit::Log::to(&status_for_close).info(format!(
+                                    "Kubernetes API connection {connection_id} closed"
                                 ));
                                 let _ = status_for_close.send("__UPDATE_UI__".to_string());
                             })
@@ -592,16 +592,18 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
         .unwrap_or("")
         .to_string();
 
-    debug!("Kubernetes API {} {}{}", method, path, {
-        if query_string.is_empty() {
-            String::new()
-        } else {
-            format!("?{query_string}")
+    crate::logging::emit::Log::to(&ctx.status_tx).debug(format!(
+        "Kubernetes API {} {}{}",
+        method,
+        path,
+        {
+            if query_string.is_empty() {
+                String::new()
+            } else {
+                format!("?{query_string}")
+            }
         }
-    });
-    let _ = ctx
-        .status_tx
-        .send(format!("[DEBUG] Kubernetes API {method} {path}"));
+    ));
 
     let route = resolve_route(&path);
     trace!("Kubernetes API route: {:?}", route);

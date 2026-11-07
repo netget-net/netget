@@ -4,6 +4,7 @@ pub mod actions;
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::utils::bson_depth::{
     scan_bson_document, scan_bson_document_with_limit, BsonScan, MAX_BSON_DEPTH,
@@ -146,11 +147,7 @@ impl MongodbServer {
         let listener = TcpListener::bind(listen_addr).await?;
         let actual_addr = listener.local_addr()?;
 
-        info!("MongoDB server starting on {}", actual_addr);
-        let _ = status_tx.send(format!(
-            "[INFO] MongoDB server listening on {}",
-            actual_addr
-        ));
+        Log::to(&status_tx).info(format!("MongoDB server listening on {}", actual_addr));
 
         let server = Arc::new(MongodbServer::new(
             llm_client,
@@ -454,12 +451,8 @@ impl MongodbHandler {
                 match tokio::time::timeout(header_timeout, reader.read_exact(&mut header)).await {
                     Ok(read) => read,
                     Err(_) => {
-                        debug!(
-                            "MongoDB: {} sent no message header for {:?}; closing idle connection",
-                            self.remote_addr, header_timeout
-                        );
-                        let _ = self.status_tx.send(format!(
-                            "[INFO] MongoDB: {} sent nothing for {:?}, closing idle connection",
+                        Log::to(&self.status_tx).info(format!(
+                            "MongoDB: {} sent no message header for {:?}, closing idle connection",
                             self.remote_addr, header_timeout
                         ));
                         disconnect_reason = "idle_timeout";
@@ -494,12 +487,9 @@ impl MongodbHandler {
             // the process; a value near i32::MAX allocated gigabytes per connection. Both are
             // reachable with 16 bytes from an unauthenticated peer.
             if !(16..=MAX_MESSAGE_SIZE).contains(&message_length) {
-                error!(
-                    "MongoDB: rejecting message with out-of-range length {} from {}",
-                    message_length, self.remote_addr
-                );
-                let _ = self.status_tx.send(format!(
-                    "[ERROR] MongoDB: invalid message length {} from {}, closing connection",
+                Log::to(&self.status_tx).error(format!(
+                    "MongoDB: rejecting message with out-of-range length {} from {}, closing \
+                     connection",
                     message_length, self.remote_addr
                 ));
                 disconnect_reason = "invalid_message_length";
@@ -521,14 +511,10 @@ impl MongodbHandler {
                     r?;
                 }
                 Err(_) => {
-                    error!(
-                        "MongoDB: {} did not finish a {}-byte message within {:?}, closing",
+                    Log::to(&self.status_tx).error(format!(
+                        "MongoDB: {} did not finish a {}-byte message within {:?}, closing \
+                         connection",
                         self.remote_addr, message_length, BODY_READ_TIMEOUT
-                    );
-                    let _ = self.status_tx.send(format!(
-                        "[ERROR] MongoDB: incomplete message body from {} after {:?}, \
-                         closing connection",
-                        self.remote_addr, BODY_READ_TIMEOUT
                     ));
                     disconnect_reason = "incomplete_message_body";
                     break;
@@ -542,13 +528,10 @@ impl MongodbHandler {
             // Parse command based on opCode. Only OP_MSG is implemented; anything else would
             // leave the client waiting forever for a reply it can parse, so close instead.
             if op_code != OP_MSG {
-                error!(
-                    "MongoDB: unsupported opCode {} from {}, closing connection",
-                    op_code, self.remote_addr
-                );
-                let _ = self.status_tx.send(format!(
-                    "[ERROR] MongoDB: unsupported opCode {} (only OP_MSG {} is implemented)",
-                    op_code, OP_MSG
+                Log::to(&self.status_tx).error(format!(
+                    "MongoDB: unsupported opCode {} from {} (only OP_MSG {} is implemented), \
+                     closing connection",
+                    op_code, self.remote_addr, OP_MSG
                 ));
                 disconnect_reason = "unsupported_opcode";
                 break;
@@ -560,14 +543,10 @@ impl MongodbHandler {
                     // The whole message has been read, so the connection is still in step:
                     // answer this request with MongoDB's own depth error and carry on, as a
                     // real server does. Nothing from the document reaches the model.
-                    warn!(
+                    Log::to(&self.status_tx).warn(format!(
                         "MongoDB connection {} decision=fail_closed_bson_too_deep: command \
                          document nests deeper than {} levels; refused without decoding",
                         self.connection_id, limit
-                    );
-                    let _ = self.status_tx.send(format!(
-                        "[WARN] MongoDB connection {} decision=fail_closed_bson_too_deep",
-                        self.connection_id
                     ));
                     let doc = mongodb_error_doc(MONGODB_OVERFLOW, BSON_TOO_DEEP_ERRMSG);
                     let response_bytes = self.encode_op_msg_response(request_id, doc)?;
@@ -575,10 +554,10 @@ impl MongodbHandler {
                     continue;
                 }
                 Err(e) => {
-                    error!("MongoDB: malformed OP_MSG from {}: {}", self.remote_addr, e);
-                    let _ = self
-                        .status_tx
-                        .send(format!("[ERROR] MongoDB: malformed OP_MSG: {}", e));
+                    Log::to(&self.status_tx).error(format!(
+                        "MongoDB: malformed OP_MSG from {}: {}",
+                        self.remote_addr, e
+                    ));
                     disconnect_reason = "malformed_op_msg";
                     break;
                 }
@@ -675,15 +654,20 @@ impl MongodbHandler {
                         crate::utils::WireFailure::Overloaded => MONGODB_TEMPORARILY_UNAVAILABLE,
                         crate::utils::WireFailure::Unavailable => MONGODB_INTERNAL_ERROR,
                     };
-                    error!(
+                    let message = failure.prefixed_text();
+                    let log = Log::to(&self.status_tx);
+                    log.error(format!(
                         "MongoDB command '{}' on connection {}: decision=fail_closed_llm_error \
                          category={:?} code={} error={}",
-                        command_name, self.connection_id, failure, code, e
-                    );
-                    let message = failure.prefixed_text();
-                    let _ = self.status_tx.send(format!(
-                        "[ERROR] MongoDB connection {} decision=fail_closed_llm_error code={}: {}",
-                        self.connection_id, code, message
+                        command_name,
+                        self.connection_id,
+                        failure,
+                        code,
+                        crate::utils::truncate_for_log(&e.to_string(), 200)
+                    ));
+                    log.debug(format!(
+                        "MongoDB connection {} LLM error chain: {:#}",
+                        self.connection_id, e
                     ));
                     let doc = mongodb_error_doc(code, message);
                     let response_bytes = self.encode_op_msg_response(request_id, doc)?;
@@ -722,15 +706,10 @@ impl MongodbHandler {
                                     d
                                 }
                                 Err(e) => {
-                                    error!(
+                                    Log::to(&self.status_tx).error(format!(
                                         "MongoDB command '{}' on connection {}: \
                                          decision=fail_closed_unusable_answer error={}",
                                         command_name, self.connection_id, e
-                                    );
-                                    let _ = self.status_tx.send(format!(
-                                        "[ERROR] MongoDB connection {} \
-                                         decision=fail_closed_unusable_answer for command '{}'",
-                                        self.connection_id, command_name
                                     ));
                                     mongodb_error_doc(
                                         MONGODB_INTERNAL_ERROR,
@@ -763,13 +742,9 @@ impl MongodbHandler {
             if !responded && !close_requested {
                 // MongoDB is strictly request/response: a command with no reply hangs the
                 // driver until its own timeout. Answer with an error instead.
-                warn!(
+                Log::to(&self.status_tx).warn(format!(
                     "MongoDB command '{}' on connection {}: decision=fail_closed_no_answer",
                     command_name, self.connection_id
-                );
-                let _ = self.status_tx.send(format!(
-                    "[WARN] MongoDB connection {} decision=fail_closed_no_answer for command '{}'",
-                    self.connection_id, command_name
                 ));
                 let doc = mongodb_error_doc(
                     59,

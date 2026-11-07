@@ -267,7 +267,9 @@ impl Message for Bind {
             let data_len = buf.try_get_i32()?;
 
             if data_len >= 0 {
-                parameters.push(Some(codec::split_declared(buf, data_len as usize)?.freeze()));
+                parameters.push(Some(
+                    codec::split_declared(buf, data_len as usize)?.freeze(),
+                ));
             } else {
                 parameters.push(None);
             }

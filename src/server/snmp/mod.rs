@@ -286,26 +286,17 @@ impl SnmpServer {
                         let mut v3_request: Option<Arc<usm::Request>> = None;
                         if check_ber_structure(&data, MAX_BER_DEPTH).is_ok() && usm::is_v3(&data) {
                             let Some(agent) = &usm else {
-                                warn!(
-                                    "SNMP dropping an SNMPv3 message from {} \
-                                     (decision=dropped_v3_not_configured): no v3_users configured",
-                                    peer_addr
-                                );
-                                let _ = status_tx.send(format!(
-                                    "[WARN] SNMP dropped an SNMPv3 message from {}: no v3_users are configured",
+                                Log::to(&status_tx).warn(format!(
+                                    "SNMP dropped an SNMPv3 message from {} \
+                                     (decision=dropped_v3_not_configured): no v3_users are configured",
                                     peer_addr
                                 ));
                                 continue;
                             };
                             match agent.receive(&data) {
                                 usm::Inbound::Report(bytes, kind) => {
-                                    info!(
-                                        "SNMP v3 report {} to {} (decision=usm_report)",
-                                        kind.name(),
-                                        peer_addr
-                                    );
-                                    let _ = status_tx.send(format!(
-                                        "[INFO] SNMP v3 {} report to {}",
+                                    Log::to(&status_tx).info(format!(
+                                        "SNMP v3 {} report to {} (decision=usm_report)",
                                         kind.name(),
                                         peer_addr
                                     ));
@@ -315,13 +306,9 @@ impl SnmpServer {
                                     continue;
                                 }
                                 usm::Inbound::Drop(reason) => {
-                                    warn!(
-                                        "SNMP dropping an SNMPv3 message from {} \
+                                    Log::to(&status_tx).warn(format!(
+                                        "SNMP dropped an SNMPv3 message from {} \
                                          (decision=dropped_v3): {}",
-                                        peer_addr, reason
-                                    );
-                                    let _ = status_tx.send(format!(
-                                        "[WARN] SNMP dropped an SNMPv3 message from {}: {}",
                                         peer_addr, reason
                                     ));
                                     continue;
@@ -383,13 +370,9 @@ impl SnmpServer {
                                 // Response PDU without one is not addressable to anything. The
                                 // operator still has to be able to see it, so it goes to the
                                 // status stream as well as the log.
-                                warn!(
-                                    "SNMP dropping unparseable datagram from {} \
+                                Log::to(&status_tx).warn(format!(
+                                    "SNMP dropped a malformed {} byte datagram from {} \
                                      (decision=dropped_malformed_request): {}",
-                                    peer_addr, e
-                                );
-                                let _ = status_tx.send(format!(
-                                    "[WARN] SNMP dropped a malformed {} byte datagram from {}: {}",
                                     n, peer_addr, e
                                 ));
                                 continue;
@@ -609,13 +592,10 @@ impl SnmpServer {
                                     } else {
                                         "fail_closed_llm_error"
                                     };
-                                    error!(
-                                        "SNMP LLM call failed for request {} from {} (decision={}): {}",
+                                    Log::to(&status_clone).error(format!(
+                                        "SNMP LLM call failed for request {} from {}, replying \
+                                         genErr (decision={}): {}",
                                         request_id, peer_addr, decision, e
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[ERROR] SNMP replying genErr to {} for request {} (decision={}): {}",
-                                        peer_addr, request_id, decision, e
                                     ));
                                     match Self::build_response_message(
                                         &framing,
@@ -635,12 +615,8 @@ impl SnmpServer {
                                             }
                                         }
                                         Err(build_err) => {
-                                            error!(
-                                                "Failed to build SNMP genErr response for {}: {}",
-                                                peer_addr, build_err
-                                            );
-                                            let _ = status_clone.send(format!(
-                                                "[ERROR] SNMP could not encode genErr for {}: {}",
+                                            Log::to(&status_clone).error(format!(
+                                                "SNMP could not encode genErr for {}: {}",
                                                 peer_addr, build_err
                                             ));
                                         }
@@ -722,11 +698,10 @@ impl SnmpServer {
         }
         match socket.send_to(&ack, peer_addr).await {
             Ok(_) => {
-                info!(
+                Log::to(&status_tx).info(format!(
                     "SNMP inform from {} decision=model_accept: acknowledged",
                     peer_addr
-                );
-                let _ = status_tx.send(format!("[INFO] SNMP inform from {peer_addr} acknowledged"));
+                ));
             }
             Err(e) => error!("SNMP inform acknowledgement to {} failed: {}", peer_addr, e),
         }

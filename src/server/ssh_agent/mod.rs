@@ -395,12 +395,8 @@ impl SshAgentServer {
                                                 }
                                                 Ok(None) => break,
                                                 Err(e) => {
-                                                    error!(
-                                                        "Malformed framing on SSH Agent connection {}: {}",
-                                                        connection_id, e
-                                                    );
-                                                    let _ = status_tx_clone.send(format!(
-                                                        "[ERROR] SSH Agent framing error on connection {}: {}",
+                                                    Log::to(&status_tx_clone).error(format!(
+                                                        "SSH Agent framing error on connection {}: {}",
                                                         connection_id, e
                                                     ));
                                                     fatal = true;
