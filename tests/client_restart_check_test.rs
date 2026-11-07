@@ -275,10 +275,14 @@ async fn an_answer_that_starts_the_script_over_is_asked_about_and_not_sent() {
     );
     // Answered the way llama3.1:8b answers it: the action as a bare string.
     answer(check, json!([SKIP_REPEAT]));
-    // Asked again, the model restarts once more and then does something new: the restart is
+    // Asked again, the model sends the opening's steps once more — the second one alone, as
+    // llama3.1:8b did, and the first — and then something new: every opening action is
     // dropped unasked, the new step is sent. This is what keeps a conversation going.
     let again = asked_again(&mut s.rx, "PING").await;
-    answer(again, json!([cmd("PING"), cmd("GET next")]));
+    answer(
+        again,
+        json!([cmd("GET mykey"), cmd("PING"), cmd("GET next")]),
+    );
     s.wait_for_commands(3).await;
     let reply = next_request(&mut s.rx).await;
     assert_eq!(event_of(&reply), "redis_response_received");

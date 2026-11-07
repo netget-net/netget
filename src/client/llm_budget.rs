@@ -450,14 +450,10 @@ async fn call_llm_for_client_inner(
                         )
                         .await
                         {
-                            Ok(next) => {
-                                crate::client::restart_check::strip_restart(
-                                    state,
-                                    cid,
-                                    next.actions,
-                                )
-                                .await
-                            }
+                            Ok(next) => crate::client::restart_check::without_opening_actions(
+                                refused,
+                                next.actions,
+                            ),
                             Err(e) => {
                                 warn!(
                                     "Client {} was asked again after a refused restart and the \

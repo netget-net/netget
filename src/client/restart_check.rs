@@ -28,9 +28,12 @@
 //! - [`SKIP_REPEAT`], or a [`SEND_AGAIN`] whose trigger is not in both, drops the repeated
 //!   actions and sends whatever followed them in the answer. When nothing follows them — the
 //!   whole answer was the restart — the model is asked once more for the same event, told
-//!   which steps are done ([`continue_instruction`]), and its answer is sent with any restart
-//!   at its front dropped unasked. That is what keeps a conversation going: the model has not
-//!   answered the message yet, it has only repeated itself.
+//!   that the opening's actions are done and not to be sent again ([`continue_instruction`]),
+//!   and its answer is sent without any of them ([`without_opening_actions`]). That is what
+//!   keeps a conversation going: the model has not answered the message yet, it has only
+//!   repeated itself. Dropping every opening action there, not only a restart from the top,
+//!   is measured too: asked "what next", llama3.1:8b answered a redis PONG with `GET mykey`,
+//!   the opening's second step, in 3 of 8 seeded runs.
 //! - Anything else — the question failing, an unreadable answer, the budget spent — sends the
 //!   answer as it was: a check that cannot be asked changes nothing.
 //!
@@ -179,9 +182,9 @@ fn describe(action: &Value) -> String {
 pub struct Checked {
     /// The actions to send.
     pub actions: Vec<Value>,
-    /// The repeated steps, described, when the repeat was dropped; `None` when the answer
-    /// stands as the model wrote it.
-    pub refused: Option<String>,
+    /// The client's opening, when a repeat of it was dropped; `None` when the answer stands
+    /// as the model wrote it.
+    pub refused: Option<Vec<Value>>,
 }
 
 impl Checked {
@@ -205,25 +208,22 @@ impl Checked {
 /// hello and then answer each question answered the first question with "hello" again; with
 /// the repeat dropped and nothing else in the answer, the client said nothing and the server
 /// waited for an answer that never came.
-pub fn continue_instruction(instruction: &str, refused: &str) -> String {
+pub fn continue_instruction(instruction: &str, opening: &[Value]) -> String {
+    let done = opening.iter().map(describe).collect::<Vec<_>>().join("; ");
     format!(
-        "{instruction}\n\nAlready done earlier in this session, and not to be sent again: \
-         {refused}. Answer the latest message with what your instruction calls for next; if \
-         nothing is left to do, answer with no actions."
+        "{instruction}\n\nAlready done at the start of this session, and not to be sent \
+         again: {done}. Answer the latest message with what your instruction calls for next; \
+         if nothing is left to do, answer with no actions."
     )
 }
 
-/// `actions` without a restart at its front, decided without asking: for the answer to
-/// [`continue_instruction`], where the model has already been told those steps are done.
-pub async fn strip_restart(
-    state: &AppState,
-    client_id: ClientId,
-    actions: Vec<Value>,
-) -> Vec<Value> {
-    match state.client_restart_opening(client_id).await {
-        Some(opening) => without_repeated(repeated_opening_len(&opening, &actions), actions),
-        None => actions,
-    }
+/// `actions` without any action equal to one of the opening's, decided without asking: for
+/// the answer to [`continue_instruction`], which told the model those are done.
+pub fn without_opening_actions(opening: &[Value], actions: Vec<Value>) -> Vec<Value> {
+    actions
+        .into_iter()
+        .filter(|action| !opening.contains(action))
+        .collect()
 }
 
 /// Check `answer`, the model's answer to `event`, against the client's opening, asking the
@@ -308,7 +308,7 @@ pub async fn check_answer(
             ));
             Checked {
                 actions: without_repeated(n, answer),
-                refused: Some(repeated),
+                refused: Some(opening.clone()),
             }
         }
         Ok(Verdict::Done) => {
@@ -321,7 +321,7 @@ pub async fn check_answer(
             ));
             Checked {
                 actions: without_repeated(n, answer),
-                refused: Some(repeated),
+                refused: Some(opening.clone()),
             }
         }
         Err(e) => {
