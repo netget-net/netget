@@ -32,16 +32,6 @@ use std::path::{Path, PathBuf};
 
 /// Files that may still hand-roll a `[LEVEL]` send, with the number of sites allowed.
 const BASELINE: &[(&str, usize)] = &[
-    ("src/server/irc/mod.rs", 7),
-    ("src/server/mongodb/mod.rs", 10),
-    ("src/server/pop3/mod.rs", 11),
-    ("src/server/postgresql/mod.rs", 7),
-    ("src/server/proxy/tls_mitm.rs", 13),
-    ("src/server/snmp/mod.rs", 7),
-    ("src/server/ssh/sftp_handler.rs", 19),
-    ("src/server/torrent_dht/mod.rs", 4),
-    ("src/server/wireguard/mod.rs", 7),
-    ("src/server/zookeeper/mod.rs", 4),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
