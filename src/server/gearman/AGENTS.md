@@ -18,7 +18,7 @@ is lines; `wire.rs` is pure functions. No maintained Rust crate implements the s
 |---|---|
 | `mod.rs` | accept loop, the in-flight job table (`Jobs`), the session loop, `run_job` (the model's answer → packets), `Framer` (packets and admin lines on one connection) |
 | `wire.rs` | `parse_header`, `encode`/`response`, `split_args`, `parse_request`, the packet renderers, `read_response`, `error`, the admin parser and renderers |
-| `actions.rs` | the `Protocol`/`Server` impls, the seven actions, `Work`, the `gearman_job_submitted` event |
+| `actions.rs` | the `Protocol`/`Server` impls, the seven actions (six offered on the job event), `Work`, the `gearman_job_submitted` event |
 
 ## Spec subset
 
@@ -60,8 +60,17 @@ when its answer is written. Nothing is queued and nothing is stored.
 | `send_gearman_status {numerator, denominator}` | `WORK_STATUS` (numerator ≤ denominator) |
 | `send_gearman_data {data}` | `WORK_DATA` — printed ahead of the result |
 | `send_gearman_exception {text}` | `WORK_EXCEPTION`, or `WORK_FAIL` if the client did not enable exceptions (gearmand's rule) |
-| `send_gearman_error {code, text}` | `ERROR code text` — code `[A-Za-z0-9_]{1,64}`, text without NUL |
+| `send_gearman_error {code, text}` | `ERROR code text` — code `[A-Za-z0-9_]{1,64}`, text without NUL. **Not offered on `gearman_job_submitted`**; static rules and the dashboard can send it |
 | `close_connection` | close after the answer |
+
+**`ERROR` is not offered to the model as a job's answer.** The `gearman` CLI exits 0 on an
+`ERROR` packet, so a job refused that way reads as a success. When ERROR was offered (its `code`
+parameter even named `unknown_function` as an example), llama3.1:8b, told "only reverse; any
+other function must fail", answered `translate` with `send_gearman_error` on 33 of 40 seeds
+(seeds 1–40, the captured prompt replayed). With the action removed from the event, it failed
+the job on 37 of 40. With the descriptions reworded and the action still offered, it failed the
+job on 29 of 40. `send_gearman_error` stays in `get_sync_actions()`, so a static rule may name it
+(`llm_failure_test.rs`), and so may an action sent from the dashboard.
 
 Every job action takes an optional `job_handle`. Answering the event, it may be omitted: the
 executor returns the answer structured (`ActionResult::Custom "gearman_work"`) and the loop

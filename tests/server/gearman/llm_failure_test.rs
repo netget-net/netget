@@ -176,6 +176,45 @@ async fn a_model_error_is_sent_and_logged_as_model_reject() {
     common::wait_for_log(&mut rx, "decision=model_reject", 10).await;
 }
 
+/// The model is never offered `ERROR` as a job's answer. `gearman` exits 0 on it, so a job
+/// refused that way reads as a success, and llama3.1:8b offered it beside `fail_gearman_job`
+/// picked it for an unknown function on 33 of 40 seeds. A static rule may still send one
+/// (the test above): the action stays in the protocol's sync set.
+#[test]
+fn the_job_event_does_not_offer_the_model_an_error_packet() {
+    use netget::llm::actions::protocol_trait::Protocol;
+    use netget::server::gearman::actions::{GearmanProtocol, GEARMAN_JOB_SUBMITTED_EVENT};
+
+    let offered: Vec<&str> = GEARMAN_JOB_SUBMITTED_EVENT
+        .actions
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    assert!(
+        !offered.contains(&"send_gearman_error"),
+        "gearman_job_submitted offers send_gearman_error: {offered:?}"
+    );
+    assert!(
+        offered.contains(&"fail_gearman_job"),
+        "the job event must offer the failure: {offered:?}"
+    );
+    assert!(
+        !GEARMAN_JOB_SUBMITTED_EVENT
+            .description
+            .contains("send_gearman_error"),
+        "the event description still names send_gearman_error"
+    );
+    let sync: Vec<String> = GearmanProtocol::new()
+        .get_sync_actions()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert!(
+        sync.iter().any(|n| n == "send_gearman_error"),
+        "rules and the dashboard still need send_gearman_error: {sync:?}"
+    );
+}
+
 #[tokio::test]
 async fn nothing_follows_the_outcome() {
     let (_, created, seen, mut rx) = one_job(serde_json::json!([
