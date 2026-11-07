@@ -17,7 +17,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// Db2 protocol action handler (stateless description; no storage).
 pub struct Db2Protocol {
@@ -230,10 +229,10 @@ impl Db2Protocol {
             .and_then(|v| v.as_str())
             .unwrap_or("password_invalid")
             .to_string();
-        debug!("Db2 reject connection: {} ({})", reason, sec_check_code);
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Db2 ✗ reject: {}", reason));
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Db2 ✗ reject connection: {} ({})",
+            reason, sec_check_code
+        ));
         Ok(ActionResult::Custom {
             name: "db2_reject_connection".to_string(),
             data: json!({ "reason": reason, "sec_check_code": sec_check_code }),
@@ -243,12 +242,8 @@ impl Db2Protocol {
     fn execute_query_ok(&self, action: serde_json::Value) -> Result<ActionResult> {
         let rows_affected = action.get("rows_affected").and_then(|v| v.as_i64());
         let sqlcode = action.get("sqlcode").and_then(|v| v.as_i64()).unwrap_or(0);
-        debug!(
-            "Db2 query ok: sqlcode={}, rows={:?}",
-            sqlcode, rows_affected
-        );
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Db2 → OK sqlcode={} rows={:?}",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Db2 → OK sqlcode={} rows={:?}",
             sqlcode, rows_affected
         ));
         Ok(ActionResult::Custom {
@@ -272,12 +267,8 @@ impl Db2Protocol {
             .and_then(|v| v.as_str())
             .unwrap_or("SQL error")
             .to_string();
-        debug!(
-            "Db2 query error: sqlcode={}, sqlstate={}",
-            sqlcode, sqlstate
-        );
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Db2 ✗ SQL error sqlcode={} sqlstate={}",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Db2 ✗ SQL error sqlcode={} sqlstate={}",
             sqlcode, sqlstate
         ));
         Ok(ActionResult::Custom {

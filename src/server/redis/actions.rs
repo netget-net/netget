@@ -13,7 +13,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Redis protocol action handler
 pub struct RedisProtocol {
@@ -471,10 +471,8 @@ impl RedisProtocol {
             .and_then(|v| v.as_str())
             .context("Missing 'value' field")?;
 
-        debug!("Redis simple string response: {}", value);
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Redis → Simple string: {}", value));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("Redis → Simple string: {}", value));
 
         Ok(ActionResult::Output(encode_simple_string(value)))
     }
@@ -494,11 +492,12 @@ impl RedisProtocol {
             None
         };
 
-        debug!("Redis bulk string response: {:?}", result);
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Redis → Bulk string: {} bytes",
+        let log = crate::logging::emit::Log::to(&self.status_tx);
+        log.debug(format!(
+            "Redis → Bulk string: {} bytes",
             result.as_ref().map(|v| v.len()).unwrap_or(0)
         ));
+        log.trace(format!("Redis bulk string response: {:?}", result));
 
         Ok(ActionResult::Output(match result {
             Some(bytes) => encode_bulk_string(&bytes),
@@ -512,10 +511,8 @@ impl RedisProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'values' array")?;
 
-        debug!("Redis array response: {} elements", values.len());
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Redis → Array: {} elements", values.len()));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("Redis → Array: {} elements", values.len()));
 
         Ok(ActionResult::Output(super::resp3::array(
             values,
@@ -529,10 +526,7 @@ impl RedisProtocol {
             .and_then(|v| v.as_i64())
             .context("Missing 'value' field")?;
 
-        debug!("Redis integer response: {}", value);
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Redis → Integer: {}", value));
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!("Redis → Integer: {}", value));
 
         Ok(ActionResult::Output(encode_integer(value)))
     }
@@ -547,21 +541,17 @@ impl RedisProtocol {
         // not answer. On the wire both are just `-…`, so the log carries the distinction, as
         // `src/server/radius/` does: `decision=model_reject` here,
         // `decision=fail_closed_*` in `mod.rs`.
-        debug!(
-            "Redis connection {} decision=model_reject: {}",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Redis connection {} decision=model_reject: ✗ Error: {}",
             self.connection_id,
             crate::utils::truncate_for_log(message, 512)
-        );
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Redis ✗ Error: {}", message));
+        ));
 
         Ok(ActionResult::Output(encode_error(message)))
     }
 
     fn execute_redis_null(&self, _action: serde_json::Value) -> Result<ActionResult> {
-        debug!("Redis null response");
-        let _ = self.status_tx.send("[DEBUG] Redis → Null".to_string());
+        crate::logging::emit::Log::to(&self.status_tx).debug("Redis → Null");
 
         Ok(ActionResult::Output(super::resp3::null(
             self.protocol_version(),
@@ -614,15 +604,12 @@ impl RedisProtocol {
             )?,
             _ => resp3::push(items()?, proto)?,
         };
-        debug!(
-            "Redis {} reply (RESP{}): {} bytes",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Redis → {} reply (RESP{}): {} bytes",
             kind,
             proto,
             bytes.len()
-        );
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Redis → {kind} (RESP{proto})"));
+        ));
         Ok(ActionResult::Output(bytes))
     }
 }
@@ -917,13 +904,8 @@ fn execute_on_shared(
             let receivers = shared
                 .hub
                 .publish(channel.as_bytes(), message.as_bytes(), shard);
-            debug!(
+            crate::logging::emit::Log::to(&status_tx).info(format!(
                 "Redis decision=model_publish channel='{}' receivers={}",
-                crate::utils::truncate_for_log(channel, 128),
-                receivers
-            );
-            let _ = status_tx.send(format!(
-                "[INFO] Redis published to '{}': {} receiver(s)",
                 crate::utils::truncate_for_log(channel, 128),
                 receivers
             ));
@@ -944,8 +926,8 @@ fn execute_on_shared(
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .set_slot(slots, state, node)?;
-            let _ = status_tx.send(format!("[INFO] Redis cluster: {summary}"));
-            debug!("Redis cluster slot change: {}", summary);
+            crate::logging::emit::Log::to(&status_tx)
+                .info(format!("Redis cluster slot change: {summary}"));
             Ok(ActionResult::NoAction)
         }
         other => Err(anyhow::anyhow!("not a server-state action: {other:?}")),
