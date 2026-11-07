@@ -262,3 +262,46 @@ fn client_json_flags_reject_malformed_input() {
         .expect_err("malformed JSON must error");
     assert!(err.to_string().contains("--client-handlers"));
 }
+
+/// `--restart-check on|off` reaches the client `--client` starts, through the same overrides
+/// `--history` and `--batching` do, and is refused where no client is started.
+#[test]
+fn restart_check_flag_parses_and_applies_to_the_client() {
+    let parse = |value: &str| {
+        Args::try_parse_from([
+            "netget",
+            "--client",
+            "redis",
+            "--connect",
+            "127.0.0.1:6379",
+            "--restart-check",
+            value,
+        ])
+    };
+    let off = parse("off").expect("off parses");
+    assert_eq!(off.restart_check, Some(false));
+    assert_eq!(
+        off.client_conversation_overrides().restart_check,
+        Some(false)
+    );
+    assert_eq!(parse("ON").expect("on parses").restart_check, Some(true));
+    assert!(parse("maybe").is_err(), "only on or off");
+
+    let unset =
+        Args::try_parse_from(["netget", "--client", "redis", "--connect", "x:1"]).expect("parses");
+    assert_eq!(unset.client_conversation_overrides().restart_check, None);
+
+    assert!(off.validate_restart_check().is_ok());
+
+    // Refused where no client is started, whether clap or the run catches it.
+    for argv in [
+        &["netget", "--restart-check", "off", "--server", "tcp"][..],
+        &["netget", "--restart-check", "off"][..],
+    ] {
+        let refused = match Args::try_parse_from(argv) {
+            Err(_) => true,
+            Ok(args) => args.validate_restart_check().is_err(),
+        };
+        assert!(refused, "{argv:?}: nothing reads --restart-check there");
+    }
+}

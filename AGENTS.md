@@ -1035,10 +1035,13 @@ What does stop it is `client::restart_check`, in the one choke point every clien
   sends the answer as it was. History records what was actually sent.
 
 It is a per-client setting, `restart_check` (on by default; `ClientForm`, `open_client`, MCP
-`start_client`/`update_client`, `ConversationOverrides`, hot-applied). It knows no protocol: it
-compares JSON actions the client's own model produced. What it costs: a repeat the instruction
-does not name a trigger for — a retry the model decides on by itself after an error — is
-dropped, so a client relying on that should set `restart_check: false`.
+`start_client`/`update_client`, `--restart-check on|off` with `--client`,
+`ConversationOverrides`, hot-applied). It knows no protocol: it compares JSON actions the
+client's own model produced. **What it costs, and the parameter says so wherever it is
+offered:** a repeat the instruction names no trigger for — a retry the model decides on by
+itself after an error the instruction does not mention — is dropped. A client whose
+instruction relies on self-initiated retries or repeats must be started with
+`restart_check: false` (`--restart-check off`).
 
 Measured with llama3.1:8b, seeds 42–49, each run 60 s (`--load`, `--llm-seed`, `batching: false`,
 servers answered by script handlers), check off → on:
