@@ -398,7 +398,7 @@ pub async fn start_server_from_action(
     let (history_entries, batching) = conversation
         .resolve(&protocol_impl.metadata(), protocol)
         .inspect_err(|e| {
-            Log::to(&status_tx).error(&e);
+            Log::to(&status_tx).error(e);
         })?;
 
     // === --min-stability gate ===
@@ -700,7 +700,7 @@ pub async fn start_server_from_action(
         )
         .await
         .inspect_err(|e| {
-            Log::to(&status_tx).error(&e);
+            Log::to(&status_tx).error(e);
         })?
     {
         Log::to(&status_tx).info(format!("Capturing to {}", path.display()));
