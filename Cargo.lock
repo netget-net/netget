@@ -492,7 +492,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "educe",
  "fs-mistrust",
  "futures",
@@ -2658,9 +2658,9 @@ checksum = "a9f34f4a9f1f2992a090b4998583bfe7783ecd6e8bb496d13beb89b1e194181f"
 
 [[package]]
 name = "cassandra-protocol"
-version = "3.3.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f792501116fe2f54392f0449d653f4d2ad31c659ae9a095681fae507ceef373"
+checksum = "14f7267a3c776b7bdbad66994dc42578f4c9347a01347b005267de0d1b7527a5"
 dependencies = [
  "arc-swap",
  "bitflags 2.13.2",
@@ -2668,14 +2668,12 @@ dependencies = [
  "chrono",
  "crc32fast",
  "derivative",
- "derive_more 1.0.0",
- "float_eq",
- "integer-encoding",
- "itertools 0.13.0",
- "lz4_flex 0.11.5",
- "num-bigint 0.4.6",
+ "derive_more 2.1.1",
+ "itertools 0.15.0",
+ "lz4_flex 0.14.0",
+ "num-bigint 0.5.1",
  "snap",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "time",
  "uuid",
 ]
@@ -3292,9 +3290,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.7.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb402b8d4c85569410425650ce3eddc7d698ed96d39a73f941b08fb63082f1e7"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -4423,43 +4421,23 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "1.0.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
 dependencies = [
- "derive_more-impl 1.0.0",
-]
-
-[[package]]
-name = "derive_more"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
-dependencies = [
- "derive_more-impl 2.0.1",
+ "derive_more-impl",
 ]
 
 [[package]]
 name = "derive_more-impl"
-version = "1.0.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
- "unicode-xid",
-]
-
-[[package]]
-name = "derive_more-impl"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
-dependencies = [
- "convert_case 0.7.1",
- "proc-macro2",
- "quote",
+ "rustc_version",
  "syn 2.0.119",
  "unicode-xid",
 ]
@@ -5505,12 +5483,6 @@ dependencies = [
  "libz-sys",
  "miniz_oxide",
 ]
-
-[[package]]
-name = "float_eq"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28a80e3145d8ad11ba0995949bbcf48b9df2be62772b3d351ef017dff6ecb853"
 
 [[package]]
 name = "fluid-let"
@@ -7289,12 +7261,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "integer-encoding"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14c00403deb17c3221a1fe4fb571b9ed0370b3dcd116553c77fa294a3d918699"
-
-[[package]]
 name = "interceptor"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7694,6 +7660,15 @@ name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
 dependencies = [
  "either",
 ]
@@ -8460,6 +8435,15 @@ name = "lz4_flex"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08ab2867e3eeeca90e844d1940eab391c9dc5228783db2ed999acbc0a9ed375a"
+dependencies = [
+ "twox-hash 2.1.2",
+]
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash 2.1.2",
 ]
@@ -10121,6 +10105,16 @@ dependencies = [
  "num-integer",
  "num-traits",
  "rand 0.8.5",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
+dependencies = [
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -13966,7 +13960,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "255eb326931273b167f0cc4454c4dfb7f6d40d45ee881f5d07f7605b01782afc"
 dependencies = [
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "educe",
  "either",
  "fluid-let",
@@ -16486,7 +16480,7 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee4b6b2e03252208a22392d337f14d8b6a77804030f040e1b5e083361c16fff3"
 dependencies = [
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "hex",
  "itertools 0.14.0",
  "libc",
@@ -16528,7 +16522,7 @@ dependencies = [
  "bytes",
  "caret",
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "educe",
  "itertools 0.14.0",
  "paste",
@@ -16555,7 +16549,7 @@ checksum = "f432fc373821a2876af160924bb77959773e26392331350c6bc63cf0a02e9f5a"
 dependencies = [
  "caret",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "thiserror 2.0.20",
  "tor-bytes",
@@ -16573,7 +16567,7 @@ dependencies = [
  "async-trait",
  "caret",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "educe",
  "futures",
  "oneshot-fused-workaround",
@@ -16623,7 +16617,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "downcast-rs",
  "dyn-clone",
  "educe",
@@ -16728,7 +16722,7 @@ checksum = "3bc4eebe1f560386dbba42c5d21907c2a0a547b46b2891ade20516824380db12"
 dependencies = [
  "async-compression",
  "base64ct",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "futures",
  "hex",
  "http 1.5.0",
@@ -16777,7 +16771,7 @@ dependencies = [
  "async-trait",
  "base64ct",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "educe",
  "event-listener 5.4.1",
@@ -16829,7 +16823,7 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c2f67b386f2720f444f4ed496edd21fab25f2b2d64ede97a0b8108708dc34e1"
 dependencies = [
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "futures",
  "paste",
  "retry-error",
@@ -16846,7 +16840,7 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b5f5b77ced1e4e471dd385eef97b07dbd2d1a8c2a19371dc4fe1682c0784e9d"
 dependencies = [
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "thiserror 2.0.20",
  "void",
 ]
@@ -16861,7 +16855,7 @@ dependencies = [
  "base64ct",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "dyn-clone",
  "educe",
  "futures",
@@ -16902,7 +16896,7 @@ checksum = "bc80ec427050e10f16cb45ae81fe7d8b9f2117009f454182cbcef0ebced181ea"
 dependencies = [
  "data-encoding",
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "hex",
  "humantime",
@@ -16930,7 +16924,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cfa70accbc5f5f7a963d4407fe0843833194104eb08ad729f7ff5d7fa6df64"
 dependencies = [
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "downcast-rs",
  "paste",
  "rand 0.9.2",
@@ -16956,7 +16950,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "downcast-rs",
  "dyn-clone",
  "fs-mistrust",
@@ -16996,7 +16990,7 @@ dependencies = [
  "caret",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "hex",
  "itertools 0.14.0",
  "safelog",
@@ -17024,7 +17018,7 @@ dependencies = [
  "curve25519-dalek 4.1.3",
  "der-parser 10.0.0",
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "ed25519-dalek 2.2.0",
  "educe",
@@ -17075,7 +17069,7 @@ checksum = "04c37a939977421d6903b48aca0c43481283b4cd31ee0811dd6de5cfae6c4847"
 dependencies = [
  "cfg-if 1.0.4",
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "dyn-clone",
  "educe",
  "futures",
@@ -17105,7 +17099,7 @@ checksum = "22a13fe31e618a5b3fd1a7cc860d8d30a62bd13212ff4a7eb61ac7dafa4480df"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "futures",
  "humantime",
  "itertools 0.14.0",
@@ -17137,7 +17131,7 @@ dependencies = [
  "cipher 0.4.4",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "educe",
  "hex",
@@ -17175,7 +17169,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "601e932ea7d99f832944af706535dc8d4c7295a9e9ce08b4e37963febae6989f"
 dependencies = [
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "filetime",
  "fs-mistrust",
  "fslock",
@@ -17212,7 +17206,7 @@ dependencies = [
  "criterion-cycles-per-byte",
  "derive-deftly",
  "derive_builder_fork_arti",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "digest 0.10.7",
  "educe",
  "enum_dispatch",
@@ -17280,7 +17274,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff96b2ad43c3c45610b5d3a4b65397a3d24e3e908b990f795395982856652da0"
 dependencies = [
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "humantime",
  "tor-cert",
  "tor-checkable",
@@ -17316,7 +17310,7 @@ dependencies = [
  "async_executors",
  "asynchronous-codec 0.7.0",
  "coarsetime",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "dyn-clone",
  "educe",
  "futures",
@@ -17344,7 +17338,7 @@ dependencies = [
  "assert_matches",
  "async-trait",
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "educe",
  "futures",
  "humantime",
@@ -17387,7 +17381,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af54287a06b0b6d28d6f1ef68772c7669dcf182451f7e9440ebb5733eb6cc0e5"
 dependencies = [
  "derive-deftly",
- "derive_more 2.0.1",
+ "derive_more 2.1.1",
  "serde",
  "thiserror 2.0.20",
  "tor-memquota",
