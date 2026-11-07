@@ -1,1 +1,4 @@
-pyzmq==27.2.0 --hash=sha256:dea74fd65f1fc5f7fe167916a473ebe6ed6174e5e5d9de11ea6583661be6cf43
+# pyzmq's CPython 3.12+ stable-ABI wheels: manylinux x86_64 and macOS universal2.
+pyzmq==27.2.0 \
+    --hash=sha256:dea74fd65f1fc5f7fe167916a473ebe6ed6174e5e5d9de11ea6583661be6cf43 \
+    --hash=sha256:591c8de5851c5ea372194469fe97587b97c3b641e9a70f31bb3474acbfde0241

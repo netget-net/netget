@@ -1532,8 +1532,9 @@ write("mysql_stmt_execute", "ff_length",
       mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0], b"\xff\x00")))
 write("mysql_stmt_execute", "bad_temporal_length",
       mysql_exec(1, mysql_exec_payload(1, [False], [0x0C, 0], b"\x05" + b"\x00" * 5)))
-# --- SNMP: the recursion rasn actually has --------------------------------
-# rasn 0.18 recurses on a *constructed OCTET STRING* (`24 80`), and `community` is one; the
+# --- SNMP: the recursion rasn has -----------------------------------------
+# rasn recurses on a *constructed OCTET STRING* (`24 80`; unbounded in 0.18, 128 levels since
+# 0.30), and `community` is one; the
 # `30 80` bomb above nests SEQUENCEs, which the guard refuses for the same reason but which
 # is not the path that overflowed. Indefinite outer SEQUENCE, version 1, then the bomb.
 write("snmp_ber", "octet_string_depth_bomb",
@@ -1903,7 +1904,7 @@ write("grpc_message", "frame_length_lie", grpc_frame(leaf, declared=0xFFFFFFFF))
 write("grpc_message", "field_length_lie", grpc_frame(b"\x0a" + pbv(0xFFFFFFFF) + b"a"))
 write("grpc_message", "packed_length_lie", grpc_frame(b"\x4a" + pbv(0x7FFFFFFF) + b"\x01"))
 
-# --- PostgreSQL: pgwire's frontend decoder (vendor/pgwire) ------------------------
+# --- PostgreSQL: pgwire's frontend decoder (the netget-pgwire fork) --------------
 def pg_msg(tag, body, declared=None):
     n = len(body) + 4 if declared is None else declared
     return bytes([tag]) + struct.pack(">i", n) + body
@@ -1940,7 +1941,7 @@ write("pgwire_frontend", "extended_query",
 write("pgwire_frontend", "copy_data",
       PG_STARTUP + pg_msg(ord("d"), b"1\tada\n") + pg_msg(ord("c"), b"")
       + pg_msg(ord("f"), b"aborted\0"))
-# vendor/pgwire/README.md's first row: six bytes after the handshake that panic upstream.
+# The fork's NETGET.md, first row: six bytes after the handshake that panic upstream.
 write("pgwire_frontend", "query_without_nul", PG_STARTUP + pg_msg(ord("Q"), b"x"))
 # Size lies.
 write("pgwire_frontend", "startup_length_lie", pg_startup(declared=0x7FFFFFFF))

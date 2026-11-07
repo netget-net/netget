@@ -109,11 +109,11 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    next tagged release.
 
 6. **Logging long tail.** Server dual logging goes through the `Log` facade
-    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`). The sites still sending a
-    `[LEVEL]` line by hand are listed, per file, in the baseline of
-    `tests/hand_rolled_dual_logging_ratchet_test.rs`, which may only shrink; nearly all of them
-    are pairs whose file and TUI halves say different things on purpose (error detail in the
-    file, a decision tag or a shortened key on the TUI), so each is a per-protocol decision.
+    (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`), and
+    `tests/hand_rolled_dual_logging_ratchet_test.rs` allows no hand-rolled `[LEVEL]` send under
+    `src/server/`. Outside it the hand-rolled form remains: about 107 sites in `src/client/`, 70
+    in `src/events/`, 31 in `src/cli/`, 22 in `src/llm/` and 11 in `src/protocol/` (counted
+    6 November 2026 with the ratchet's own scan); the ratchet does not cover them yet.
 
 7. **RTP failed the startup smoke test once in CI, and passes otherwise (item 82).** See below.
 
@@ -539,6 +539,12 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   (`types.rs:485`). Fixed by `cassandra::parse_request_frame`, which refuses both header bits on
   a request (neither has meaning there) and answers PROTOCOL_ERROR. A negative body length
   (`frame.rs:157-171`) was already unreachable behind `MAX_FRAME_BODY_BYTES`.
+  **6 November 2026: upgraded to 5.0.0, which returns `Err` for all four shapes** (upstream
+  `608dc6a`, `c4c4f7d`; 4.1.0 has the same fixes). `parse_request_frame` keeps refusing both
+  bits, now for what they mean rather than for a panic: 5.0 decodes a well-formed
+  response-direction frame as an ordinary one, and on a request with the warning flag strips a
+  string list off the body. `decoder_panic_test.rs` also hands the four shapes to the linked
+  `Envelope::from_buffer` directly, so a downgrade fails there.
 - **`opensrv-mysql` 0.7.0 — two panics in the handshake.** `set_seq(seq + 1)` on a client
   sequence id of 255 (`lib.rs:389`, `:502`, `:563`; overflow checks, so debug/test builds only)
   and `packet()`'s fragment `assert_eq!`s on a misnumbered chain (`packet_reader.rs:252`, `:266`;
@@ -554,6 +560,12 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   (`ber/de.rs:202-208`) checks `chars().nth(len - 5)` and slices at *byte* `len - 5`, so the
   GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") panics on a char boundary. No SNMP type
   carries a GeneralizedTime.
+  **7 November 2026: `rasn`, `rasn-snmp` and `rasn-smi` upgraded to 0.30.0.** The GeneralizedTime
+  parser works on bytes and returns `Err` (fixed in 0.26), and the BER decoder counts its depth
+  and refuses past 128 levels, constructed OCTET STRINGs included. `check_ber_structure` stays in
+  front at 16. `tests/server/snmp/ber_time_test.rs` feeds the GeneralizedTime bytes to
+  `rasn::ber::decode` and to `parse_snmp_message` (it fails on 0.18 at `ber/de.rs:208`), and
+  `ber_depth_test.rs` hands the 30000-level bomb to `rasn` unscreened on a 2 MiB stack.
 
 Tests: `tests/server/dns/compression_chain_test.rs`, `tests/server/cassandra/decoder_panic_test.rs`,
 `tests/server/mysql/sequence_id_test.rs`. Fuzz: `dns_message` now runs the screen first and has a
@@ -600,7 +612,7 @@ libpcap at link time, which is the original reason for the exclusion; the option
 it, dynamically loading it, or documenting the gap in the release notes rather than leaving
 users to discover it.
 
-### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified, fixed in this repository's builds: `vendor/pgwire` answers FATAL 08P01; upstream issue not yet filed; crates.io builds still contain it per connection]**
+### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified, fixed in every NetGet build: the `netget-pgwire` fork answers FATAL 08P01; upstream issue not yet filed]**
 
 `pgwire` 0.35's `decode_packet` (`codec.rs:62-83`) bounds the declared message length only
 from *above*, then hands `decode_fn` the entire remaining buffer rather than a slice limited
@@ -625,15 +637,15 @@ server-killers; it is a malformed message producing a panic instead of a clean p
 Still worth fixing, because a panicking connection is a silent one.
 
 `pgwire` owns the socket loop, so NetGet cannot bound the frame without wrapping the stream;
-the fix is in the crate. `vendor/pgwire` (README there) is 0.35.0 with each message isolated
-before its body decoder runs, checked reads in every frontend decoder, PostgreSQL's
+the fix is in the crate. NetGet's fork `netget-pgwire` (github.com/netget-net/pgwire, on
+crates.io; NETGET.md there) is 0.35.0 with each message isolated before its body decoder runs, checked reads in every frontend decoder, PostgreSQL's
 end-of-message check, and `FATAL 08P01` on the wire instead of a panic. Upgrading was checked
 first and does not help: 0.42.1 fixes `get_cstring` alone, and `Bind`/`Close`/`Describe` still
 panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every shape found;
-`tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. It
-should still be reported upstream, and a `[patch]` does not reach `cargo install`, where the
-containment in `src/server/postgresql/mod.rs` remains what stands between the panic and the
-server. `kafka-protocol`'s unbounded element counts are the same shape and are documented in
+`tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. Being
+a published crate, the fork reaches `cargo install netget-tool` as well. It should still be
+reported upstream, and the containment in `src/server/postgresql/mod.rs` stays for any other
+panic. `kafka-protocol`'s unbounded element counts are the same shape and are documented in
 the panic audit.
 
 `opensrv-mysql`'s `params.rs` cluster (five malformed `COM_STMT_EXECUTE` shapes, including an
@@ -656,13 +668,13 @@ panic in this list: `PacketReader::next_async` (`packet_reader.rs:132-141`) retu
 borrowed from `self.bytes` through `slice::from_raw_parts` after `self.bytes = rest.to_vec()`
 has freed that buffer, whenever one read held more than one packet. Two pipelined
 `COM_STMT_SEND_LONG_DATA` chunks produced a stray OK and desynchronised the session. It is
-fixed at the source in `vendor/opensrv-mysql` (`[patch.crates-io]`), together with the crate
-answering an unparseable `COM_STMT_EXECUTE` OK — a write reported as succeeded — and ignoring
-`COM_STMT_RESET`; `tests/vendored_opensrv_patch_test.rs` drives the bare crate with each shape.
-The patch keeps upstream's API, because a `[patch]` does not reach `cargo install netget-tool`:
-that build runs upstream 0.7.0, where `command_tap` still keeps every read inside one packet.
-Publishing the copy as a `netget-opensrv-mysql` crate would carry the fix there, and the issue
-belongs upstream as well.
+fixed at the source in NetGet's fork `netget-opensrv-mysql` (github.com/netget-net/opensrv, on
+crates.io; `mysql/NETGET.md` there), together with the crate answering an unparseable
+`COM_STMT_EXECUTE` OK — a write reported as succeeded — and ignoring `COM_STMT_RESET`;
+`tests/vendored_opensrv_patch_test.rs` checks Cargo builds the fork and drives the bare crate
+with each shape. Every NetGet build, `cargo install` included, uses the fork. Upstream fixed the
+use-after-free on `main` (databendlabs/opensrv#67, September 2024) but has released nothing
+since 0.7.0; the other two belong upstream as well.
 
 ### 78. `tcp_connection_opened` is advertised unconditionally and fires only for `send_first` servers **[verified, fixed: telnet raises it always, tcp/tls document the gate]**
 

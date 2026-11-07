@@ -3,11 +3,14 @@
 | file | tests | what it holds |
 |---|---|---|
 | `real_client_test.rs` | 3 | the real `hg` 7.2.4: handshake; clone + verify + cat + log + id + clone -r + pull; a refused history |
-| `changegroup_test.rs` | 13 | the history builder: every `MAX_*` bound, every refusal, lookup, changegroup selection |
+| `changegroup_test.rs` | 12 | the history builder: every `MAX_*` bound, every refusal, lookup, changegroup selection |
 | `e2e_test.rs` | 5 | the metadata commands against `reqwest` — capabilities, heads, branchmap, listkeys, not-found |
 | `connection_bounds_test.rs` | 2 | the first-byte deadline and the idle watchdog, from the wire |
 
 ## The real client is the evidence
+
+`mercurial` is Beta for clone and pull on this file alone; push, bundle2, bookmarks and tags are
+not implemented and not claimed.
 
 `real_client_test.rs` drives the `hg` binary (a Python program sharing no code with the
 hand-written server). It **fails, never skips**, when `hg` is absent, naming

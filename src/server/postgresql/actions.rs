@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// PostgreSQL protocol action handler
 pub struct PostgresqlProtocol {
@@ -102,7 +101,7 @@ impl Protocol for PostgresqlProtocol {
                  NOT proven: psql 14 sends every statement as a simple Query (no \\bind), so the \
                  extended protocol and binary formats rest on tokio-postgres alone; no client \
                  here exercises authentication or TLS (neither is implemented), bound parameter \
-                 values, COPY, LISTEN/NOTIFY, cursors, or multi-statement simple queries. PCAP ORACLE: psql's two sessions and tokio-postgres's prepared-statement session run through a recording relay and tshark's pgsql dissector reads every stream (SSLRequest refusal, startup, rows, command tag, ErrorResponse, Parse/Bind/Describe/Execute with a binary DataRow). FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs drives the patched vendor/pgwire frontend decoder.",
+                 values, COPY, LISTEN/NOTIFY, cursors, or multi-statement simple queries. PCAP ORACLE: psql's two sessions and tokio-postgres's prepared-statement session run through a recording relay and tshark's pgsql dissector reads every stream (SSLRequest refusal, startup, rows, command tag, ErrorResponse, Parse/Bind/Describe/Execute with a binary DataRow). FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs drives the frontend decoder of the netget-pgwire fork.",
             )
             .notes(
                 "No authentication, no TLS; simple and extended query protocols, text format only",
@@ -263,14 +262,8 @@ impl PostgresqlProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'rows' array")?;
 
-        debug!(
-            "PostgreSQL query response: {} columns, {} rows",
-            columns.len(),
-            rows.len()
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] PostgreSQL → Result set: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "PostgreSQL → Result set: {} columns, {} rows",
             columns.len(),
             rows.len()
         ));
@@ -300,15 +293,8 @@ impl PostgresqlProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
 
-        debug!(
-            "PostgreSQL error response: {} {} - {}",
-            severity, code, message
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] PostgreSQL ✗ {} {}: {}",
-            severity, code, message
-        ));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("PostgreSQL ✗ {} {}: {}", severity, code, message));
 
         Ok(ActionResult::Custom {
             name: "postgresql_error".to_string(),
@@ -323,11 +309,7 @@ impl PostgresqlProtocol {
     fn execute_postgresql_ok_response(&self, action: serde_json::Value) -> Result<ActionResult> {
         let tag = action.get("tag").and_then(|v| v.as_str()).unwrap_or("OK");
 
-        debug!("PostgreSQL OK response: {}", tag);
-
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] PostgreSQL → OK: {}", tag));
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!("PostgreSQL → OK: {}", tag));
 
         Ok(ActionResult::Custom {
             name: "postgresql_ok".to_string(),

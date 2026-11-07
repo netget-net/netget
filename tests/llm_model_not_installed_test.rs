@@ -12,8 +12,9 @@
 //! - **Startup**: a saved model the endpoint lacks is replaced by an installed one, and
 //!   `get_status` shows the model actually used plus a note naming the missing one and the
 //!   endpoint.
-//! - **`set_model`** refuses a model the endpoint does not list, naming it, the endpoint and
-//!   what is installed.
+//! - **`set_model`** never refuses: a model the endpoint does not list is set anyway, and the
+//!   reply warns, naming it, the endpoint and what is installed. A listed model is set with no
+//!   warning.
 //! - **A request** that meets the backend's model-not-found is made once — not retried as if
 //!   the model had answered badly — and its access-log entry, `get_status` and the log say
 //!   "not installed" with the model and the endpoint, never "after retries". The peer gets no
@@ -189,15 +190,50 @@ async fn a_model_the_endpoint_does_not_have_is_reported_as_not_installed() -> E2
     let check = status_line(&status, "Model check").expect("a Model check line");
     assert!(check.starts_with("installed at"), "{check}");
 
-    // --- set_model refuses what the endpoint does not list. ---
-    let refused = call(
+    // --- set_model accepts a listed model with no warning. ---
+    let accepted = call(
+        &client,
+        "set_model",
+        serde_json::json!({ "model": INSTALLED[1] }),
+    )
+    .await;
+    assert_ne!(accepted.is_error, Some(true), "{}", text_of(&accepted));
+    let accepted = text_of(&accepted);
+    assert!(
+        accepted.contains(&format!("Model changed to: {}", INSTALLED[1])),
+        "{accepted}"
+    );
+    assert!(
+        !accepted.contains("Warning"),
+        "an installed model needs no warning: {accepted}"
+    );
+    assert_eq!(
+        state.get_ollama_model().await.as_deref(),
+        Some(INSTALLED[1])
+    );
+
+    // --- set_model never refuses: a model the endpoint lacks is set, with a warning. ---
+    let warned = call(
         &client,
         "set_model",
         serde_json::json!({ "model": MISSING }),
     )
     .await;
-    assert_eq!(refused.is_error, Some(true), "{}", text_of(&refused));
-    let refused = text_of(&refused);
+    assert_ne!(
+        warned.is_error,
+        Some(true),
+        "set_model must not refuse a model: {}",
+        text_of(&warned)
+    );
+    let warned = text_of(&warned);
+    assert!(
+        warned.contains(&format!("Model changed to: {MISSING}")),
+        "{warned}"
+    );
+    let warning = warned
+        .lines()
+        .find(|line| line.starts_with("Warning:"))
+        .unwrap_or_else(|| panic!("an unlisted model must be warned about: {warned}"));
     for needle in [
         MISSING,
         "not installed",
@@ -206,33 +242,28 @@ async fn a_model_the_endpoint_does_not_have_is_reported_as_not_installed() -> E2
         INSTALLED[1],
     ] {
         assert!(
-            refused.contains(needle),
-            "refusal lacks {needle:?}: {refused}"
+            warning.contains(needle),
+            "warning lacks {needle:?}: {warning}"
         );
     }
     assert_eq!(
         state.get_ollama_model().await.as_deref(),
-        Some(model),
-        "a refused set_model must leave the model alone"
+        Some(MISSING),
+        "set_model sets the model it was given, installed or not"
     );
-    // An untagged name resolves to `:latest`; a listed name is accepted.
-    let accepted = call(
-        &client,
-        "set_model",
-        serde_json::json!({ "model": INSTALLED[1] }),
-    )
-    .await;
-    assert_ne!(accepted.is_error, Some(true), "{}", text_of(&accepted));
 
     // --- A request meets the backend's model-not-found. ---
-    // The model disappears after startup (or was pinned some other way): the request is the
-    // first to find out.
-    state.set_ollama_model(Some(MISSING.to_string())).await;
     let status = text_of(&call(&client, "get_status", serde_json::json!({})).await);
     let check = status_line(&status, "Model check").expect("a Model check line");
     assert!(
         check.starts_with("NOT INSTALLED") && check.contains(MISSING) && check.contains(&url),
         "get_status must check the model it reports:\n{status}"
+    );
+    let note = status_line(&status, "Model note")
+        .unwrap_or_else(|| panic!("get_status must keep set_model's warning:\n{status}"));
+    assert!(
+        note.contains(MISSING) && note.contains("not installed"),
+        "{note}"
     );
 
     let started = call(

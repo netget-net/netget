@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 // ============================================================================
 // Response kinds
@@ -332,10 +332,7 @@ impl AmqpProtocol {
     }
 
     fn log(&self, message: String) {
-        debug!("{}", message);
-        if let Some(tx) = &self.status_tx {
-            let _ = tx.send(format!("[DEBUG] {}", message));
-        }
+        crate::logging::emit::Log::new(self.status_tx.as_ref()).debug(message);
     }
 
     fn require_str<'a>(action: &'a Value, key: &str, hint: &str) -> Result<&'a str> {

@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 PASS 
+seed   3 fail [{"type": "send_gearman_data", "data": "desserts"}, {"type": "send_gearman_status", "numerator": 1, "denominator": 1}, {"type": "complete_gearman_job", "result": "stressed"}]
+seed   4 PASS 
+seed   5 fail [{"type": "send_gearman_data", "data": "desserts"}, {"type": "complete_gearman_job", "result": "stressed"}]
+seed   6 PASS 
+seed   7 fail [{"type": "send_gearman_data", "data": "desserts"}, {"type": "complete_gearman_job", "result": "stressed"}]
+seed   8 fail [{"type": "send_gearman_data", "data": "desserts"}]
+seed   9 fail [{"type": "reverse", "data": "stressed"}, {"type": "complete_gearman_job", "result": "deressed", "job_handle": "H:netget:2"}]
+seed  10 PASS 
+seed  11 fail [{"type": "send_gearman_data", "data": "desserts"}]
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 fail [{"type": "send_gearman_data", "data": "desserts"}, {"type": "complete_gearman_job", "result": "stressed"}]
+seed  18 fail [{"type": "send_gearman_data", "data": "essert st"}, {"type": "complete_gearman_job", "result": "dessert"}]
+seed  19 PASS 
+seed  20 PASS 
+TALLY /tmp/gm-lane3/v-rev/code_desc_fail.txt gearman_rev 12/20

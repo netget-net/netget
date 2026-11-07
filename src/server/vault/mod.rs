@@ -193,9 +193,8 @@ impl VaultServer {
                                 app_state_for_close
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_for_close.send(format!(
-                                    "[INFO] Vault connection {connection_id} closed"
-                                ));
+                                crate::logging::emit::Log::to(&status_for_close)
+                                    .info(format!("Vault connection {connection_id} closed"));
                                 let _ = status_for_close.send("__UPDATE_UI__".to_string());
                             })
                             .await;
@@ -315,8 +314,7 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
-    debug!("Vault {} {}", method, path);
-    let _ = ctx.status_tx.send(format!("[DEBUG] Vault {method} {path}"));
+    crate::logging::emit::Log::to(&ctx.status_tx).debug(format!("Vault {method} {path}"));
 
     let body_bytes = match http_body_util::Limited::new(body, MAX_REQUEST_BODY_BYTES)
         .collect()

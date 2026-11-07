@@ -1,0 +1,21 @@
+seed  21 PASS 
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 PASS 
+seed  28 PASS 
+seed  29 PASS 
+seed  30 fail [{"type": "send_gearman_error", "code": "function_not_supported", "text": "translate is not supported"}, {"type": "append_memory", "value": "submitted_jobs: H:netget:1,translate\n"}, {"type": "close_connection"}]
+seed  31 PASS 
+seed  32 PASS 
+seed  33 PASS 
+seed  34 fail [{"type": "send_gearman_error", "code": "function_unknown", "text": "The function 'translate' is unknown"}]
+seed  35 fail [{"type": "complete_gearman_job", "result": "olleh", "job_handle": "H:netget:1"}]
+seed  36 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Only 'reverse' function is supported"}, {"type": "close_connection"}]
+seed  37 PASS 
+seed  38 fail [{"type": "send_gearman_error", "code": "function_unsupported", "text": "translate is not supported, use reverse instead"}]
+seed  39 PASS 
+seed  40 PASS 
+TALLY /tmp/gm-lane3/v-unk/code_desc.txt gearman_fail 15/20

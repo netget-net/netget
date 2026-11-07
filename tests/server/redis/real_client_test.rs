@@ -71,9 +71,11 @@ async fn require_redis_cli() -> E2EResult<String> {
 /// serving this very command, and redis-cli times out against a server that is behaving
 /// perfectly — a failure that reads as a protocol bug and is not one.
 ///
-/// redis-cli reads commands from stdin when stdin is not a tty, and in that mode it sends
-/// nothing of its own: no `COMMAND DOCS`, no `HELLO`. Every LLM call the mock counts is a
-/// command written here.
+/// redis-cli reads commands from stdin when stdin is not a tty. What it sends of its own in
+/// that mode depends on its version: valkey-cli 9.1.2 sends nothing, redis-cli 7.0.15 (on
+/// ubuntu-24.04) sends `COMMAND DOCS` and then `COMMAND` before the first command written
+/// here, and swallows both replies. A mock must answer those as an error, which every version
+/// falls back from; anything else shaped unlike a command table aborts 7.0.15 on an assertion.
 async fn redis_cli_session(port: u16, commands: &str) -> E2EResult<std::process::Output> {
     let mut child = tokio::process::Command::new("redis-cli")
         // --no-raw forces the type-distinguishing rendering even though stdout is a pipe.
@@ -271,6 +273,21 @@ async fn redis_cli_arguments_reach_the_event_with_their_boundaries() -> E2EResul
                         .and_then(|a| a.as_array())
                         .cloned()
                         .unwrap_or_default();
+                    // redis-cli 7.0 asks for `COMMAND DOCS` (then `COMMAND`) before the first
+                    // command it was given, and asserts the reply is a table of per-command
+                    // entries: an echo of the arguments makes it abort. Answer its own
+                    // introspection as a server without command docs does — an error, which
+                    // every redis-cli version falls back from — and echo everything else.
+                    if values
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|c| c.eq_ignore_ascii_case("COMMAND"))
+                    {
+                        return serde_json::json!([{
+                            "type": "redis_error",
+                            "message": "ERR unknown command 'COMMAND'"
+                        }]);
+                    }
                     values.push(serde_json::Value::String(format!(
                         "hex_args={}",
                         event

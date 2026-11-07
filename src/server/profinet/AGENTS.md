@@ -4,7 +4,7 @@ NetGet as a PROFINET IO **device**: an IO controller (a PLC) finds it with DCP, 
 PNIO-CM over DCE/RPC, and exchanges cyclic RT_CLASS_1 data with it. The controller side is
 `src/client/profinet/`, which uses this directory's codec.
 
-**State**: `Experimental` — see [Maturity](#maturity). **Privilege**: `PacketCapture` for the
+**State**: `Beta` (CI-only evidence) — see [Maturity](#maturity). **Privilege**: `PacketCapture` for the
 raw transport (`startup_privilege_requirement` drops it for `transport: "udp"`).
 **Stack**: `ETH>PROFINET` (DCP and cyclic frames are Ethernet, EtherType `0x8892`; PNIO-CM is
 UDP 34964, the declared `well_known_udp_port`). **Failure mode**: `answers_on_failure`.
@@ -113,9 +113,15 @@ answers. Nothing recurses.
 
 ## Maturity
 
-`Experimental`. One independent IO controller (profinet-py) and one independent DCP
-implementation (pnio_dcp) drive the raw transport in `tests/server/profinet/real_peer_test.rs`,
-with tshark reading a live capture — that is condition 1's "one" not "two" for a full controller,
-no PLC (Siemens or CODESYS) has been pointed at it, and the evidence runs only in the `profinet`
-pair job (it needs CAP_NET_RAW). See `metadata().notes` for what is not implemented: alarms,
-RT_CLASS_2/3, RT over UDP, multicast CRs, MRP, diagnosis records, WriteMultiple, fragmented RPC.
+`Beta`, on evidence that exists only in CI. One independent IO controller (profinet-py) and one
+independent DCP implementation (pnio_dcp) drive the raw transport in
+`tests/server/profinet/real_peer_test.rs`, with tshark's `pn_dcp` / `pn_io` / `pn_rt` dissectors
+reading a live capture of both directions. That test needs Linux and CAP_NET_RAW (a network
+namespace and a veth), so it runs only in the `profinet` job of `protocol-pairs.yml` and cannot
+run on a macOS machine; the run the rating rests on is job 116898932856 (run 38878401785,
+16 October 2026, `7c34debac`), where it passed with the codec and lab-transport suites
+(16 server tests) and the controller's three. Re-run that job
+(`gh workflow run protocol-pairs.yml -f only=profinet`) after touching the codec or the raw
+transport — no local check reaches that path. No PLC (Siemens or CODESYS) has been pointed at it.
+See `metadata().notes` for what is not implemented: alarms, RT_CLASS_2/3, RT over UDP, multicast
+CRs, MRP, diagnosis records, WriteMultiple, fragmented RPC.

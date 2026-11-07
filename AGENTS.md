@@ -254,8 +254,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     connections; psql's two sessions and tokio-postgres's extended-protocol session; Python
     websockets' permessage-deflate session). The targets are `etcd_request` (prost behind
     `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level bomb),
-    `pgwire_frontend` (the patched `vendor/pgwire`, which `fuzz/Cargo.toml` now patches in
-    too — without it the fuzz workspace built crates.io's panicking copy) and
+    `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
+    too — without it the fuzz workspace would build crates.io's panicking pgwire) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
   - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
@@ -298,7 +298,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (63 servers as of 6 November 2026, after `redis` went to Stable;
+- **Beta** — human-reviewed, works against real clients (65 servers as of 6 November 2026, after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -306,11 +306,17 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   `iscsi` (libiscsi and the Linux kernel initiator), `srt` (libsrt's srt-live-transmit) and
   `rsync` (the stock rsync client). What held most of them back was a note saying the pair job
   "had not run in CI", written when the protocol landed and never revisited after the job
-  passed — check `gh run list --workflow protocol-pairs.yml` before believing one. Two were
-  checked and **not** promoted: `db2` (Derby's JDBC client and IBM's CLI driver both pass, but
-  the server returns no result set, so a SELECT fails — the `openvpn` case below) and
-  `profinet` (profinet-py and pnio_dcp pass in the `profinet` pair job, but the test needs
-  Linux and CAP_NET_RAW, so nobody reviewing on macOS has seen it pass). Running the suites
+  passed — check `gh run list --workflow protocol-pairs.yml` before believing one. `db2` was
+  checked and **not** promoted: Derby's JDBC client and IBM's CLI driver both pass, but the
+  server returns no result set, so a SELECT fails — the `openvpn` case below. **`profinet` is
+  Beta on evidence that exists only in CI**: profinet-py and pnio_dcp pass its real-peer test
+  in the `profinet` pair job (job 116898932856), but that test needs Linux and CAP_NET_RAW, so
+  it cannot run on macOS and no local check reaches the raw transport — re-run the pair job
+  after touching it. **`mercurial` is Beta for clone and pull**: the real `hg` 7.2.4 clones,
+  `hg verify`s (which recomputes every revlog node), reads back and pulls from it in
+  `tests/server/mercurial/real_client_test.rs`, which fails rather than skips without hg. Push,
+  bundle2, bookmarks and tags are not implemented, so the rating claims none of them. Running
+  the suites
   also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
   guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
   named, `afp-showmount`, had never run at all on an ephemeral port.
@@ -1415,6 +1421,10 @@ and libpcsclite.
 `Dockerfile` in step.
 `ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**
 `fuzz.yml` remains an on-demand search.
+`docker.yml` publishes the `Dockerfile` as the multi-arch image `ghcr.io/netget-net/netget` on
+release tags (`X.Y.Z` and `latest`) and on manual dispatch (`-f tag=<tag>`, default `latest`):
+amd64 and arm64 each build on a native runner and push by digest, a final job joins them with
+`imagetools create`, checks both platforms are listed and runs `--version` on the pulled image.
 
 **Local verification is the evidence for routine work.** Before pushing Rust changes, run
 `cargo fmt --check`, relevant regressions and the affected server/client suites with their
@@ -1572,7 +1582,7 @@ of the test file**, not out of this table):
 | `event_action_declarations_test` | actions the model can never see, and advertised names the executor cannot run | — |
 | `well_known_port_declaration_test` | a server with no declared well-known port and no stated reason; a `PrivilegedPort(n)` or transport disagreeing with it | `NO_WELL_KNOWN_PORT` — finished answers, not a queue |
 | `startup_param_defaults_test` | a declared parameter `default` written as a literal instead of the constant the code uses (the type check is a registry walk) | **empty** |
-| `hand_rolled_dual_logging_ratchet_test` | a server `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | per-file counts, `src/server/` only |
+| `hand_rolled_dual_logging_ratchet_test` | a server `status_tx.send("[LEVEL] …")` beside a tracing macro instead of one `Log` call | **empty**, `src/server/` only |
 
 A third check worth understanding: `event_action_declarations_test` probes each advertised
 name with a bare `{"type": name}`, which finds *unknown action* but can never find a wrong
@@ -1985,9 +1995,11 @@ concluding there's a bug.
 cannot disagree with the file. `Log::to(&status_tx).info(format!(…))`; ERROR/WARN/INFO reach
 both sinks, DEBUG/TRACE stay in the file unless routed with `debug_to(Sink::Both, …)`. Levels:
 ERROR critical, WARN non-fatal, INFO lifecycle, DEBUG summaries, TRACE full payloads. A tracing
-macro beside a hand-typed `status_tx.send(format!("[INFO] …"))` is the form it replaces;
-`tests/hand_rolled_dual_logging_ratchet_test.rs` holds the remaining server sites to a
-baseline that may only shrink.
+macro beside a hand-typed `status_tx.send(format!("[INFO] …"))` is the form it replaces, and
+`tests/hand_rolled_dual_logging_ratchet_test.rs` allows none of it under `src/server/`. Where the
+operator and the file need different detail, write one line both read — the subject, the
+`decision=` tag, what is safe on the dashboard — and a second DEBUG/TRACE line for what only the
+file should hold (a full error chain, a payload, a statement that may carry a credential).
 
 The status channel is an unbounded `mpsc` on the sending side, so no protocol task ever waits
 on the UI, and it is **bounded where it is drained**: the dashboard and the CLI forwarders take

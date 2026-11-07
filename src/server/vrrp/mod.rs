@@ -41,7 +41,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
@@ -665,17 +665,13 @@ impl VrrpServer {
                             match responder.send(&packet, destination).await {
                                 Ok(()) => {
                                     sent += 1;
-                                    debug!(
+                                    let log = Log::to(&status_tx);
+                                    log.debug(format!(
                                         "VRRP sent {} byte advertisement to {}",
                                         packet.len(),
                                         responder.describe(destination)
-                                    );
-                                    trace!("VRRP sent (hex): {}", hex::encode(&packet));
-                                    let _ = status_tx.send(format!(
-                                        "[DEBUG] VRRP sent {} byte advertisement to {}",
-                                        packet.len(),
-                                        responder.describe(destination)
                                     ));
+                                    log.trace(format!("VRRP sent (hex): {}", hex::encode(&packet)));
                                 }
                                 Err(e) => {
                                     error!("VRRP transmit failed: {:#}", e);

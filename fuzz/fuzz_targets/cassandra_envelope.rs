@@ -1,13 +1,11 @@
 //! CQL frame header — `cassandra_protocol::frame::Envelope::from_buffer`, behind NetGet's checks.
 //!
-//! NetGet's Cassandra server hands every complete frame to `cassandra-protocol` 3.3.0's
-//! `Envelope::from_buffer` on the first packet of a connection, before STARTUP. That decoder
-//! trusts its header: the warning flag makes it decode a `[string list]` whose negative count
-//! is a `capacity overflow` panic and whose over-long string is an out-of-range slice, the
-//! tracing flag on a response-direction frame makes it `unwrap` a 16-byte read, and a body
-//! length with the high bit set overflows `9 + len`. NetGet refuses all of them before the call:
-//! the read loop bounds the declared length at `MAX_FRAME_BODY_BYTES`, and
-//! `parse_request_frame` refuses the two header bits on a request.
+//! NetGet's Cassandra server hands every complete frame to `cassandra-protocol` 5.0's
+//! `Envelope::from_buffer` on the first packet of a connection, before STARTUP. The read loop
+//! bounds the declared length at `MAX_FRAME_BODY_BYTES`, and `parse_request_frame` refuses a
+//! response-direction frame and the warning flag on a request. The decoder reads a tracing id, a
+//! warning `[string list]` and a custom-payload `[bytes map]` out of the body on the header's
+//! say-so; 3.3.0 panicked on three malformed shapes of those and on a negative body length.
 //!
 //! The target runs exactly that pair, in that order: **anything the read loop and the screen
 //! accept, the decoder must survive.**

@@ -23,7 +23,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// Snowflake protocol action handler.
 ///
@@ -233,10 +232,8 @@ impl SnowflakeProtocol {
         let session_id = action.get("session_id").cloned();
         let validity_seconds = action.get("validity_seconds").and_then(|v| v.as_u64());
 
-        debug!("Snowflake login success: session token minted");
-        let _ = self
-            .status_tx
-            .send("[DEBUG] Snowflake → login success (token issued)".to_string());
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug("Snowflake → login success (session token issued)");
 
         Ok(ActionResult::Custom {
             name: "snowflake_login_success".to_string(),
@@ -263,13 +260,8 @@ impl SnowflakeProtocol {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        debug!(
-            "Snowflake query response: {} columns, {} rows",
-            rowtype.len(),
-            rowset.len()
-        );
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Snowflake → rowset: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Snowflake → rowset: {} columns, {} rows",
             rowtype.len(),
             rowset.len()
         ));
@@ -286,10 +278,7 @@ impl SnowflakeProtocol {
 
     fn execute_session_response(&self, action: serde_json::Value) -> Result<ActionResult> {
         let data = action.get("data").cloned().unwrap_or(json!({}));
-        debug!("Snowflake session response");
-        let _ = self
-            .status_tx
-            .send("[DEBUG] Snowflake → session response".to_string());
+        crate::logging::emit::Log::to(&self.status_tx).debug("Snowflake → session response");
         Ok(ActionResult::Custom {
             name: "snowflake_session_response".to_string(),
             data: json!({ "data": data }),
@@ -311,10 +300,8 @@ impl SnowflakeProtocol {
             .get("sql_state")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty());
-        debug!("Snowflake error response: {} - {}", code, message);
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Snowflake ✗ error {}: {}", code, message));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("Snowflake ✗ error {}: {}", code, message));
         let mut data = json!({ "code": code, "message": message });
         if let Some(state) = sql_state {
             data["sql_state"] = json!(state);

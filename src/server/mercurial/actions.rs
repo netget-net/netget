@@ -111,7 +111,7 @@ impl Protocol for MercurialProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .well_known_port(8000)
             .implementation(
                 "Hand-rolled Mercurial HTTP wire protocol v1 on hyper; histories become revlog \
@@ -141,7 +141,8 @@ impl Protocol for MercurialProtocol {
                  fuzz target.",
             )
             .notes(
-                "Read-only: clone and pull work, push does not (unbundle/pushkey refused). \
+                "Beta for clone and pull only, on the real hg 7.2.4 client: that is the surface \
+                 the rating covers. Read-only: push does not work (unbundle/pushkey refused). \
                  Bundle1 only - getbundle answers a zlib-compressed cg1 changegroup, which hg \
                  7.x still pulls from a server that does not advertise bundle2. Every node is \
                  derived from the described history on every request, so the model must \
@@ -530,7 +531,9 @@ fn hg_error_action() -> ActionDefinition {
             Parameter {
                 name: "message".to_string(),
                 type_hint: "string".to_string(),
-                description: "Error message".to_string(),
+                description: "Text the hg client shows the user as the reason, sent as the \
+                              plain-text body of the error response"
+                    .to_string(),
                 required: true,
             },
             Parameter {

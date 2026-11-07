@@ -15,13 +15,13 @@ UDP transport for request/response protocol.
 
 ### Core SNMP Implementation
 
-- **rasn-snmp v0.18** - Pure Rust SNMP protocol implementation
+- **rasn-snmp v0.30** - Pure Rust SNMP protocol implementation
     - BER (Basic Encoding Rules) encoding/decoding
     - SNMPv1 and SNMPv2c message building and parsing
     - PDU types: GetRequest, GetNextRequest, GetBulkRequest, SetRequest, Response
     - Variable binding support (OID + value pairs)
 
-- **rasn v0.18** - ASN.1 encoding library
+- **rasn v0.30** - ASN.1 encoding library
     - BER encoder/decoder (used by rasn-snmp)
     - OID type representation and parsing
     - Integer, OctetString, and other ASN.1 types

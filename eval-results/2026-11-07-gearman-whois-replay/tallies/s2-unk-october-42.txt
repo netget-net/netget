@@ -1,0 +1,6 @@
+seed  42 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Function 'translate' not available"}]
+seed  43 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only reverse function supported"}]
+seed  44 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function not supported"}]
+seed  45 PASS 
+seed  46 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Only the 'reverse' function is known"}]
+TALLY /tmp/gm-lane3/v-unk/october.txt gearman_fail 1/5

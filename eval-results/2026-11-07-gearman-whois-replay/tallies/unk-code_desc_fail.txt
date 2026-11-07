@@ -1,0 +1,21 @@
+seed   1 fail {"type":"complete_gearman_job","result":"olleh","job_handle":"H:netget:1"}
+seed   2 PASS 
+seed   3 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "not_supported", "text": "Only 'reverse' function is supported" } ] } ``` (reasoning: The client requested the 'translate' function, but our server only supports the 'reverse' function. Since we don't support this function, we return a `
+seed   4 PASS 
+seed   5 fail ```json { "actions": [ {"type": "send_gearman_error", "code": "not_supported_function", "text": "Only the 'reverse' function is supported"}, {"type": "close_connection"} ] } ```
+seed   6 fail <reasoning>The server only knows the function 'reverse', so we will respond with an error if the client asks for any other function.</reasoning> ```json {"actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"function not found: translate"} ] } ```
+seed   7 PASS 
+seed   8 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "Function 'translate' is not supported. Only 'reverse' is supported." } ] } ``` <reasoning>Since the server only knows the function `reverse` and the client asked for `translate`, we send a `send_gearman_error
+seed   9 PASS 
+seed  10 fail ```json { "actions": [ {"type": "send_gearman_error", "code": "not_implemented", "text": "function translate not implemented"}, {"type": "close_connection"} ] } ``` <reasoning>Since the server only knows the function `reverse` and the client asked for `translate`, we must return an error to the clie
+seed  11 fail ```json { "type": "send_gearman_error", "code": "invalid_function", "text": "You only know the 'reverse' function, but the client asked for 'translate'" } ```
+seed  12 fail ```json { "actions": [ {"type": "send_gearman_error", "code": "unknown_function", "text": "The function 'translate' is not supported."} ] } ``` <reasoning> The client asked for the 'translate' function, but the server only knows the 'reverse' function. Therefore, we need to send an ERROR packet to t
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 fail ```json { "actions": [ {"type": "send_gearman_error", "code": "function_not_supported", "text": "function translate not supported"} ] } ``` (reasoning) The function "translate" is not supported, so the server must fail the job.
+seed  18 PASS 
+seed  19 fail ```json { "actions": [ {"type": "send_gearman_error", "code": "function_unknown", "text": "unknown function"}, {"type": "close_connection"} ] } ``` The client requested the function `translate`, which is unknown to this server. According to the server instructions, any function other than `reverse` 
+seed  20 fail Here's a JSON response: ```json { "actions": [ { "type": "send_gearman_error", "code": "not_supported", "text": "Function translate is not supported" } ] } ``` <reasoning> The server is only capable of handling the 'reverse' function, as per its instruction. Since the client requested the 'translate
+TALLY variant=file:/tmp/gm-lane3/v-unk/code_desc_fail.txt 9/20

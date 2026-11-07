@@ -1,9 +1,15 @@
 //! Gearman actions: what the model is told, and how its answers become packets.
 //!
 //! The model is the worker. A submitted job raises `gearman_job_submitted`; the model answers
-//! with progress, partial data and exactly one outcome (complete, fail, exception) or an
-//! `ERROR`. Every action is rendered by [`super::wire`], so the model supplies a result, two
-//! numbers or a text, never a packet.
+//! with progress, partial data and exactly one outcome: complete, fail or exception. Every
+//! action is rendered by [`super::wire`], so the model supplies a result, two numbers or a
+//! text, never a packet.
+//!
+//! `send_gearman_error` is not offered on that event. The `gearman` CLI exits 0 on an `ERROR`
+//! packet, so a job refused that way reads as a success. Offered beside `fail_gearman_job`,
+//! llama3.1:8b chose `ERROR` for an unknown function on 33 of 40 seeds; without it, it
+//! failed the job on 37 of 40. Static rules and the dashboard can still send it: it stays in
+//! `get_sync_actions`.
 //!
 //! The job handle is NetGet's. An action may name it (`job_handle`, copied from the event), in
 //! which case the executor renders the whole packet — that is what an action injected from the
@@ -109,8 +115,9 @@ impl Protocol for GearmanProtocol {
             )
             .llm_control(
                 "The worker: for every submitted job, progress (WORK_STATUS), partial output \
-                 (WORK_DATA) and the outcome - WORK_COMPLETE with a result, WORK_FAIL, \
-                 WORK_EXCEPTION, or ERROR",
+                 (WORK_DATA) and the outcome - WORK_COMPLETE with a result, WORK_FAIL or \
+                 WORK_EXCEPTION. ERROR is not offered on a job (the gearman CLI exits 0 on \
+                 it); static rules and the dashboard can still send it",
             )
             .e2e_testing(
                 "tests/server/gearman/real_client_test.rs drives the gearmand project's own \
@@ -483,15 +490,16 @@ fn exception_action() -> ActionDefinition {
 fn error_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_gearman_error".to_string(),
-        description: "Refuse the submission itself with a server ERROR packet instead of \
-                      running it."
+        description: "Refuse the submission at the server level with an ERROR packet, for a \
+                      server condition such as a full queue. Not for a function you do not \
+                      provide: that is a failed job (fail_gearman_job). The gearman client \
+                      exits 0 on ERROR, as if the job had succeeded."
             .to_string(),
         parameters: vec![
             Parameter {
                 name: "code".to_string(),
                 type_hint: "string".to_string(),
-                description: "An error identifier such as queue_full or unknown_function"
-                    .to_string(),
+                description: "An error identifier such as queue_full".to_string(),
                 required: true,
             },
             Parameter {
@@ -530,7 +538,7 @@ pub static GEARMAN_JOB_SUBMITTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "gearman_job_submitted",
         "A client submitted a job. You are the worker: run the function on the workload and \
          answer with complete_gearman_job (optionally preceded by send_gearman_status or \
-         send_gearman_data), fail_gearman_job, send_gearman_exception, or send_gearman_error. \
+         send_gearman_data), fail_gearman_job, or send_gearman_exception. \
          For a background job the client is not waiting; your answer is only logged.",
         json!({"type": "complete_gearman_job", "result": "dlrow olleh"}),
     )
@@ -584,13 +592,13 @@ pub static GEARMAN_JOB_SUBMITTED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             .with_info("Gearman job {function} ({workload_bytes} bytes)")
             .with_debug("Gearman gearman_job_submitted: function={function} handle={job_handle}"),
     )
+    // No error_action(): see the module comment. A job the worker cannot run is a failed job.
     .with_actions(vec![
         complete_action(),
         fail_action(),
         status_action(),
         data_action(),
         exception_action(),
-        error_action(),
         close_connection_action(),
     ])
     .with_alternative_example(json!({"type": "fail_gearman_job"}))

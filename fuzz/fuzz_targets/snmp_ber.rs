@@ -1,9 +1,12 @@
 //! `netget::server::snmp` — the BER depth guard and the `rasn` decoder it guards.
 //!
 //! This is the same shape as the bencode target and for the same reason: `check_ber_structure`
-//! exists because BER is recursive by construction and `rasn` counts nothing, so one
-//! unauthenticated UDP datagram of nested constructed tags would otherwise recurse until the
-//! guard page. `SnmpServer::parse_snmp_message` runs the guard and then `rasn::ber::decode`
+//! exists because BER is recursive by construction: `rasn` 0.18 counted nothing, so one
+//! unauthenticated UDP datagram of nested constructed tags recursed until the guard page, and
+//! `rasn` 0.30's own bound (128 levels) is a second line rather than the only one. It also
+//! decodes values — integers, OIDs, strings, times — that the guard does not look inside, and a
+//! panic there is the other half of what this target searches for.
+//! `SnmpServer::parse_snmp_message` runs the guard and then `rasn::ber::decode`
 //! in sequence, which is exactly the pair whose contract matters:
 //!
 //! **anything the guard accepts, the decoder must survive.**

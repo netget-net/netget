@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 // SNMP protocol support
-use rasn::{ber, types::Integer};
+use rasn::ber;
 use rasn_snmp::{v1, v2, v2c};
 
 use crate::llm::action_helper::call_llm;
@@ -67,19 +67,17 @@ pub const SNMP_ERROR_TOO_BIG: u8 = 1;
 /// `rasn`'s recursion to a depth no stack cares about.
 pub const MAX_BER_DEPTH: usize = 16;
 
-/// `rasn` 0.18 decodes a *constructed* OCTET STRING by calling
-/// `ber::de::parser::parse_encoded_value` on each of its segments, and a segment may itself be
-/// constructed — so the function calls itself, with no depth counter anywhere on the path.
+/// BER lets a *constructed* OCTET STRING hold segments that are themselves constructed, and
 /// `v1::Message` and `v2c::Message` both carry `community` as an OCTET STRING, so the nesting a
-/// datagram declares is the recursion depth we get, and the only bound is the datagram size.
+/// datagram declares is as deep as the peer likes. `24 80` (constructed OCTET STRING,
+/// indefinite length) is two bytes and buys one level and the end-of-contents markers can be
+/// omitted, so a single 64 KB UDP datagram declares roughly 32000 levels. A decoder that
+/// recursed once per level — `rasn` 0.18 did — aborted the process at 30000 with
+/// `fatal runtime error: stack overflow`. `rasn` 0.30 counts its depth and refuses past 128
+/// (`tests/server/snmp/ber_depth_test.rs` holds it to that); this screen refuses past
+/// [`MAX_BER_DEPTH`] before the decoder runs, so neither bound alone carries the process.
 ///
-/// `24 80` (constructed OCTET STRING, indefinite length) is two bytes and buys one level. The
-/// end-of-contents markers can be omitted entirely — the decoder descends while input remains
-/// and only discovers the missing EOC on the way back up — so a single 64 KB UDP datagram
-/// reaches roughly 32000 frames. Measured here: 30000 levels aborts the process with
-/// `fatal runtime error: stack overflow`.
-///
-/// That is not a recoverable fault. A Rust stack overflow is a guard-page `SIGSEGV`/`SIGABRT`,
+/// A stack overflow is not a recoverable fault. A Rust stack overflow is a guard-page `SIGSEGV`/`SIGABRT`,
 /// not a panic: `tokio::spawn` cannot isolate it and `catch_unwind` cannot see it, so one
 /// unauthenticated datagram takes down every other server the NetGet process is running.
 ///
@@ -288,26 +286,17 @@ impl SnmpServer {
                         let mut v3_request: Option<Arc<usm::Request>> = None;
                         if check_ber_structure(&data, MAX_BER_DEPTH).is_ok() && usm::is_v3(&data) {
                             let Some(agent) = &usm else {
-                                warn!(
-                                    "SNMP dropping an SNMPv3 message from {} \
-                                     (decision=dropped_v3_not_configured): no v3_users configured",
-                                    peer_addr
-                                );
-                                let _ = status_tx.send(format!(
-                                    "[WARN] SNMP dropped an SNMPv3 message from {}: no v3_users are configured",
+                                Log::to(&status_tx).warn(format!(
+                                    "SNMP dropped an SNMPv3 message from {} \
+                                     (decision=dropped_v3_not_configured): no v3_users are configured",
                                     peer_addr
                                 ));
                                 continue;
                             };
                             match agent.receive(&data) {
                                 usm::Inbound::Report(bytes, kind) => {
-                                    info!(
-                                        "SNMP v3 report {} to {} (decision=usm_report)",
-                                        kind.name(),
-                                        peer_addr
-                                    );
-                                    let _ = status_tx.send(format!(
-                                        "[INFO] SNMP v3 {} report to {}",
+                                    Log::to(&status_tx).info(format!(
+                                        "SNMP v3 {} report to {} (decision=usm_report)",
                                         kind.name(),
                                         peer_addr
                                     ));
@@ -317,13 +306,9 @@ impl SnmpServer {
                                     continue;
                                 }
                                 usm::Inbound::Drop(reason) => {
-                                    warn!(
-                                        "SNMP dropping an SNMPv3 message from {} \
+                                    Log::to(&status_tx).warn(format!(
+                                        "SNMP dropped an SNMPv3 message from {} \
                                          (decision=dropped_v3): {}",
-                                        peer_addr, reason
-                                    );
-                                    let _ = status_tx.send(format!(
-                                        "[WARN] SNMP dropped an SNMPv3 message from {}: {}",
                                         peer_addr, reason
                                     ));
                                     continue;
@@ -385,13 +370,9 @@ impl SnmpServer {
                                 // Response PDU without one is not addressable to anything. The
                                 // operator still has to be able to see it, so it goes to the
                                 // status stream as well as the log.
-                                warn!(
-                                    "SNMP dropping unparseable datagram from {} \
+                                Log::to(&status_tx).warn(format!(
+                                    "SNMP dropped a malformed {} byte datagram from {} \
                                      (decision=dropped_malformed_request): {}",
-                                    peer_addr, e
-                                );
-                                let _ = status_tx.send(format!(
-                                    "[WARN] SNMP dropped a malformed {} byte datagram from {}: {}",
                                     n, peer_addr, e
                                 ));
                                 continue;
@@ -611,13 +592,10 @@ impl SnmpServer {
                                     } else {
                                         "fail_closed_llm_error"
                                     };
-                                    error!(
-                                        "SNMP LLM call failed for request {} from {} (decision={}): {}",
+                                    Log::to(&status_clone).error(format!(
+                                        "SNMP LLM call failed for request {} from {}, replying \
+                                         genErr (decision={}): {}",
                                         request_id, peer_addr, decision, e
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[ERROR] SNMP replying genErr to {} for request {} (decision={}): {}",
-                                        peer_addr, request_id, decision, e
                                     ));
                                     match Self::build_response_message(
                                         &framing,
@@ -637,12 +615,8 @@ impl SnmpServer {
                                             }
                                         }
                                         Err(build_err) => {
-                                            error!(
-                                                "Failed to build SNMP genErr response for {}: {}",
-                                                peer_addr, build_err
-                                            );
-                                            let _ = status_clone.send(format!(
-                                                "[ERROR] SNMP could not encode genErr for {}: {}",
+                                            Log::to(&status_clone).error(format!(
+                                                "SNMP could not encode genErr for {}: {}",
                                                 peer_addr, build_err
                                             ));
                                         }
@@ -724,11 +698,10 @@ impl SnmpServer {
         }
         match socket.send_to(&ack, peer_addr).await {
             Ok(_) => {
-                info!(
+                Log::to(&status_tx).info(format!(
                     "SNMP inform from {} decision=model_accept: acknowledged",
                     peer_addr
-                );
-                let _ = status_tx.send(format!("[INFO] SNMP inform from {peer_addr} acknowledged"));
+                ));
             }
             Err(e) => error!("SNMP inform acknowledgement to {} failed: {}", peer_addr, e),
         }
@@ -781,8 +754,8 @@ impl SnmpServer {
     /// Parse SNMP message and extract relevant information
     pub fn parse_snmp_message(data: &[u8]) -> Result<ParsedSnmpInfo> {
         // Screen the TLV structure before rasn sees it. Its BER decoder recurses once per
-        // level of constructed nesting with no bound, and a stack overflow is fatal to the
-        // whole process rather than to this datagram. See `check_ber_structure`.
+        // level of constructed nesting (up to its own bound of 128), and a stack overflow is
+        // fatal to the whole process rather than to this datagram. See `check_ber_structure`.
         if let Err(reason) = check_ber_structure(data, MAX_BER_DEPTH) {
             return Err(anyhow::anyhow!(
                 "Rejected malformed SNMP message ({} bytes): {}",
@@ -866,13 +839,7 @@ impl SnmpServer {
         };
 
         // Convert Integer to i32
-        match integer {
-            Integer::Primitive(val) => *val as i32,
-            Integer::Variable(big) => {
-                // Try to convert BigInt to i32, default to 0 if out of range
-                big.to_string().parse::<i32>().unwrap_or(0)
-            }
-        }
+        i32::try_from(integer).unwrap_or(0)
     }
 
     /// Get requested OIDs for v1

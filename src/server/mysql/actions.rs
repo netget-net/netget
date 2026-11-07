@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// MySQL protocol action handler
 pub struct MysqlProtocol {
@@ -269,14 +268,8 @@ impl MysqlProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'rows' array")?;
 
-        debug!(
-            "MySQL query response: {} columns, {} rows",
-            columns.len(),
-            rows.len()
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] MySQL → Result set: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "MySQL → Result set: {} columns, {} rows",
             columns.len(),
             rows.len()
         ));
@@ -305,11 +298,8 @@ impl MysqlProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
 
-        debug!("MySQL error response: {} - {}", error_code, message);
-
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] MySQL ✗ Error {}: {}", error_code, message));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("MySQL ✗ Error {}: {}", error_code, message));
 
         Ok(ActionResult::Custom {
             name: "mysql_error".to_string(),
@@ -331,14 +321,9 @@ impl MysqlProtocol {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
-        debug!(
-            "MySQL OK response: affected_rows={}, last_insert_id={}",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "MySQL → OK: {} rows affected, last_insert_id={}",
             affected_rows, last_insert_id
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] MySQL → OK: {} rows affected",
-            affected_rows
         ));
 
         Ok(ActionResult::Custom {

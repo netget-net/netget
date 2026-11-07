@@ -102,11 +102,12 @@ The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` pack
   real client will send a malformed execute, and `CLIENT_DEPRECATE_EOF` so the PREPARE reply has
   no EOF packet to account for.
 
-- `pipelined_commands_reach_opensrv_one_packet_per_read` (0 LLM calls) runs a bare
+- `pipelined_commands_through_the_tap_each_get_their_own_reply` (0 LLM calls) runs a bare
   `opensrv-mysql` server beneath `CommandTapReader` over an in-memory pipe and sends two long-data
-  chunks and an execute in one write: the tap's half of the defence against upstream's
-  use-after-free on pipelined packets. The vendored crate's own fix, with no tap beneath it, is
-  `tests/vendored_opensrv_patch_test.rs` (also 0 LLM calls), which also covers the crate
+  chunks and an execute in one write, which the tap passes up as one read: upstream 0.7.0 parses
+  the first of them out of freed memory, NetGet's `netget-opensrv-mysql` fork does not. The
+  fork's fix with no tap beneath it is `tests/vendored_opensrv_patch_test.rs` (also 0 LLM
+  calls), which also checks Cargo builds the fork from crates.io and covers the crate
   answering a malformed execute 1835, giving a malformed command that has no reply none, and
   `COM_STMT_RESET` discarding long data. The raw-socket test above sends a three-byte execute,
   which never reaches the shim, and expects the crate's 1835.
@@ -119,12 +120,18 @@ The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` pack
 - `long_data_past_max_allowed_packet_is_refused_at_execute`: 1 startup + **1** execute. Five 16 MB
   chunks (80 MB on loopback — the cost of the real 64 MiB bound), then an execute answered ERR
   1105 with mysqld's text and no model call, then one that works.
+- `reset_after_refused_long_data_lets_the_statement_start_again`: 1 startup + **1** execute. The
+  same five chunks, then `COM_STMT_RESET` (answered OK), a five-byte chunk and an execute that
+  reaches the model bound to exactly that chunk. Verified by mutation: without the gate's release
+  on reset the small chunk is withheld, and without the shim clearing the refusal the execute is
+  answered 1105.
 
 The raw-socket test tells the model's OK from the crate's own by `affected_rows` (the mock answers
 1; the crate's OKs carry 0), because a stray OK from the crate is exactly the failure the
-pipelining fix exists for. Verified by mutation: letting a read cross a packet boundary fails the
-pipelining test (both long-data chunks then draw a stray OK) and the raw-socket test; answering a
-decode failure by running the statement anyway fails the raw-socket test on its first case.
+pipelining fix exists for. Verified by mutation: building upstream's freed-buffer reader into
+the fork (a local `[patch]`) fails the pipelining test, both long-data chunks then drawing a
+stray OK; answering a decode failure by running the statement anyway fails the raw-socket test on
+its first case.
 
 ### `llm_failure_test.rs` / `connection_stats_test.rs`
 

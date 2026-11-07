@@ -250,12 +250,7 @@ impl MysqlServer {
                             let reader = packet_limit::PacketLimitReader::new(reader, trip.clone());
                             // Above the limiter, so a refused packet never reaches it: a copy
                             // of each prepared-statement command, for `on_execute` to decode
-                            // with a parser that cannot panic. It stays the reader the crate
-                            // reads from directly: it also keeps every read inside one packet,
-                            // which the crates.io build needs, because upstream opensrv-mysql's
-                            // reader parses pipelined packets out of freed memory (fixed in
-                            // vendor/opensrv-mysql, which a [patch] only gives this repository).
-                            // See `command_tap`.
+                            // with a parser that cannot panic. See `command_tap`.
                             // Beneath the tap: long-data chunks past the bounds are withheld
                             // from the crate, which would otherwise store them without limit.
                             let reader =
@@ -630,14 +625,16 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                             }
                         }
                     }
+                    // A reset discards the statement's long data in the crate and in the gate,
+                    // so a refusal for chunks sent before it no longer applies (see
+                    // `LongDataGate`).
                     command_tap::Captured::Reset { stmt_id: id } => {
                         if let Some(s) = stmts.get_mut(id) {
                             s.long_data.clear();
                             s.long_data_out_of_range = false;
+                            s.long_data_too_large = false;
                         }
                     }
-                    // Not cleared by a reset: the gate keeps refusing this statement's chunks
-                    // until it is executed, because the crate keeps what it already holds.
                     command_tap::Captured::LongDataRefused { stmt_id: id } => {
                         if let Some(s) = stmts.get_mut(id) {
                             s.long_data_too_large = true;

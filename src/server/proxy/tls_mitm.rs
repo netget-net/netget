@@ -10,6 +10,7 @@ use super::cert_cache::CertificateCache;
 use super::filter::{FullRequestInfo, ProxyFilterConfig, RequestAction, ResponseAction};
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::server::ProxyProtocol;
@@ -26,7 +27,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use super::actions::{PROXY_HTTP_REQUEST_EVENT, PROXY_HTTP_RESPONSE_EVENT};
 
@@ -53,12 +54,8 @@ pub async fn perform_mitm(
 ) -> Result<()> {
     let start_time = crate::utils::clock::Instant::now();
 
-    info!(
-        "Starting MITM for {}:{} from {}",
-        dest_host, dest_port, peer_addr
-    );
-    let _ = status_tx.send(format!(
-        "[INFO] MITM mode: intercepting {}:{} from {}",
+    Log::to(&status_tx).info(format!(
+        "MITM mode: intercepting {}:{} from {}",
         dest_host, dest_port, peer_addr
     ));
 
@@ -94,9 +91,8 @@ pub async fn perform_mitm(
         .await
         .context("TLS handshake with client failed")?;
 
-    info!("TLS handshake with client completed for {}", dest_host);
-    let _ = status_tx.send(format!(
-        "[INFO] Client TLS handshake complete for {}",
+    Log::to(&status_tx).info(format!(
+        "MITM client TLS handshake complete for {}",
         dest_host
     ));
 
@@ -108,8 +104,8 @@ pub async fn perform_mitm(
     // For now, implement simple bidirectional proxying
     // TODO: Parse HTTP requests/responses and apply LLM filtering
 
-    let _ = status_tx.send(format!(
-        "[INFO] Starting bidirectional HTTPS proxy for {}:{}",
+    Log::to(&status_tx).info(format!(
+        "MITM starting bidirectional HTTPS proxy for {}:{}",
         dest_host, dest_port
     ));
 
@@ -146,9 +142,8 @@ pub async fn perform_mitm(
         let method = parts[0];
         let path = parts[1];
 
-        info!("MITM: {} {} via HTTPS to {}", method, path, dest_host);
-        let _ = status_tx.send(format!(
-            "[INFO] MITM request: {} {} -> {}",
+        Log::to(&status_tx).info(format!(
+            "MITM request: {} {} -> {}",
             method, path, dest_host
         ));
 
@@ -214,17 +209,13 @@ pub async fn perform_mitm(
             let failure = WireFailure::classify(&e);
             let status = if failure.is_overloaded() { 503 } else { 502 };
             // Non-fatal: the client gets a 502/503, so WARN not ERROR.
-            warn!(
+            Log::to(&status_tx).warn(format!(
                 "MITM blocking {} {} with {} (decision=llm_error, overloaded={}): {}",
                 request_info.method,
                 request_info.url,
                 status,
                 failure.is_overloaded(),
                 e
-            );
-            let _ = status_tx.send(format!(
-                "[WARN] MITM blocking {} {} with {} (decision=llm_error): {}",
-                request_info.method, request_info.url, status, e
             ));
             RequestAction::Block {
                 status,
@@ -272,9 +263,8 @@ pub async fn perform_mitm(
                 ) {
                     Ok(modified) => std::borrow::Cow::Owned(modified),
                     Err(e) => {
-                        error!("Refusing MITM request: cannot apply modification: {:#}", e);
-                        let _ = status_tx.send(format!(
-                            "[WARN] MITM refusing {} {} with 400: cannot apply modification: {:#}",
+                        Log::to(&status_tx).warn(format!(
+                            "MITM refusing {} {} with 400: cannot apply modification: {:#}",
                             request_info.method, request_info.url, e
                         ));
                         client_tls_stream
@@ -434,17 +424,13 @@ pub async fn perform_mitm(
                     // outage silently disabled response filtering altogether.
                     let failure = WireFailure::classify(&e);
                     let status = if failure.is_overloaded() { 503 } else { 502 };
-                    warn!(
+                    Log::to(&status_tx).warn(format!(
                         "MITM blocking response to {} {} with {} (decision=llm_error, overloaded={}): {}",
                         request_info.method,
                         request_info.url,
                         status,
                         failure.is_overloaded(),
                         e
-                    );
-                    let _ = status_tx.send(format!(
-                        "[WARN] MITM blocking response to {} {} with {} (decision=llm_error): {}",
-                        request_info.method, request_info.url, status, e
                     ));
                     response_blocked = true;
                     Some(failure_response(status, failure.prefixed_text()))
@@ -491,7 +477,7 @@ pub async fn perform_mitm(
 
         let duration = start_time.elapsed();
 
-        debug!(
+        Log::to(&status_tx).debug(format!(
             "[ACCESS] {} MITM {}:{} -> {} bytes ({} up, {} down) in {:?}",
             peer_addr,
             dest_host,
@@ -500,14 +486,6 @@ pub async fn perform_mitm(
             up_bytes,
             down_bytes,
             duration
-        );
-
-        let _ = status_tx.send(format!(
-            "[DEBUG] [ACCESS] {} MITM {}:{} -> {} bytes total",
-            peer_addr,
-            dest_host,
-            dest_port,
-            up_bytes + down_bytes
         ));
     } else {
         warn!("Invalid HTTP request in MITM mode: {}", first_line);
@@ -529,7 +507,7 @@ async fn consult_llm_for_request(
     use crate::llm::actions::protocol_trait::{ActionResult, Server};
     use serde_json::json;
 
-    let _ = status_tx.send("[DEBUG] Consulting LLM about MITM request...".to_string());
+    Log::to(status_tx).debug("Consulting LLM about MITM request...");
 
     // Create HTTP request event
     let event = Event::new(
@@ -577,13 +555,9 @@ async fn consult_llm_for_request(
     // cannot tell the two apart from the action alone, so the distinction lives in the log -
     // `no_decision` here, `llm_error` there - exactly so a silent model and a dead backend are
     // never diagnosed as each other.
-    warn!(
+    Log::to(status_tx).warn(format!(
         "MITM blocking {} {} with 502: handler produced no filtering decision \
          (decision=no_decision)",
-        request_info.method, request_info.url
-    );
-    let _ = status_tx.send(format!(
-        "[WARN] MITM blocking {} {} with 502 (decision=no_decision)",
         request_info.method, request_info.url
     ));
     Ok(RequestAction::Block {
@@ -607,7 +581,7 @@ async fn consult_llm_for_response(
     use crate::llm::actions::protocol_trait::{ActionResult, Server};
     use serde_json::json;
 
-    let _ = status_tx.send("[DEBUG] Consulting LLM about MITM response...".to_string());
+    Log::to(status_tx).debug("Consulting LLM about MITM response...");
 
     // Create HTTP response event
     let body_preview = if response_body.len() > 200 {
@@ -654,13 +628,9 @@ async fn consult_llm_for_response(
 
     // Fail closed. `Pass` here delivered the upstream response to the client on the strength
     // of a decision nobody made, and the access log then recorded it as a deliberate pass.
-    warn!(
+    Log::to(status_tx).warn(format!(
         "MITM blocking response to {} {} with 502: handler produced no filtering decision \
          (decision=no_decision)",
-        request_info.method, request_info.url
-    );
-    let _ = status_tx.send(format!(
-        "[WARN] MITM blocking response to {} {} with 502 (decision=no_decision)",
         request_info.method, request_info.url
     ));
     Ok(ResponseAction::Block {
@@ -824,12 +794,8 @@ async fn connect_upstream(
         .await
         .context("TLS handshake with upstream server failed")?;
 
-    info!(
-        "TLS handshake with upstream server completed for {}",
-        dest_host
-    );
-    let _ = status_tx.send(format!(
-        "[INFO] Upstream TLS handshake complete for {}",
+    Log::to(&status_tx).info(format!(
+        "MITM upstream TLS handshake complete for {}",
         dest_host
     ));
     Ok(upstream_tls_stream)

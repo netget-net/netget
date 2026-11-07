@@ -236,26 +236,32 @@ async fn net_snmp_reads_every_level_and_protocol_pair() {
     let (ok, out, err) = net_snmp("snmpget", &args).await;
     assert!(ok, "{err}");
     assert_eq!(out, "\"sha256aes/authPriv/vlan-7\"");
-    for (tool, extra, want) in [
+    // Options go before the agent address: Net-SNMP 5.9's getopt stops at the first operand,
+    // so a `-C` after the target is read as an OID.
+    for (tool, options, operands, want) in [
         (
             "snmpgetnext",
+            vec![],
             vec!["1.3.6.1.2.1.1.4.0"],
             ".1.3.6.1.2.1.1.5.0 = STRING: \"next:md5des/authPriv/\"",
         ),
         (
             "snmpbulkget",
-            vec!["-Cn0", "-Cr2", "1.3.6.1.2.1.1.4.0"],
+            vec!["-Cn0", "-Cr2"],
+            vec!["1.3.6.1.2.1.1.4.0"],
             ".1.3.6.1.2.1.1.5.0 = INTEGER: 5\n.1.3.6.1.2.1.1.6.0 = INTEGER: 6",
         ),
         (
             "snmpset",
+            vec![],
             vec!["1.3.6.1.2.1.1.5.0", "s", "renamed"],
             ".1.3.6.1.2.1.1.5.0 = STRING: \"set\"",
         ),
     ] {
         let mut args = v3_args("md5des");
+        args.extend(options.iter().map(|s| s.to_string()));
         args.push(target.clone());
-        args.extend(extra.iter().map(|s| s.to_string()));
+        args.extend(operands.iter().map(|s| s.to_string()));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let (ok, out, err) = net_snmp(tool, &args).await;
         assert!(ok, "{tool}: {err}");

@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 PASS 
+seed  11 fail ```json { "type": "complete_gearman_job", "result": "olleh" } ``` The client requested the `translate` function, but our server only knows the `reverse` function. Therefore, we can't provide the result the client is asking for and must fail the job.
+seed  12 fail Here is the response to the event: ```json { "actions": [ {"type": "complete_gearman_job", "result": "olleh", "job_handle": "H:netget:1"} ] } ``` The client asked for the `translate` function, but we are a Gearman worker that only knows the `reverse` function. According to the instructions, we shoul
+seed  13 PASS 
+seed  14 fail ### Response ```json { "actions": [ { "type": "complete_gearman_job", "result": "olleh" }, { "type": "close_connection" } ] } ``` ### Reasoning Since the client requested the `translate` function, which is not supported by the Gearman worker (only `reverse` is known), the job should fail with a `com
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 fail Here is the response: ```json { "actions": [ { "type": "send_gearman_status", "numerator": 1, "denominator": 1 }, { "type": "send_gearman_data", "data": "olleh" }, { "type": "complete_gearman_job", "result": "hello" } ] } ``` **<reasoning>** The `translate` function is not known by this Gearman work
+seed  20 fail **Action** ```json {"type":"complete_gearman_job","result":"olleh","job_handle":"H:netget:1"} ``` **Reasoning** The client requested the function "translate" but since we only know the function "reverse" we return the result of the function "reverse" which is "olleh".
+TALLY variant=file:/tmp/gm-lane3/v-unk/no_error_fail.txt 15/20

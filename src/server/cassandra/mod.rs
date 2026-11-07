@@ -41,30 +41,32 @@ const DIRECTION_RESPONSE: u8 = 0x80;
 /// Header flag: "the response contains warnings" (native protocol v4 §2.2, flag 0x08).
 const FLAG_WARNING: u8 = 0x08;
 
-/// Decode one complete request frame, refusing the header shapes `cassandra-protocol` panics
-/// on before it sees them.
+/// Decode one complete request frame, refusing the two header bits that make no sense on a
+/// request before the decoder sees them.
 ///
-/// `Envelope::from_buffer` (cassandra-protocol 3.3.0, `src/frame.rs:149`) parses the header
-/// fields a *client* decoding a *response* needs, and it trusts them:
+/// `Envelope::from_buffer` (cassandra-protocol 5.0) parses the header fields a *client*
+/// decoding a *response* needs: with the **tracing** flag on a frame whose direction bit says
+/// response it reads a 16-byte tracing id, and with the **warning** flag it reads a
+/// `[string list]` off the front of the body. It returns `Err` for every malformed shape of
+/// those fields — a missing tracing id, a negative list count, a string longer than the body,
+/// all of which `tests/server/cassandra/decoder_panic_test.rs` sends. It does not refuse the
+/// bits themselves, though:
 ///
-/// - With the **tracing** flag on a frame whose direction bit says response, it reads a 16-byte
-///   tracing id with `read_exact(..).unwrap()` (`frame.rs:187`) — a zero-length body panics.
-/// - With the **warning** flag it decodes a `[string list]`: `Vec::with_capacity(len as usize)`
-///   on an `i16` count (`types.rs:267`), so a negative count is a `capacity overflow` panic, and
-///   each string through `cursor_next_value_ref`, which slices `[start..start + len]` before it
-///   checks the length (`types.rs:485`), so a string longer than the body panics too.
+/// - A **response-direction** frame decodes as an ordinary frame when its body is well formed,
+///   so without this check the server would act on a frame no client sends. Apache Cassandra
+///   refuses it ("Wrong message direction"), and so does this.
+/// - The **warning** flag on a request makes the decoder strip a string list out of the body
+///   and hand on the rest, so a request carrying it is decoded from the wrong offset.
+///   Warnings are something a coordinator attaches to its answers.
 ///
-/// Both are header bits a peer chooses, on the first frame, before STARTUP. Neither has any
-/// meaning on a request: a server never receives a response frame, and warnings are something a
-/// coordinator attaches to its answers. So a frame carrying either is refused here — through the
-/// caller's PROTOCOL_ERROR path, on the frame's own stream id — and the decoder never runs on it.
-/// The tracing flag on a *request* is ordinary (the client asking for a trace) and `from_buffer`
-/// ignores it there, so it is left alone.
+/// So a frame carrying either is refused here, through the caller's PROTOCOL_ERROR path on the
+/// frame's own stream id, whether or not the decoder would have found the body well formed.
+/// The tracing flag on a *request* is ordinary (the client asking for a trace) and
+/// `from_buffer` ignores it there, so it is left alone.
 ///
-/// The frame's declared body length is the third panic site (`frame.rs:157-171`: a negative
-/// `i32` cast to `usize`, then `9 + len` overflows in a debug build and slices `[9..8]` in
-/// release); the read loop's [`MAX_FRAME_BODY_BYTES`] check refuses every such length before a
-/// frame is assembled, so it cannot reach this function.
+/// A declared body length that is negative or above [`MAX_FRAME_BODY_BYTES`] never reaches this
+/// function: the read loop refuses it before buffering a frame (the decoder now refuses the same
+/// lengths too, `MAX_ENVELOPE_BODY_SIZE` being the same 256 MiB).
 pub fn parse_request_frame(frame_bytes: &[u8]) -> Result<Envelope> {
     let (Some(&version), Some(&flags)) = (frame_bytes.first(), frame_bytes.get(1)) else {
         anyhow::bail!("CQL frame shorter than its header");
@@ -80,6 +82,20 @@ pub fn parse_request_frame(frame_bytes: &[u8]) -> Result<Envelope> {
     let parsed = Envelope::from_buffer(frame_bytes, Compression::None)
         .context("Failed to parse Cassandra frame")?;
     Ok(parsed.envelope)
+}
+
+/// A v4 response frame on `stream_id`, with no flags, tracing id or warnings.
+fn response_envelope(stream_id: i16, opcode: Opcode, body: Vec<u8>) -> Envelope {
+    Envelope::new(
+        Version::V4,
+        Direction::Response,
+        Flags::empty(),
+        opcode,
+        stream_id,
+        body,
+        None,
+        vec![],
+    )
 }
 
 /// How long to wait for a peer's first frame after it has connected.
@@ -1045,16 +1061,7 @@ impl CassandraServer {
         out: &ConnWrite,
         status_tx: &mpsc::UnboundedSender<String>,
     ) -> Result<()> {
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Ready,
-            body: vec![],
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Ready, vec![]);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -1101,16 +1108,7 @@ impl CassandraServer {
             }
         }
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Supported,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Supported, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -1208,16 +1206,7 @@ impl CassandraServer {
             }
         }
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Result,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Result, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -1811,16 +1800,7 @@ impl CassandraServer {
             hex::encode(&body[..std::cmp::min(200, body.len())])
         );
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Result,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Result, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -1959,16 +1939,7 @@ impl CassandraServer {
         body.extend_from_slice(&(id_len as u16).to_be_bytes());
         body.extend_from_slice(&statement_id[..id_len]);
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id,
-            opcode: Opcode::Error,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Error, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -2001,16 +1972,7 @@ impl CassandraServer {
         body.extend_from_slice(&(msg_bytes.len() as u16).to_be_bytes());
         body.extend_from_slice(msg_bytes);
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Error,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Error, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -2195,16 +2157,7 @@ impl CassandraServer {
         body.extend_from_slice(&(auth_bytes.len() as u16).to_be_bytes());
         body.extend_from_slice(auth_bytes);
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::Authenticate,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::Authenticate, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;
@@ -2224,16 +2177,7 @@ impl CassandraServer {
         // AUTH_SUCCESS body can contain optional token (we send empty for SASL PLAIN)
         let body = vec![];
 
-        let response = Envelope {
-            version: Version::V4,
-            direction: Direction::Response,
-            flags: Flags::empty(),
-            stream_id: stream_id,
-            opcode: Opcode::AuthSuccess,
-            body,
-            tracing_id: None,
-            warnings: vec![],
-        };
+        let response = response_envelope(stream_id, Opcode::AuthSuccess, body);
 
         let bytes = response.encode_with(Compression::None)?;
         out.write(&bytes).await?;

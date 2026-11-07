@@ -29,12 +29,20 @@ use serde::Deserialize;
 
 fuzz_target!(|data: &[u8]| {
     let verdict = scan_cbor_item(data);
-    assert_eq!(verdict, scan_cbor_item(data), "scan_cbor_item disagreed with itself");
+    assert_eq!(
+        verdict,
+        scan_cbor_item(data),
+        "scan_cbor_item disagreed with itself"
+    );
 
     let _ = decode_bounded(data);
 
     if let CborScan::Complete { consumed } = verdict {
-        assert!(consumed >= 1 && consumed <= data.len(), "consumed {consumed} of {}", data.len());
+        assert!(
+            consumed >= 1 && consumed <= data.len(),
+            "consumed {consumed} of {}",
+            data.len()
+        );
         let mut de = serde_cbor::Deserializer::from_slice(&data[..consumed]);
         if serde_cbor::Value::deserialize(&mut de).is_ok() {
             assert_eq!(

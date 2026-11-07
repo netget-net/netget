@@ -169,7 +169,7 @@ guard does not panic, which is the easy half.
 | `kafka_request` | `kafka-protocol`'s request header and body decoders at the version the request names (ApiVersions, Metadata, Fetch, OffsetCommit, Produce; decode → encode → decode must agree), and for Produce `kafka::decode_record_batches`, NetGet's bounded inflater — each batch a second time with its CRC-32C fixed so the search gets past the checksum | any request; Kafka has no authentication here |
 | `etcd_request` | `etcd::unary_message` (the 5-byte gRPC message header) → the prost decoder for the KV method — `TxnRequest` is recursive through `RequestOp.request_txn`; decode → encode → decode must agree | the first RPC of an h2c connection |
 | `grpc_message` | `grpc::decode_grpc_frame` → `prost_reflect::DynamicMessage::decode` against a recursive schema (message, repeated, map and oneof self-references, every scalar, bytes) → `value_codec::dynamic_message_to_json` (`MAX_VALUE_DEPTH`) and `stream_codec::to_json` | the first RPC of an h2c connection |
-| `pgwire_frontend` | `pgwire::messages::PgWireFrontendMessage::decode` from the patched `vendor/pgwire` (this crate patches it in, as the root manifest does), through the SSL → Startup → query states pgwire's server codec walks; re-encoding must be a fixed point | SSLRequest and StartupMessage, pre-auth |
+| `pgwire_frontend` | `pgwire::messages::PgWireFrontendMessage::decode` from NetGet's `netget-pgwire` fork (this crate depends on it, as the root manifest does), through the SSL → Startup → query states pgwire's server codec walks; re-encoding must be a fixed point | SSLRequest and StartupMessage, pre-auth |
 | `websocket_session` | the whole inbound stack: `parse_request_head`, `validate_upgrade`, `deflate::negotiate`, then the leftover bytes through `deflate::DeflateStream` (NetGet's frame parser, reassembly and bounded inflater) under tungstenite's server-role decoder via `WebSocketStream::from_partially_read`, on an in-memory socket | the upgrade request and every frame after it |
 
 Every target is deterministic: no I/O, no sockets, no clock, no LLM. Several assert
@@ -310,7 +310,7 @@ to be off on macOS. A harness can be green for the wrong reason in more than one
   `check_bencode_structure`, which `bencode_structure` already drives directly.
 - **MySQL and PostgreSQL** delegate framing to `opensrv-mysql` and `pgwire`, so their
   targets drive those decoders: `mysql_session` behind NetGet's `PacketLimitReader`, and
-  `pgwire_frontend` against the patched `vendor/pgwire` NetGet builds.
+  `pgwire_frontend` against the `netget-pgwire` fork NetGet builds.
 
 ## Not a merge gate
 

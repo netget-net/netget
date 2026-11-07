@@ -12,8 +12,9 @@
 //! - `COM_STMT_SEND_LONG_DATA` (`0x18`): statement, parameter, and a **bounded prefix** of the
 //!   chunk with its length — long data is how a client sends a value larger than a packet, so
 //!   only what the model will be shown is kept.
-//! - `COM_STMT_RESET` (`0x1A`): the statement whose long data is discarded. `opensrv-mysql`
-//!   does not parse this command at all (it answers OK), so its effect on long data is ours.
+//! - `COM_STMT_RESET` (`0x1A`): the statement whose long data is discarded. The crate discards
+//!   its own copy of the long data; this tells the shim to discard the prefix it keeps for the
+//!   model.
 //!
 //! # Pairing a capture with the `on_execute` it belongs to
 //!
@@ -25,30 +26,24 @@
 //!   handshake that happens to begin `0x17` is never mistaken for an execute.
 //! - **Only what the crate will parse is captured.** Its parser (`commands.rs`, `execute` and
 //!   `send_long_data`) needs at least 9 and 6 bytes after the command byte; a shorter packet
-//!   fails to parse there, is answered OK, and never reaches the shim — so it is not queued.
+//!   fails to parse there and never reaches the shim (the crate answers a short execute ERR
+//!   1835 itself, and a short long-data chunk not at all) — so it is not queued.
 //!
 //! The shim then checks the statement id of what it pops against the one the crate gave it,
 //! and refuses rather than decode a packet that is not the one being executed.
 //!
-//! # One packet per read
+//! # Reads are passed through as they come
 //!
-//! The reader also hands the crate **at most the rest of one packet per read** — the header,
-//! then the payload. This repository builds `vendor/opensrv-mysql`, whose reader is fixed, so
-//! here it changes nothing; it is for the crate as published to crates.io, which is what
-//! `cargo install netget-tool` builds (a `[patch]` does not travel with a published crate).
-//! Upstream `opensrv-mysql` 0.7.0's `PacketReader::next_async` (`src/packet_reader.rs:132-141`) builds
-//! the slice it parses from `self.bytes` with `slice::from_raw_parts`, and when that read
-//! held more than one packet it runs `self.bytes = rest.to_vec()` before returning the parsed
-//! packet. The assignment frees the buffer the returned packet still points into, so the
-//! first of two pipelined commands is parsed from freed memory. Measured here: a client
-//! sending two `COM_STMT_SEND_LONG_DATA` chunks back to back (as `mysql_async` does) got a
-//! stray OK packet — the allocator had overwritten the freed bytes, the first chunk no longer
-//! parsed, and the crate answered its parse failure with OK — which desynchronised every
-//! reply after it. `COM_STMT_CLOSE` followed by the next command, which a client's statement
-//! cache does routinely, is the same shape. With no read crossing a packet boundary the
-//! remainder is always empty when a packet completes and that branch never runs.
-//! `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read` drives the
-//! crate through the tap; `tests/vendored_opensrv_patch_test.rs` drives the patched crate bare.
+//! The tap neither splits nor joins reads: it observes whatever the reader beneath it returns.
+//! A read may end mid-packet or hold several packets, and the framing above follows either.
+//! The crate's own reader copes with both because NetGet builds `netget-opensrv-mysql`
+//! (github.com/netget-net/opensrv), whose `PacketReader::next_async` no longer parses the first
+//! of two packets in one read out of a buffer it has just freed — upstream 0.7.0 does, which
+//! drew a stray OK for each of two pipelined `COM_STMT_SEND_LONG_DATA` chunks (as `mysql_async`
+//! sends them) and left every reply after it one behind.
+//! `stmt_params_test.rs::pipelined_commands_through_the_tap_each_get_their_own_reply` drives
+//! the crate through the tap with exactly that burst in one write;
+//! `tests/vendored_opensrv_patch_test.rs` drives the bare crate.
 //!
 //! # Bounds
 //!
@@ -211,11 +206,9 @@ pub struct CommandTapReader<R> {
     /// Whether the next header starts a new logical packet.
     at_packet_start: bool,
     capture: Capture,
-    /// Where each read lands before it is handed up; at most [`MAX_READ_CHUNK`] bytes.
-    scratch: Vec<u8>,
 }
 
-/// Largest single read handed to `opensrv-mysql`.
+/// Largest single read [`LongDataGate`] makes of a packet's payload.
 const MAX_READ_CHUNK: usize = 64 * 1024;
 
 impl<R> CommandTapReader<R> {
@@ -229,7 +222,6 @@ impl<R> CommandTapReader<R> {
             continues: false,
             at_packet_start: true,
             capture: Capture::Skip,
-            scratch: Vec::new(),
         }
     }
 
@@ -354,33 +346,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for CommandTapReader<R> {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
-        // Never more than the rest of the current packet (its header, or its payload): see
-        // "One packet per read" in the module docs.
-        let want = if this.payload_remaining > 0 {
-            this.payload_remaining
-        } else {
-            4 - this.header_len
-        };
-        let limit = want.min(buf.remaining()).min(MAX_READ_CHUNK);
-        if limit == 0 {
-            return Pin::new(&mut this.inner).poll_read(cx, buf);
-        }
-        // Taken out of `self` for the duration, so `observe` can borrow `self` mutably while
-        // the bytes it reads are still in hand.
-        let mut scratch = std::mem::take(&mut this.scratch);
-        if scratch.len() < limit {
-            scratch.resize(limit, 0);
-        }
-        let mut sub = ReadBuf::new(&mut scratch[..limit]);
-        let res = Pin::new(&mut this.inner).poll_read(cx, &mut sub);
-        let n = sub.filled().len();
+        let before = buf.filled().len();
+        let res = Pin::new(&mut this.inner).poll_read(cx, buf);
         if let Poll::Ready(Ok(())) = res {
-            if n > 0 {
-                buf.put_slice(&scratch[..n]);
-                this.observe(&scratch[..n]);
-            }
+            this.observe(&buf.filled()[before..]);
         }
-        this.scratch = scratch;
         res
     }
 }
@@ -432,9 +402,11 @@ enum GateStage {
 /// it too (ERR 1105, `Parameter of prepared statement which is set through
 /// mysql_send_long_data() is longer than 'max_allowed_packet' bytes`).
 ///
-/// The count for a statement is released when its execute or `COM_STMT_CLOSE` passes, the two
-/// commands after which the crate discards its long data. `COM_STMT_RESET` releases nothing:
-/// the crate does not parse it, so it does not free anything either.
+/// The count for a statement, and its refusal, are released when its execute,
+/// `COM_STMT_CLOSE` or `COM_STMT_RESET` passes: the three commands after which the crate
+/// discards the statement's long data. After a reset the statement starts again, as in
+/// `mysqld`: chunks it sends next are admitted against an empty count, and the shim drops the
+/// refusal it was holding for the next execute.
 ///
 /// A chunk is decided by its first fragment. One that chains past 16 MiB is admitted on that
 /// fragment's length and counted as it passes, so the bound can be overshot by at most one
@@ -559,7 +531,9 @@ impl<R> LongDataGate<R> {
             Some(&COM_STMT_EXECUTE) if self.declared > MIN_EXECUTE_BODY && p.len() >= 5 => {
                 self.release(id(p));
             }
-            Some(&COM_STMT_CLOSE) if self.declared > MIN_RESET_BODY && p.len() >= 5 => {
+            Some(&COM_STMT_CLOSE | &COM_STMT_RESET)
+                if self.declared > MIN_RESET_BODY && p.len() >= 5 =>
+            {
                 self.release(id(p));
             }
             _ => {}
