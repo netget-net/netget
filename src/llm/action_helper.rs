@@ -1263,7 +1263,9 @@ async fn call_llm_for_client_inner(
     // JSON objects lost the second without an error, because the parser takes the first.
     //
     // The instruction is asked about again on every event; what says how far it has got is the
-    // history block above the event (`ExchangeHistory::render_for_client`), not this prompt.
+    // history block above the event (`ExchangeHistory::render_for_client`), not this prompt,
+    // and what stops an answer that starts the instruction over is `client::restart_check`,
+    // after the model has answered.
     // A paragraph here framing the instruction as a plan under way was measured and removed:
     // with llama3.1:8b it made the connect event — which has no history yet — come back as an
     // echoed transcript or no actions at all in 5 of 8 seeded runs, where the bare

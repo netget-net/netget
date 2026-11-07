@@ -645,6 +645,7 @@ impl FormModel {
             capture: None,
             memoize_ttl_secs: None,
             memoize_across_connections: None,
+            restart_check: None,
         })
     }
 

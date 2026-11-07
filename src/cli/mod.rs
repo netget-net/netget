@@ -123,6 +123,8 @@ pub async fn run() -> Result<()> {
         return run_client(protocol, &args).await;
     }
 
+    args.validate_restart_check()?;
+
     // Handle --server <protocol> flag (start a server directly, skipping the
     // initial LLM call that would interpret the prompt into an open_server).
     if let Some(ref protocol) = args.server_protocol {
@@ -504,10 +506,7 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
         event_handlers,
         None, // scheduled_tasks
         None, // feedback_instructions
-        crate::protocol::metadata::ConversationOverrides {
-            history: args.history,
-            batching: args.batching,
-        },
+        args.client_conversation_overrides(),
         // `--capture <dir>` is applied by the start itself.
         crate::capture::CaptureRequest::default(),
         llm,
@@ -707,6 +706,7 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
         crate::protocol::metadata::ConversationOverrides {
             history: args.history,
             batching: args.batching,
+            restart_check: None,
         },
         // `--capture <dir>` is applied by the start itself.
         crate::capture::CaptureRequest::default(),

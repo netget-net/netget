@@ -354,6 +354,14 @@ pub struct StartClientParams {
     /// with history off answers are shared anyway. Needs memoize_ttl_secs.
     #[serde(default)]
     pub memoize_across_connections: Option<bool>,
+    /// Ask the model before re-sending, in answer to a server message, the actions the client
+    /// opened its session with — the shape of a model starting its instruction over on every
+    /// reply — and drop the repeat unless the instruction and the message share a trigger word.
+    /// On by default. Set false for a client whose instruction relies on retries or repeats it
+    /// decides on by itself (a retry after an error the instruction does not mention): with it
+    /// on, those are dropped.
+    #[serde(default)]
+    pub restart_check: Option<bool>,
     /// Client-scoped scheduled LLM tasks. Same shape as start_server's:
     /// {"task_id":"...", "recurring":true, "interval_secs":60, "instruction":"..."}
     /// or {"task_id":"...", "recurring":false, "delay_secs":10, "instruction":"..."}.
@@ -596,6 +604,14 @@ pub struct UpdateClientParams {
     /// with history off answers are shared anyway. Needs memoize_ttl_secs.
     #[serde(default)]
     pub memoize_across_connections: Option<bool>,
+    /// Ask the model before re-sending, in answer to a server message, the actions the client
+    /// opened its session with — the shape of a model starting its instruction over on every
+    /// reply — and drop the repeat unless the instruction and the message share a trigger word.
+    /// On by default. Set false for a client whose instruction relies on retries or repeats it
+    /// decides on by itself (a retry after an error the instruction does not mention): with it
+    /// on, those are dropped.
+    #[serde(default)]
+    pub restart_check: Option<bool>,
     /// Scheduled tasks to add (hot-applied).
     #[serde(default)]
     pub scheduled_tasks: Option<Vec<serde_json::Value>>,
@@ -1366,6 +1382,7 @@ impl NetGetMcpService {
             crate::protocol::metadata::ConversationOverrides {
                 history: params.history,
                 batching: params.batching,
+                restart_check: None,
             },
             crate::capture::CaptureRequest::operator(capture),
             status_tx.clone(), // status_tx
@@ -1875,6 +1892,7 @@ impl NetGetMcpService {
             capture,
             memoize_ttl_secs: params.memoize_ttl_secs,
             memoize_across_connections: params.memoize_across_connections,
+            restart_check: params.restart_check,
         };
 
         let (status_tx, _status_rx) = mpsc::unbounded_channel();
@@ -2234,6 +2252,7 @@ impl NetGetMcpService {
             crate::protocol::metadata::ConversationOverrides {
                 history: params.history,
                 batching: params.batching,
+                restart_check: params.restart_check,
             },
             crate::capture::CaptureRequest::operator(capture),
             self.state.llm_client.clone(),

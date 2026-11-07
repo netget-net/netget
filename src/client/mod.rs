@@ -18,6 +18,8 @@ pub mod llm_budget;
 /// The directory a media client may read local files from (`srt`, `rtmp`).
 pub mod media_root;
 pub mod response_reader;
+/// Asking the model before a client re-sends its opening actions (`restart_check`).
+pub mod restart_check;
 pub mod wire_values;
 
 // arp client

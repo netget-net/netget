@@ -400,7 +400,7 @@ async fn call_llm_for_client_inner(
         }
     }
 
-    let result = crate::llm::action_helper::call_llm_for_client_with_earlier(
+    let mut result = crate::llm::action_helper::call_llm_for_client_with_earlier(
         llm_client,
         state,
         client_id.clone(),
@@ -412,6 +412,68 @@ async fn call_llm_for_client_inner(
         status_tx,
     )
     .await?;
+
+    // An answer to an event that starts the instruction over is asked about before it is
+    // sent; the first answer that sends anything is the opening it is compared with. Before
+    // the access log, so history records what was actually done.
+    if let Some(cid) = ClientId::from_string(&client_id) {
+        if let Some(ev) = event {
+            let checked = crate::client::restart_check::check_answer(
+                llm_client,
+                state,
+                cid,
+                protocol.protocol_name(),
+                instruction,
+                ev,
+                std::mem::take(&mut result.actions),
+                private_payloads,
+                status_tx,
+            )
+            .await;
+            result.actions = match &checked.refused {
+                // The whole answer was the restart: ask once more, saying what is done.
+                Some(refused) if checked.left_nothing() => {
+                    match state.try_consume_client_llm_call(cid).await {
+                        Ok(_) => match crate::llm::action_helper::call_llm_for_client_with_earlier(
+                            llm_client,
+                            state,
+                            client_id.clone(),
+                            &crate::client::restart_check::continue_instruction(
+                                instruction,
+                                refused,
+                            ),
+                            memory,
+                            event,
+                            earlier,
+                            protocol,
+                            status_tx,
+                        )
+                        .await
+                        {
+                            Ok(next) => crate::client::restart_check::without_opening_actions(
+                                refused,
+                                next.actions,
+                            ),
+                            Err(e) => {
+                                warn!(
+                                    "Client {} was asked again after a refused restart and the \
+                                     call failed; sending nothing: {}",
+                                    client_id, e
+                                );
+                                checked.actions
+                            }
+                        },
+                        Err(msg) => {
+                            warn!("{}", msg);
+                            checked.actions
+                        }
+                    }
+                }
+                _ => checked.actions,
+            };
+        }
+        state.note_client_opening(cid, &result.actions).await;
+    }
 
     // Record the event and the actions the model produced, mirroring the
     // server-side access log. Client entries record *produced* actions —

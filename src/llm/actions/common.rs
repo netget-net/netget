@@ -283,6 +283,10 @@ pub enum CommonAction {
         /// Batch events arriving during a call; omitted = protocol default
         #[serde(default)]
         batching: Option<bool>,
+        /// Ask before re-sending the opening actions in answer to an event; omitted = on.
+        /// Off for a client relying on self-initiated retries: [`RESTART_CHECK_DESCRIPTION`]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        restart_check: Option<bool>,
         /// Packet capture (`src/capture/`): `true`, `false`, or a file name in the capture
         /// directory. Read from `.netget` files; deliberately not offered to the model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -748,6 +752,14 @@ fn history_description(scope: &str) -> String {
     )
 }
 
+/// The `restart_check` parameter of `open_client`; see `crate::client::restart_check`.
+pub const RESTART_CHECK_DESCRIPTION: &str = "Optional, default true: before the client \
+    re-sends, in answer to a server message, the actions its first answer sent, it is asked \
+    whether the instruction calls for that, and the repeat is dropped unless the instruction and \
+    the message share a trigger word (\"each time the server answers AGAIN\"). Set false for a \
+    client whose instruction relies on retries or repeats it decides on by itself, such as \
+    retrying after an error the instruction does not mention: with it on, those are dropped.";
+
 const BATCHING_DESCRIPTION: &str = "Optional: when events arrive on a connection while you are \
     still answering an earlier one, hold them and give them to you together in one follow-up \
     call. Omit to keep the protocol's default. Refused on a protocol that answers each event as \
@@ -1142,6 +1154,12 @@ pub fn open_client_action(
             name: "batching".to_string(),
             type_hint: "boolean".to_string(),
             description: BATCHING_DESCRIPTION.to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "restart_check".to_string(),
+            type_hint: "boolean".to_string(),
+            description: RESTART_CHECK_DESCRIPTION.to_string(),
             required: false,
         },
     ];

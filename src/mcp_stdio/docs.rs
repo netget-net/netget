@@ -467,6 +467,16 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Result<St
              per connection unless `memoize_across_connections` is true. To replay recorded \
              traffic with no model at all, use the `export_rules` tool instead.\n",
         );
+        out.push_str(
+            "- `restart_check` (boolean) — before the client re-sends, in answer to a server \
+             message, what its first answer sent (from its first action on, word for word), \
+             ask the model once whether its instruction calls for that; the repeat is dropped, \
+             and whatever followed it sent, unless the instruction and the message share a \
+             trigger word. On by default. Set false for a client \
+             whose instruction relies on retries or repeats it decides on by itself (a retry \
+             after an error the instruction does not mention): with it on, those are \
+             dropped.\n",
+        );
         out.push('\n');
 
         let event_types = client.get_event_types();

@@ -365,6 +365,8 @@ async fn update_client_hot_changes_instruction() {
         batching: false,
         exchange_history: Default::default(),
         memo: Default::default(),
+        restart_check: true,
+        restart_opening: None,
     };
     let id = state.add_client(client).await;
 

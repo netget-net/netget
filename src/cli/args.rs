@@ -551,6 +551,16 @@ pub struct Args {
     )]
     pub batching: Option<bool>,
 
+    /// Restart check for --client (`crate::client::restart_check`)
+    #[clap(
+        long = "restart-check",
+        value_name = "on|off",
+        requires = "client_protocol",
+        value_parser = parse_on_off,
+        help = "For --client: before the client re-sends, in answer to a server message, the actions its first answer sent, ask the model whether its instruction calls for that, and drop the repeat unless it names a trigger found in both the instruction and the message. On by default. Turn it off for a client whose instruction relies on retries or repeats the model decides on by itself (a retry after an error the instruction does not mention): with it on, those repeats are dropped."
+    )]
+    pub restart_check: Option<bool>,
+
     /// Record every instance's traffic to pcap files in this directory
     #[clap(
         long = "capture",
@@ -909,6 +919,31 @@ impl Args {
         }
     }
 
+    /// `--restart-check` describes the client `--client` starts; anywhere else nothing reads
+    /// it, and a flag that silently does nothing is worse than a refusal.
+    pub fn validate_restart_check(&self) -> Result<()> {
+        if self.restart_check.is_some() && self.client_protocol.is_none() {
+            anyhow::bail!(
+                "--restart-check applies to the client --client starts; a server has no \
+                 opening to check, and a client started any other way takes restart_check \
+                 from start_client or open_client"
+            );
+        }
+        Ok(())
+    }
+
+    /// What `--history`, `--batching` and `--restart-check` ask of the client `--client`
+    /// starts; `None` keeps each default.
+    pub fn client_conversation_overrides(
+        &self,
+    ) -> crate::protocol::metadata::ConversationOverrides {
+        crate::protocol::metadata::ConversationOverrides {
+            history: self.history,
+            batching: self.batching,
+            restart_check: self.restart_check,
+        }
+    }
+
     /// Parse `--client-handlers` into a list of event handler definitions
     pub fn parse_client_handlers(&self) -> Result<Option<Vec<serde_json::Value>>> {
         match &self.client_handlers {
@@ -960,6 +995,15 @@ impl Args {
                 .llm_max_queued
                 .unwrap_or(crate::llm::DEFAULT_MAX_QUEUED),
         }
+    }
+}
+
+/// `on` / `off` (or `true` / `false`), case-insensitively.
+fn parse_on_off(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        _ => Err(format!("'{}' is not on or off", value)),
     }
 }
 

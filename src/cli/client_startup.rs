@@ -347,6 +347,8 @@ pub async fn start_client_from_action(
         batching,
         exchange_history: Default::default(),
         memo: Default::default(),
+        restart_check: conversation.restart_check.unwrap_or(true),
+        restart_opening: None,
     };
 
     let client_id = state.add_client(client).await;

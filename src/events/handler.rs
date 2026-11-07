@@ -856,7 +856,11 @@ impl EventHandler {
                     event_handlers,
                     scheduled_tasks,
                     feedback_instructions,
-                    crate::protocol::metadata::ConversationOverrides { history, batching },
+                    crate::protocol::metadata::ConversationOverrides {
+                        history,
+                        batching,
+                        restart_check: None,
+                    },
                     crate::capture::CaptureRequest::action(capture),
                     status_tx.clone(),
                 )
@@ -1219,6 +1223,7 @@ impl EventHandler {
                 feedback_instructions,
                 history,
                 batching,
+                restart_check,
                 capture,
             } => {
                 let prepared_tasks = crate::state::task::prepare_tasks(
@@ -1308,8 +1313,11 @@ impl EventHandler {
                 client.startup_params = startup_params.clone();
                 client.feedback_instructions = feedback_instructions;
                 if let Some(protocol_impl) = crate::protocol::CLIENT_REGISTRY.get(&protocol) {
-                    let overrides =
-                        crate::protocol::metadata::ConversationOverrides { history, batching };
+                    let overrides = crate::protocol::metadata::ConversationOverrides {
+                        history,
+                        batching,
+                        restart_check,
+                    };
                     let (history_entries, batching) = overrides
                         .resolve(&protocol_impl.metadata(), &protocol)
                         .map_err(|e| ActionExecutionError::InvalidActionParameters {
@@ -1333,6 +1341,7 @@ impl EventHandler {
                     client.history_entries = history_entries;
                     client.batching = batching;
                 }
+                client.restart_check = restart_check.unwrap_or(true);
 
                 // Add client to state (this allocates the real client ID)
                 let client_id = self.state.add_client(client).await;
@@ -1628,6 +1637,7 @@ impl EventHandler {
                     capture: None,
                     memoize_ttl_secs: None,
                     memoize_across_connections: None,
+                    restart_check: None,
                 };
                 match management::update_client(
                     &self.state,
@@ -2569,7 +2579,11 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
-                            crate::protocol::metadata::ConversationOverrides { history, batching },
+                            crate::protocol::metadata::ConversationOverrides {
+                                history,
+                                batching,
+                                restart_check: None,
+                            },
                             crate::capture::CaptureRequest::action(capture),
                             status_tx,
                         )
@@ -2609,6 +2623,7 @@ impl EventHandler {
                         feedback_instructions,
                         history,
                         batching,
+                        restart_check,
                         capture,
                     } => {
                         // Execute open_client action via client startup
@@ -2624,7 +2639,11 @@ impl EventHandler {
                             event_handlers,
                             scheduled_tasks,
                             feedback_instructions,
-                            crate::protocol::metadata::ConversationOverrides { history, batching },
+                            crate::protocol::metadata::ConversationOverrides {
+                                history,
+                                batching,
+                                restart_check,
+                            },
                             crate::capture::CaptureRequest::action(capture),
                             self.llm.clone(),
                             None, // status_tx: /load path, drain to tracing

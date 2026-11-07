@@ -137,6 +137,13 @@ pub struct ClientForm {
     /// [`ServerForm::memoize_across_connections`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memoize_across_connections: Option<bool>,
+    /// Ask the model before re-sending, in answer to an event, the actions the client opened
+    /// its session with (`crate::client::restart_check`). Omitted keeps it on (the default) on
+    /// create and unchanged on update. Applied in place. Set `false` for a client whose
+    /// instruction relies on retries or repeats the model decides on by itself: with it on, a
+    /// repeat the instruction names no trigger for is dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_check: Option<bool>,
 }
 
 /// Outcome of an update: which instance it now is, and whether applying it
@@ -286,6 +293,7 @@ impl ServerForm {
             crate::protocol::metadata::ConversationOverrides {
                 history: self.history,
                 batching: self.batching,
+                restart_check: None,
             },
             crate::capture::CaptureRequest {
                 spec: self.capture,
@@ -363,6 +371,7 @@ impl ClientForm {
             crate::protocol::metadata::ConversationOverrides {
                 history: self.history,
                 batching: self.batching,
+                restart_check: self.restart_check,
             },
             crate::capture::CaptureRequest {
                 spec: self.capture,
@@ -525,6 +534,7 @@ pub async fn update_server(
     let (history_entries, batching) = crate::protocol::metadata::ConversationOverrides {
         history: form.history.or(Some(current.history_entries)),
         batching: form.batching.or(Some(current.batching)),
+        restart_check: None,
     }
     .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
     let memo_change = crate::llm::answer_reuse::resolve_memo_settings(
@@ -610,6 +620,7 @@ pub async fn update_server(
             crate::protocol::metadata::ConversationOverrides {
                 history: Some(history_entries),
                 batching: Some(batching),
+                restart_check: None,
             },
             crate::capture::CaptureRequest::operator(form.capture.clone()),
             status_tx.clone(),
@@ -796,6 +807,7 @@ pub async fn update_client(
     let (history_entries, batching) = crate::protocol::metadata::ConversationOverrides {
         history: form.history.or(Some(current.history_entries)),
         batching: form.batching.or(Some(current.batching)),
+        restart_check: None,
     }
     .resolve(&protocol_impl.metadata(), &current.protocol_name)?;
     let memo_change = crate::llm::answer_reuse::resolve_memo_settings(
@@ -867,6 +879,7 @@ pub async fn update_client(
             crate::protocol::metadata::ConversationOverrides {
                 history: Some(history_entries),
                 batching: Some(batching),
+                restart_check: Some(form.restart_check.unwrap_or(current.restart_check)),
             },
             crate::capture::CaptureRequest::operator(form.capture.clone()),
             llm_client,
@@ -955,6 +968,10 @@ pub async fn update_client(
     if let Some(memo) = memo_change {
         state.set_client_memo(client_id, memo).await;
         changed.push("memoize");
+    }
+    if let Some(on) = form.restart_check {
+        state.set_client_restart_check(client_id, on).await;
+        changed.push("restart_check");
     }
     if let Some(tasks) = form.scheduled_tasks {
         let n = tasks.len();

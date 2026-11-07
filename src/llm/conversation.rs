@@ -921,9 +921,19 @@ impl ConversationHandler {
                 .map(&resolve_refs)
                 .collect();
 
+            // An offered action named by a bare string (`["skip_repeat"]` for
+            // `[{"type": "skip_repeat"}]`) is that action with no fields: small models write
+            // parameterless actions this way, and refusing it cost both retries and the event.
+            // Only an exact offered name is read so; any other string is still refused below.
             let actions_with_refs: Vec<_> = action_response
                 .actions
                 .into_iter()
+                .map(|action| match action {
+                    serde_json::Value::String(name) if valid_action_names.contains(&name) => {
+                        serde_json::json!({ "type": name })
+                    }
+                    other => other,
+                })
                 .map(&resolve_refs)
                 .collect();
 
