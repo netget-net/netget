@@ -1,0 +1,216 @@
+q2p cmd_only
+q2p text_only
+q2p ev_only
+q2p alt1_full
+q2p alt2_full
+q1p alt1_full
+q1p alt2_full
+seed   1 other_answer [{"type": "send_command", "command": "2"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 other_answer [{"type": "send_command", "command": "2"}]
+seed   6 says4        [{"type": "send_command", "command": "42"}]
+seed   7 other_answer [{"type": "send_command", "command": "2"}]
+seed   8 says4        [{"type": "send_command", "command": "4"}]
+seed   9 says4        [{"type": "send_command", "command": "4"}]
+seed  10 other_answer [{"type": "send_command", "command": "2"}]
+seed  11 no_send      []
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 other_answer [{"type": "send_command", "command": "correct"}]
+seed  14 other_answer [{"type": "send_command", "command": "2"}]
+seed  15 says4        [{"type": "send_command", "command": "4"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 no_send      []
+seed  19 other_answer [{"type": "send_command", "command": "2"}]
+seed  20 says4        [{"type": "send_command", "command": "42"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2p_cmd_only.py {'says4': 5, 'other_answer': 13, 'no_send': 2, 'TEXT': 0}
+seed   1 says4        [{"type": "send_command", "command": "4"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2+2"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 says4        [{"type": "send_command", "command": "answer"}, {"type": "send_command", "command": "4"}]
+seed   6 other_answer [{"type": "send_command", "command": "2"}]
+seed   7 says4        [{"type": "send_command", "command": "answer is 4"}]
+seed   8 other_answer [{"type": "send_command", "command": "2"}]
+seed   9 other_answer [{"type": "send_command", "command": "2 + 2"}]
+seed  10 other_answer [{"type": "send_command", "command": "2+2"}]
+seed  11 other_answer [{"type": "send_command", "command": "2+2"}]
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 other_answer [{"type": "send_command", "command": "correct"}]
+seed  14 other_answer [{"type": "send_command", "command": "2"}]
+seed  15 says4        [{"type": "send_command", "command": "4"}]
+seed  16 other_answer [{"type": "send_command", "command": "2+2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 other_answer [{"type": "send_command", "command": "2"}]
+seed  19 other_answer [{"type": "send_command", "command": "Correct. I know this one!\r\n"}]
+seed  20 other_answer [{"type": "send_command", "command": "what is the answer to question 2?"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2p_text_only.py {'says4': 4, 'other_answer': 16, 'no_send': 0, 'TEXT': 0}
+seed   1 other_answer [{"type": "send_command", "command": "2"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 other_answer [{"type": "send_command", "command": "What is 2 plus 2?"}]
+seed   6 other_answer [{"type": "send_command", "command": "2"}]
+seed   7 other_answer [{"type": "send_command", "command": "What is the answer to question 2?"}]
+seed   8 other_answer [{"type": "send_command", "command": "2"}]
+seed   9 other_answer [{"type": "send_command", "command": "2"}]
+seed  10 other_answer [{"type": "send_command", "command": "2"}]
+seed  11 other_answer [{"type": "send_command", "command": "2"}]
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 other_answer [{"type": "send_command", "command": "Paris"}]
+seed  14 other_answer [{"type": "send_command", "command": "answer 2"}]
+seed  15 other_answer [{"type": "send_command", "command": "your turn"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 other_answer [{"type": "send_command", "command": "what is the answer to question 2?"}]
+seed  19 other_answer [{"type": "send_command", "command": "answer"}]
+seed  20 says4        [{"type": "send_command", "command": "4"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2p_ev_only.py {'says4': 1, 'other_answer': 19, 'no_send': 0, 'TEXT': 0}
+seed   1 says4        [{"type": "send_command", "command": "4"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 says4        [{"type": "send_command", "command": "4"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 other_answer [{"type": "send_command", "command": "2"}]
+seed   6 other_answer [{"type": "send_command", "command": "2"}]
+seed   7 other_answer [{"type": "send_command", "command": "2"}]
+seed   8 other_answer [{"type": "send_command", "command": "2"}]
+seed   9 says4        [{"type": "send_command", "command": "42"}]
+seed  10 other_answer [{"type": "send_command", "command": "3"}]
+seed  11 other_answer [{"type": "send_command", "command": "hello"}]
+seed  12 says4        [{"type": "send_command", "command": "42"}]
+seed  13 other_answer [{"type": "send_command", "command": "2"}]
+seed  14 other_answer [{"type": "send_command", "command": "2"}]
+seed  15 says4        [{"type": "send_command", "command": "answer 4"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 other_answer [{"type": "send_command", "command": "2"}]
+seed  19 other_answer [{"type": "send_command", "command": "3"}]
+seed  20 says4        [{"type": "send_command", "command": "42"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2p_alt1_full.py {'says4': 6, 'other_answer': 14, 'no_send': 0, 'TEXT': 0}
+seed   1 other_answer [{"type": "send_command", "command": "hello"}, {"type": "send_command", "command": "Correct. 2"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2"}]
+seed   4 says4        [{"type": "send_command", "command": "42"}]
+seed   5 says4        [{"type": "send_command", "command": "42"}]
+seed   6 says4        [{"type": "send_command", "command": "4"}]
+seed   7 other_answer [{"type": "send_command", "command": "2"}]
+seed   8 says4        [{"type": "send_command", "command": "42"}]
+seed   9 other_answer [{"type": "send_command", "command": "2"}]
+seed  10 other_answer [{"type": "send_command", "command": "2"}]
+seed  11 says4        [{"type": "send_command", "command": "4"}]
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 other_answer [{"type": "send_command", "command": "Correct. Question 2: what is 2 plus 2?"}]
+seed  14 other_answer [{"type": "send_command", "command": "What is the answer to question 2?"}]
+seed  15 other_answer [{"type": "send_command", "command": "your turn"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 says4        [{"type": "send_command", "command": "42"}]
+seed  19 other_answer [{"type": "send_command", "command": "2"}]
+seed  20 other_answer [{"type": "send_command", "command": "2"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2p_alt2_full.py {'says4': 6, 'other_answer': 14, 'no_send': 0, 'TEXT': 0}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 other []
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 other []
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 other []
+seed  27 LINE  
+seed  28 LINE  
+seed  29 other []
+seed  30 LINE  
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/q1p_alt1_full.py {'LINE': 26, 'TEXT': 0, 'other': 4}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/q1p_alt1_full.py {'LINE': 20, 'TEXT': 0, 'other': 0}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 other [{"type": "command", "text": "Paris"}]
+seed  13 LINE  
+seed  14 LINE  
+seed  15 other []
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 other [{"type": "command", "command": "Paris"}]
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 other [{"type": "command", "command": "Paris"}]
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 other [{"command": "Paris"}]
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/q1p_alt2_full.py {'LINE': 25, 'TEXT': 0, 'other': 5}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/q1p_alt2_full.py {'LINE': 20, 'TEXT': 0, 'other': 0}

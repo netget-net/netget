@@ -29,7 +29,7 @@ servers, send commands, handle option negotiations, and interpret server respons
          │   - Handle option negotiation automatically
          │   - Extract actual text data
          │   - Call LLM with data_received event
-         │   - Execute actions (send_command, send_text)
+         │   - Execute actions through execute_action (send_command, send_text)
          │   - Strictly sequential: the LLM call happens inline
          │
          └─► Write Half (Arc<Mutex<WriteHalf>>)
@@ -88,8 +88,24 @@ is what the queue was pretending to do.
 
 ### LLM Control
 
-**Actions** — `send_command` (newline appended), `send_text` (exact bytes, no
-newline), `wait_for_more` (say nothing, read again), `disconnect`.
+**Actions** — `send_command` (one line: the text, then CRLF), `send_text` (the text
+with no line ending), `wait_for_more` (say nothing, read again), `disconnect`.
+
+**A line is the default answer, and the descriptions are what make it so.** Telnet servers
+read lines: an answer without its CRLF is never seen. `send_command` is described as "the
+normal way to answer anything the server says", and `send_text` as having NO line ending
+and being only for a server that reads single keys or waits on the same line, not for
+answering a question or a prompt. `telnet_data_received`'s description is unchanged on
+purpose (below). The wording was chosen by measurement; the names are unchanged, so every
+saved handler, `.netget` file and injected action that names either one means what it
+always did.
+
+`send_command` strips any CR/LF the model put at the end of its line before adding CRLF, so
+`"hello\r\n"` is one line, not a line and an empty one. `send_text` sends its text exactly.
+Both are decided in `actions.rs` alone (`line_bytes`, `execute_action`): the connect event's
+answer, every later answer and every injected action run that one executor
+(`TelnetClient::apply_action` in `mod.rs`). `tests/client/telnet/line_ending_test.rs` pins the
+bytes on all three paths from the server's side of the socket.
 
 All four are declared in **both** `get_async_actions` and `get_sync_actions`, and are
 attached to both events. That is not redundancy for its own sake: a client has one LLM
@@ -140,18 +156,24 @@ prompt for nothing.
 
 {
   "type": "send_text",
-  "text": "password"
+  "text": "y"
 }
-// Sends: "password" (no newline)
+// Sends: "y" (no line ending)
 ```
 
 ### Dual Logging
 
+Every line meant for both `netget.log` and the TUI goes through
+`crate::logging::emit::Log`, so the two cannot disagree on its level:
+
 ```rust
-info!("Telnet client {} connected", client_id);           // → netget.log
-status_tx.send("[CLIENT] Telnet client connected");      // → TUI
-debug!("Telnet client {} received WILL ECHO", client_id); // → netget.log
+Log::to(&status_tx).info(format!("Telnet client {} connected to {} (local: {})", …));
+Log::to(status_tx).info(format!("Telnet client {} negotiation: received WILL ECHO", id));
+log.error(format!("Telnet client {} failed to send {} bytes: {}", …)); // a lost line is said out loud
 ```
+
+What the client sends is logged as a byte count at TRACE, never as text: a telnet line is
+as often a password as a command.
 
 ### Connection Lifecycle
 
@@ -193,11 +215,91 @@ The read loop carries a `tokio::select!` arm on a bounded command channel
 (`client/command_support.rs`), registered via
 `AppState::register_client_handle`. `AppState::send_to_client(client_id,
 action, timeout)` executes an action (`send_command`, `send_text`,
-`disconnect`) inside the loop exactly as LLM-produced actions run — this is
+`disconnect`) inside the loop through the same `execute_action` the model's answers use — this is
 what the dashboard's [send] button calls, and it needs no LLM. Each injected
 action is recorded in the access log (owner = client, event
 `injected_action`). On loop exit the handle is dropped so later sends fail
 fast. E2E: `tests/client_handle_test.rs`.
+
+### Which send action a model picks: measured
+
+llama3.1:8b on Ollama, the quiz case of the restart-check measurement (root `AGENTS.md`; the
+harness drives `--load` with a script-handled telnet server, so the server makes no model
+calls, and counts the lines the server received). Each prompt below was captured from a
+master (`539b7ddab`) run through a recording proxy, rewritten per variant and replayed with
+only `options.seed` changed. "Line" is a first send action that ends in CRLF, "text" is
+`send_text`, "other" is an empty answer or none that parses. "Action wording" is the
+`send_command` and `send_text` descriptions as they ship; "event wording" is
+`telnet_data_received` saying "Reply with send_command (one line, the usual answer)".
+
+Question 1 as first asked, line / text / other:
+
+| Prompt | seeds 1–20 | seeds 21–50 |
+|---|---|---|
+| master | 14 / 4 / 2 | 23 / 4 / 3 |
+| **action wording (what ships)** | **18 / 0 / 2** | **27 / 0 / 3** |
+| action and event wording | 19 / 0 / 1 | 26 / 0 / 4 |
+| event wording only | 19 / 0 / 1 | 30 / 0 / 0 |
+| `send_command` renamed `send_line` (`line`), action and event wording | 17 / 0 / 3 | — |
+| one action, `send_line` with `line_ending: "crlf" \| "none"`, event names it | 13 / 0 / 7 | — |
+| one action, `send_command` with `line_ending`, event names it | 17 / 0 / 3 | — |
+| `send_text` not offered, event names only `send_command` | 18 / 0 / 2 | — |
+
+Question 1 after the restart check refused a repeated `hello` and asked again, with the prompt
+saying `send_command {"command":"hello"}` is "not to be sent again" — the turn on which most
+of the real runs' answers were given. Seeds 1–30:
+
+| Prompt | line / text / other |
+|---|---|
+| master | 2 / **22** / 6 |
+| **action wording (what ships)** | **29 / 0 / 1** |
+| action and event wording | 29 / 0 / 1 |
+| event wording only | 17 / 0 / 13 |
+| `send_text` not offered | 16 / 0 / 14 |
+
+Told not to send `send_command` again, the model reads the *action* as spent and reaches for
+the other one, or for nothing when there is no other one. Describing `send_command` as the way
+to send any line is what survives that, which is why the action descriptions changed rather
+than only the event's.
+
+Question 2 ("what is 2 plus 2?"), with question 1 answered `Paris` in the history: answers
+containing 4, seeds 1–40. This prompt is noisy — two edits that should not matter (a
+lower-case "telnet", the `send_text` example) scored 9 and 10 of 20 against master's 10 —
+but the event wording is far outside it:
+
+| Prompt | says 4 |
+|---|---|
+| master | 15 |
+| **action wording (what ships)** | 12 |
+| action wording, event "Reply with send_command, which sends one line," | 9 |
+| action and event wording | **3** |
+| event wording only | 1 of 20 |
+
+So the event description stays as it was ("Reply with send_command or send_text, …"): the
+action wording alone does as well for the line and does not cost the next answer.
+
+The full runs, seeds 42–49, 60 s each, restart check on (`--llm-seed`, `batching: false`):
+
+| Build | Q1 reached the server as a line | `send_text` answers in the run | Q2 answered with a 4 | reached the last question | extra `hello`s | "again" case (exactly 3 PINGs) |
+|---|---|---|---|---|---|---|
+| master `539b7ddab` | 3 of 8 | 5 | 2 of the 3 that got there | 2 of 8 | 4 | 7 of 8 |
+| **action wording (what ships)** | **7 of 8** | **0** | 2 of 7 | 2 of 8 | 0 | 8 of 8 |
+| action and event wording | 8 of 8 | 0 | 0 of 8 | 2 of 8 | 10 | 8 of 8 |
+
+The eighth shipped run answered question 1 with `{"actions": ["send_command", "command":
+"Paris"]}`, which is not JSON, twice; nothing could be executed. Question 2 is where the
+quiz now stops in most runs, with the model answering "2"; with master it stopped at
+question 1 because the answer never became a line. The runs that reached question 2 on
+master had answered question 1 as `answer: Paris`, and that history helps the arithmetic:
+replayed, the same question 2 scores 17 of 20 with it in the history under either wording.
+None of this is the line ending; it is an 8B model doing sums.
+
+`eval-results/2026-11-07-telnet-line-ending/` has the three captured prompts, the scripts
+(`harness.py` drives `--load` with `--llm-seed <seed> --run-for 60`; `replay.py` and
+`replay_q2.py` post a captured `/api/generate` body back to Ollama with `options.seed` set;
+`variants/` rewrites the prompt) and every tally. The scripts were run from
+`/tmp/telnet-line/` and name it. In `tallies/runs-quiz.txt`, `fix` is "action and event
+wording" and `fix2` is what ships.
 
 ## Limitations
 

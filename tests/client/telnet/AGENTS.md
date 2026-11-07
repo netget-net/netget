@@ -88,6 +88,24 @@ handling.
 - Connection remains stable after negotiation
 - No manual LLM intervention needed for negotiation
 
+### 4. Wire bytes (`line_ending_test.rs`)
+
+**Purpose**: pin exactly what each action puts on the wire, read from the server's side.
+
+In-process: a local `TcpListener` is the server, `MockOllamaServer` the model, and the client
+is created with `ClientForm` (batching and the restart check off, so each event is one call).
+
+- `telnet_connected` answered with `send_command` `"hello\r\n"` → exactly `hello\r\n` (a line
+  ending the model wrote is not doubled);
+- a question answered with `send_command` `"Paris"` → exactly `Paris\r\n`;
+- `Press a key: ` answered with `send_text` `"y"` → exactly `y`;
+- `send_to_client` with `send_command` / `send_text` → `status\r\n` / `no newline`;
+- the question's prompt describes `send_command` as the way to answer and says `send_text`
+  is not for answers.
+
+Each read takes the expected bytes and then waits 400 ms for anything more, so an extra CRLF
+fails rather than sitting unread. 3 model calls, about 3 s.
+
 ## Known Issues
 
 ### Test Flakiness
@@ -102,9 +120,10 @@ handling.
 
 ### LLM Variability
 
-- **Command Format**: LLM might send commands in unexpected format
-    - Handled by flexible action parsing
-    - `send_command` vs `send_text` actions
+- **Command Format**: a model can pick `send_text` (no line ending) where a line was meant,
+  and a line-based server then never sees the answer. The action descriptions steer it to
+  `send_command`; `src/client/telnet/AGENTS.md` has the measurement. A mocked suite cannot
+  show this either way — it is a property of the model and the prompt.
 
 - **Option Response**: LLM shouldn't need to handle negotiation
     - Automatic negotiation in client implementation

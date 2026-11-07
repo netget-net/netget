@@ -1,0 +1,93 @@
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  25 other []
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 other [{"type": "wait_for_more"}]
+seed  30 LINE  
+seed  31 LINE  
+seed  32 LINE  
+seed  33 LINE  
+seed  34 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  35 LINE  
+seed  36 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  37 LINE  
+seed  38 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  39 other []
+seed  40 LINE  
+seed  41 LINE  
+seed  42 LINE  
+seed  43 LINE  
+seed  44 LINE  
+seed  45 LINE  
+seed  46 LINE  
+seed  47 LINE  
+seed  48 LINE  
+seed  49 LINE  
+seed  50 LINE  
+TALLY 00002-api_generate.req.json - {'LINE': 23, 'TEXT': 4, 'other': 3}
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+seed  31 LINE  
+seed  32 LINE  
+seed  33 LINE  
+seed  34 LINE  
+seed  35 LINE  
+seed  36 LINE  
+seed  37 LINE  
+seed  38 LINE  
+seed  39 LINE  
+seed  40 LINE  
+seed  41 LINE  
+seed  42 LINE  
+seed  43 LINE  
+seed  44 LINE  
+seed  45 LINE  
+seed  46 LINE  
+seed  47 LINE  
+seed  48 LINE  
+seed  49 LINE  
+seed  50 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/v_B2_event.py {'LINE': 30, 'TEXT': 0, 'other': 0}
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 other []
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+seed  31 LINE  
+seed  32 LINE  
+seed  33 other []
+seed  34 LINE  
+seed  35 LINE  
+seed  36 LINE  
+seed  37 LINE  
+seed  38 LINE  
+seed  39 other []
+seed  40 other []
+seed  41 LINE  
+seed  42 LINE  
+seed  43 LINE  
+seed  44 LINE  
+seed  45 LINE  
+seed  46 LINE  
+seed  47 LINE  
+seed  48 LINE  
+seed  49 LINE  
+seed  50 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/v_B_wording.py {'LINE': 26, 'TEXT': 0, 'other': 4}
