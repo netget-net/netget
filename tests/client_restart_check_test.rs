@@ -117,6 +117,19 @@ fn answer(req: BridgeRequest, actions: serde_json::Value) {
         .expect("the client is waiting");
 }
 
+/// The request that asks again after a refused restart left nothing to send: the same event,
+/// with the instruction saying which steps are done.
+async fn asked_again(rx: &mut UnboundedReceiver<BridgeRequest>, done: &str) -> BridgeRequest {
+    let again = next_request(rx).await;
+    assert_eq!(event_of(&again), "redis_response_received");
+    let prompt = prompt_of(&again);
+    assert!(
+        prompt.contains("not to be sent again") && prompt.contains(done),
+        "asked again, told {done} is done:\n{prompt}"
+    );
+    again
+}
+
 fn cmd(command: &str) -> serde_json::Value {
     json!({"type": "execute_redis_command", "command": command})
 }
@@ -232,6 +245,11 @@ async fn an_answer_that_starts_the_script_over_is_asked_about_and_not_sent() {
     assert_eq!(offered, vec![SKIP_REPEAT, SEND_AGAIN], "{offered:?}");
     answer(check, json!([{"type": SKIP_REPEAT}]));
 
+    // The whole answer was the restart, so the model has not answered PONG yet: asked once
+    // more, told which steps are done. Nothing is left, so it answers with nothing.
+    let again = asked_again(&mut s.rx, "GET mykey").await;
+    answer(again, json!([]));
+
     // The reply to GET is the next model request — no second PING went out to provoke one.
     let reply = next_request(&mut s.rx).await;
     assert_eq!(event_of(&reply), "redis_response_received");
@@ -257,9 +275,17 @@ async fn an_answer_that_starts_the_script_over_is_asked_about_and_not_sent() {
     );
     // Answered the way llama3.1:8b answers it: the action as a bare string.
     answer(check, json!([SKIP_REPEAT]));
+    // Asked again, the model restarts once more and then does something new: the restart is
+    // dropped unasked, the new step is sent. This is what keeps a conversation going.
+    let again = asked_again(&mut s.rx, "PING").await;
+    answer(again, json!([cmd("PING"), cmd("GET next")]));
+    s.wait_for_commands(3).await;
+    let reply = next_request(&mut s.rx).await;
+    assert_eq!(event_of(&reply), "redis_response_received");
+    answer(reply, json!([]));
 
     assert!(no_request_within(&mut s.rx, Duration::from_millis(500)).await);
-    assert_eq!(s.commands(), vec!["PING", "GET mykey"]);
+    assert_eq!(s.commands(), vec!["PING", "GET mykey", "GET next"]);
     s.finish().await;
 }
 
@@ -361,6 +387,8 @@ async fn a_new_instruction_is_a_new_opening() {
     let check = next_request(&mut s.rx).await;
     assert_eq!(event_of(&check), RESTART_CHECK_EVENT);
     answer(check, json!([{"type": SKIP_REPEAT}]));
+    let again = asked_again(&mut s.rx, "PING").await;
+    answer(again, json!([]));
     assert!(no_request_within(&mut s.rx, Duration::from_millis(500)).await);
     assert_eq!(s.commands(), vec!["PING", "PING"]);
     s.finish().await;
@@ -378,6 +406,8 @@ async fn send_again_with_a_trigger_the_message_does_not_carry_is_not_sent() {
     let check = next_request(&mut s.rx).await;
     assert_eq!(event_of(&check), RESTART_CHECK_EVENT);
     answer(check, json!([{"type": SEND_AGAIN, "trigger": "PING"}]));
+    let again = asked_again(&mut s.rx, "GET mykey").await;
+    answer(again, json!([]));
     let reply = next_request(&mut s.rx).await;
     assert_eq!(event_of(&reply), "redis_response_received");
     answer(reply, json!([]));

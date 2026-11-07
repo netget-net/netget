@@ -26,7 +26,11 @@
 //!   it was. A yes/no question alone was measured not to be enough — llama3.1:8b said "send
 //!   again" to a PONG after "Send PING, then GET mykey, then stop".
 //! - [`SKIP_REPEAT`], or a [`SEND_AGAIN`] whose trigger is not in both, drops the repeated
-//!   actions and sends whatever followed them in the answer.
+//!   actions and sends whatever followed them in the answer. When nothing follows them — the
+//!   whole answer was the restart — the model is asked once more for the same event, told
+//!   which steps are done ([`continue_instruction`]), and its answer is sent with any restart
+//!   at its front dropped unasked. That is what keeps a conversation going: the model has not
+//!   answered the message yet, it has only repeated itself.
 //! - Anything else — the question failing, an unreadable answer, the budget spent — sends the
 //!   answer as it was: a check that cannot be asked changes nothing.
 //!
@@ -170,8 +174,60 @@ fn describe(action: &Value) -> String {
     }
 }
 
+/// What [`check_answer`] decided.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Checked {
+    /// The actions to send.
+    pub actions: Vec<Value>,
+    /// The repeated steps, described, when the repeat was dropped; `None` when the answer
+    /// stands as the model wrote it.
+    pub refused: Option<String>,
+}
+
+impl Checked {
+    fn stands(actions: Vec<Value>) -> Self {
+        Self {
+            actions,
+            refused: None,
+        }
+    }
+
+    /// Whether the repeat was dropped and nothing that sends anything is left: the model's
+    /// whole answer was the restart, so it has not yet answered the message at all.
+    pub fn left_nothing(&self) -> bool {
+        self.refused.is_some() && opening_of(&self.actions).is_none()
+    }
+}
+
+/// The instruction for asking again, once, after a refused restart left nothing to send.
+///
+/// Without it a conversation stalls: measured with llama3.1:8b, a telnet client told to say
+/// hello and then answer each question answered the first question with "hello" again; with
+/// the repeat dropped and nothing else in the answer, the client said nothing and the server
+/// waited for an answer that never came.
+pub fn continue_instruction(instruction: &str, refused: &str) -> String {
+    format!(
+        "{instruction}\n\nAlready done earlier in this session, and not to be sent again: \
+         {refused}. Answer the latest message with what your instruction calls for next; if \
+         nothing is left to do, answer with no actions."
+    )
+}
+
+/// `actions` without a restart at its front, decided without asking: for the answer to
+/// [`continue_instruction`], where the model has already been told those steps are done.
+pub async fn strip_restart(
+    state: &AppState,
+    client_id: ClientId,
+    actions: Vec<Value>,
+) -> Vec<Value> {
+    match state.client_restart_opening(client_id).await {
+        Some(opening) => without_repeated(repeated_opening_len(&opening, &actions), actions),
+        None => actions,
+    }
+}
+
 /// Check `answer`, the model's answer to `event`, against the client's opening, asking the
-/// model when it starts the instruction over. Returns the actions to send.
+/// model when it starts the instruction over.
 #[allow(clippy::too_many_arguments)]
 pub async fn check_answer(
     llm_client: &OllamaClient,
@@ -183,13 +239,13 @@ pub async fn check_answer(
     answer: Vec<Value>,
     private_payloads: bool,
     status_tx: &mpsc::UnboundedSender<String>,
-) -> Vec<Value> {
+) -> Checked {
     let Some(opening) = state.client_restart_opening(client_id).await else {
-        return answer;
+        return Checked::stands(answer);
     };
     let n = repeated_opening_len(&opening, &answer);
     if n == 0 {
-        return answer;
+        return Checked::stands(answer);
     }
     let repeated = opening[..n]
         .iter()
@@ -206,7 +262,7 @@ pub async fn check_answer(
             event.id(),
             msg
         ));
-        return answer;
+        return Checked::stands(answer);
     }
     match ask(
         llm_client,
@@ -234,7 +290,7 @@ pub async fn check_answer(
                     trigger.as_str()
                 }
             ));
-            answer
+            Checked::stands(answer)
         }
         Ok(Verdict::Unfounded(trigger)) => {
             log.info(format!(
@@ -250,7 +306,10 @@ pub async fn check_answer(
                     trigger.as_str()
                 }
             ));
-            without_repeated(n, answer)
+            Checked {
+                actions: without_repeated(n, answer),
+                refused: Some(repeated),
+            }
         }
         Ok(Verdict::Done) => {
             log.info(format!(
@@ -260,7 +319,10 @@ pub async fn check_answer(
                 event.id(),
                 if private_payloads { "…" } else { &repeated }
             ));
-            without_repeated(n, answer)
+            Checked {
+                actions: without_repeated(n, answer),
+                refused: Some(repeated),
+            }
         }
         Err(e) => {
             let e = if private_payloads {
@@ -275,7 +337,7 @@ pub async fn check_answer(
                 event.id(),
                 e
             ));
-            answer
+            Checked::stands(answer)
         }
     }
 }

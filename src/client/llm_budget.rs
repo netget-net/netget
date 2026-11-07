@@ -418,7 +418,7 @@ async fn call_llm_for_client_inner(
     // the access log, so history records what was actually done.
     if let Some(cid) = ClientId::from_string(&client_id) {
         if let Some(ev) = event {
-            result.actions = crate::client::restart_check::check_answer(
+            let checked = crate::client::restart_check::check_answer(
                 llm_client,
                 state,
                 cid,
@@ -430,6 +430,51 @@ async fn call_llm_for_client_inner(
                 status_tx,
             )
             .await;
+            result.actions = match &checked.refused {
+                // The whole answer was the restart: ask once more, saying what is done.
+                Some(refused) if checked.left_nothing() => {
+                    match state.try_consume_client_llm_call(cid).await {
+                        Ok(_) => match crate::llm::action_helper::call_llm_for_client_with_earlier(
+                            llm_client,
+                            state,
+                            client_id.clone(),
+                            &crate::client::restart_check::continue_instruction(
+                                instruction,
+                                refused,
+                            ),
+                            memory,
+                            event,
+                            earlier,
+                            protocol,
+                            status_tx,
+                        )
+                        .await
+                        {
+                            Ok(next) => {
+                                crate::client::restart_check::strip_restart(
+                                    state,
+                                    cid,
+                                    next.actions,
+                                )
+                                .await
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Client {} was asked again after a refused restart and the \
+                                     call failed; sending nothing: {}",
+                                    client_id, e
+                                );
+                                checked.actions
+                            }
+                        },
+                        Err(msg) => {
+                            warn!("{}", msg);
+                            checked.actions
+                        }
+                    }
+                }
+                _ => checked.actions,
+            };
         }
         state.note_client_opening(cid, &result.actions).await;
     }
