@@ -335,6 +335,12 @@ it is answered `MESSAGE_TOO_LARGE`, logged `decision=refused_record_bound`.
   fails, so the declared count is the decoded count. A legacy (magic 0/1) message counts as one
   there, because a compressed legacy wrapper does not say what it holds, and the records that
   come out are counted again after decoding.
+- **A count the batch cannot hold is corrupt, not too large.** A v2 record takes at least 7
+  bytes, so an uncompressed batch holds at most its record bytes over 7, and a compressed one at
+  most what is left of the inflation budget over 7. A batch declaring more is answered
+  `CORRUPT_MESSAGE` (2) by the same screen, before the decoder — which reserves for the declared
+  count — is reached; `declared_array_length_test.rs` sends the 61-byte batch declaring
+  `i32::MAX` records to a running broker and expects exactly that.
 - **Why 100 000.** Kafka has no record-count limit to copy. Real producers stay far under it:
   the Java producer's 16 KiB default `batch.size` holds a few thousand records at most, and
   librdkafka caps a MessageSet at `batch.num.messages` 10 000. The model sees 20 records

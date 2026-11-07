@@ -232,15 +232,25 @@ fn the_record_bound_is_shared_by_every_batch_of_one_request() {
 }
 
 #[test]
-fn a_header_declaring_billions_of_records_is_refused_before_it_is_decoded() {
-    // A 61-byte-header batch whose recordsCount says i32::MAX. The CRC is left wrong on
-    // purpose: the count is read before anything is decoded, so this must be refused as too
-    // many records, never reach the decoder's CRC check, and never reserve for the count.
-    let mut hostile = many(1, Compression::None);
-    hostile[57..61].copy_from_slice(&i32::MAX.to_be_bytes());
-    let mut budget = ProduceBudget::per_request();
-    match decode_record_batches(&hostile, &mut budget) {
-        Err(BatchError::TooManyRecords) => {}
-        other => panic!("a batch declaring i32::MAX records must be TooManyRecords: {other:?}"),
+fn a_header_declaring_more_records_than_its_bytes_hold_is_corrupt_before_it_is_decoded() {
+    // recordsCount says i32::MAX in a batch whose records take 7 bytes, uncompressed and
+    // gzip. The CRC is left wrong on purpose: the count is checked before anything is decoded,
+    // so the refusal must be the screen's own sentence, not the decoder's CRC or EOF error —
+    // and the decoder, which reserves for the count, is never reached.
+    for compression in [Compression::None, Compression::Gzip] {
+        let mut hostile = many(1, compression);
+        hostile[57..61].copy_from_slice(&i32::MAX.to_be_bytes());
+        let mut budget = ProduceBudget::per_request();
+        match decode_record_batches(&hostile, &mut budget) {
+            Err(BatchError::Corrupt(e)) => assert!(
+                e.to_string().contains("more than its"),
+                "{compression:?}: refused by the decoder, not by the count screen: {e:#}"
+            ),
+            other => panic!(
+                "{compression:?}: a batch declaring i32::MAX records must be CORRUPT_MESSAGE: \
+                 {other:?}"
+            ),
+        }
+        assert_eq!(budget, ProduceBudget::per_request(), "{compression:?}");
     }
 }

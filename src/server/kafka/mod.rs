@@ -253,15 +253,26 @@ fn inflate_bounded(
     Ok(std::io::Cursor::new(out))
 }
 
+/// The fewest bytes a v2 record can take: length, attributes, timestamp delta, offset delta,
+/// key length, value length and header count, one varint byte each.
+const MIN_RECORD_BYTES: usize = 7;
+
 /// The records the batches in `raw` declare, read from each batch's header without decoding
 /// it: a v2 batch's `recordsCount` (offset 57), and one per legacy (magic 0/1) message, whose
 /// compressed wrappers say nothing about what they hold. Stops at the first batch whose header
 /// is cut short; the decoder refuses that batch itself.
-fn declared_records(raw: &[u8]) -> u64 {
+///
+/// A v2 batch declaring more records than it could possibly hold is corrupt, and is refused
+/// here rather than handed to the decoder, which would reserve for the count: an uncompressed
+/// batch holds at most its record bytes over [`MIN_RECORD_BYTES`], a compressed one at most
+/// what is left of the inflation budget over the same.
+fn declared_records(raw: &[u8], inflated_left: usize) -> std::result::Result<u64, String> {
     // baseOffset (8) + batchLength (4) precede every batch; the magic byte is at offset 16 in
-    // both formats, and a v2 header is 61 bytes with recordsCount in its last four.
+    // both formats. A v2 header is 61 bytes: attributes at 21..23 (codec in the low three
+    // bits) and recordsCount in its last four.
     const LENGTH_END: usize = 12;
     const MAGIC: usize = 16;
+    const ATTRIBUTES: usize = 21;
     const COUNT: std::ops::Range<usize> = 57..61;
     let mut declared = 0u64;
     let mut at = 0usize;
@@ -272,7 +283,23 @@ fn declared_records(raw: &[u8]) -> u64 {
         let length = i32::from_be_bytes([batch[8], batch[9], batch[10], batch[11]]);
         match batch[MAGIC] {
             2 => match batch.get(COUNT) {
-                Some(c) => declared += i32::from_be_bytes([c[0], c[1], c[2], c[3]]).max(0) as u64,
+                Some(c) => {
+                    let count = i32::from_be_bytes([c[0], c[1], c[2], c[3]]).max(0) as usize;
+                    let uncompressed = batch[ATTRIBUTES + 1] & 0x07 == 0;
+                    let room = if uncompressed {
+                        let end = (LENGTH_END + length.max(0) as usize).min(batch.len());
+                        end.saturating_sub(COUNT.end)
+                    } else {
+                        inflated_left
+                    };
+                    if count > room / MIN_RECORD_BYTES {
+                        return Err(format!(
+                            "a record batch declares {count} records, more than its {room} \
+                             bytes of records can hold"
+                        ));
+                    }
+                    declared += count as u64;
+                }
                 None => break,
             },
             _ => declared += 1,
@@ -282,7 +309,7 @@ fn declared_records(raw: &[u8]) -> u64 {
         }
         at = at.saturating_add(LENGTH_END + length as usize);
     }
-    declared
+    Ok(declared)
 }
 
 /// Decode a Produce partition's record batches as this broker does, charging what compressed
@@ -296,7 +323,9 @@ pub fn decode_record_batches(
 ) -> std::result::Result<Vec<Record>, BatchError> {
     // Refused before anything is copied, inflated or reserved: a v2 batch decodes to exactly
     // the records its header declares, or fails.
-    if declared_records(raw) > budget.records as u64 {
+    let declared = declared_records(raw, budget.inflated_bytes)
+        .map_err(|why| BatchError::Corrupt(anyhow::anyhow!(why)))?;
+    if declared > budget.records as u64 {
         return Err(BatchError::TooManyRecords);
     }
     let left = std::cell::Cell::new(budget.inflated_bytes);

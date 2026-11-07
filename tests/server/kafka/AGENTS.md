@@ -224,5 +224,6 @@ for all four codecs: a bomb at four times the budget, one batch inflating to exa
 request's batches. The same file pins `MAX_PRODUCE_RECORDS` (100 000 records per request,
 MESSAGE_TOO_LARGE past it) uncompressed and gzip: exactly the bound taken, one record more
 refused at no cost to the budget, the bound shared across batches, and a header declaring
-`i32::MAX` records refused before the batch is decoded (its CRC is deliberately wrong). run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
+`i32::MAX` records — more than its bytes can hold — refused as corrupt before the batch is
+decoded (its CRC is deliberately wrong, so only the screen's own error can pass). run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
 RSS 841 MB.
