@@ -32,7 +32,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -150,12 +150,10 @@ impl MercurialServer {
                         let connection_id =
                             ConnectionId::new(app_state.get_next_unified_id().await);
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
-                        info!(
+                        crate::logging::emit::Log::to(&status_tx).info(format!(
                             "Mercurial connection {} from {}",
                             connection_id, remote_addr
-                        );
-                        let _ = status_tx
-                            .send(format!("[INFO] Mercurial connection from {}", remote_addr));
+                        ));
 
                         // Add connection to ServerInstance
                         use crate::state::server::{
@@ -293,10 +291,8 @@ impl MercurialServer {
                                 app_state_clone
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_tx_clone.send(format!(
-                                    "[INFO] Mercurial connection {} closed",
-                                    connection_id
-                                ));
+                                crate::logging::emit::Log::to(&status_tx_clone)
+                                    .info(format!("Mercurial connection {} closed", connection_id));
                                 let _ = status_tx_clone.send("__UPDATE_UI__".to_string());
                             })
                             .await;
@@ -329,10 +325,8 @@ async fn handle_mercurial_request(
     let path = uri.path().to_string();
     let query = uri.query().unwrap_or("").to_string();
 
-    debug!("Mercurial request: {} {}?{}", method, path, query);
-    let _ = ctx
-        .status_tx
-        .send(format!("[DEBUG] Mercurial {} {}?{}", method, path, query));
+    crate::logging::emit::Log::to(&ctx.status_tx)
+        .debug(format!("Mercurial request: {} {}?{}", method, path, query));
 
     // Parse query parameters
     let params: HashMap<String, String> = parse_query_params(&query);

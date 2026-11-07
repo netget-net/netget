@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// PostgreSQL protocol action handler
 pub struct PostgresqlProtocol {
@@ -263,14 +262,8 @@ impl PostgresqlProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'rows' array")?;
 
-        debug!(
-            "PostgreSQL query response: {} columns, {} rows",
-            columns.len(),
-            rows.len()
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] PostgreSQL → Result set: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "PostgreSQL → Result set: {} columns, {} rows",
             columns.len(),
             rows.len()
         ));
@@ -300,15 +293,8 @@ impl PostgresqlProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
 
-        debug!(
-            "PostgreSQL error response: {} {} - {}",
-            severity, code, message
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] PostgreSQL ✗ {} {}: {}",
-            severity, code, message
-        ));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("PostgreSQL ✗ {} {}: {}", severity, code, message));
 
         Ok(ActionResult::Custom {
             name: "postgresql_error".to_string(),
@@ -323,11 +309,7 @@ impl PostgresqlProtocol {
     fn execute_postgresql_ok_response(&self, action: serde_json::Value) -> Result<ActionResult> {
         let tag = action.get("tag").and_then(|v| v.as_str()).unwrap_or("OK");
 
-        debug!("PostgreSQL OK response: {}", tag);
-
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] PostgreSQL → OK: {}", tag));
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!("PostgreSQL → OK: {}", tag));
 
         Ok(ActionResult::Custom {
             name: "postgresql_ok".to_string(),

@@ -530,7 +530,9 @@ fn hg_error_action() -> ActionDefinition {
             Parameter {
                 name: "message".to_string(),
                 type_hint: "string".to_string(),
-                description: "Error message".to_string(),
+                description: "Text the hg client shows the user as the reason, sent as the \
+                              plain-text body of the error response"
+                    .to_string(),
                 required: true,
             },
             Parameter {

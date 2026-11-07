@@ -508,14 +508,8 @@ impl ShellConnection {
                 // The full error goes to the log and the status stream, where an operator
                 // looks. Only its category is allowed anywhere near the socket.
                 let failure = crate::utils::WireFailure::classify(&e);
-                error!(
+                Log::to(&self.status_tx).error(format!(
                     "Reverse-shell event {} decision={} error={}",
-                    event.event_type.id,
-                    FailClosed::LlmError(failure).decision_tag(),
-                    e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[ERROR] Reverse-shell {} decision={}: {}",
                     event.event_type.id,
                     FailClosed::LlmError(failure).decision_tag(),
                     e
