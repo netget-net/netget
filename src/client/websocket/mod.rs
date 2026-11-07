@@ -32,6 +32,7 @@ use crate::client::llm_budget::{call_llm_for_client, call_llm_for_client_batch};
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::websocket::actions::{encode_inbound_payload, WsOut};
 use crate::state::app_state::AppState;
@@ -787,12 +788,9 @@ impl WebSocketClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "WebSocket client {} injected action failed: {}",
                     client_id, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {client_id} injected action failed: {e}"
                 ));
             }
             let _ = status_tx.send("__UPDATE_UI__".to_string());

@@ -43,6 +43,7 @@ use crate::client::radius::wire::{
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::radius::packet::{
     attribute_info, attribute_value_json, code_name, Attribute, RadiusPacket,
@@ -693,10 +694,8 @@ async fn run_turns(
                         Ok(Applied::Disconnect) => return,
                         Ok(_) => {}
                         Err(e) => {
-                            error!("RADIUS client {client_id} action failed: {e}");
-                            let _ = status_tx.send(format!(
-                                "[ERROR] RADIUS client {client_id} action failed: {e}"
-                            ));
+                            Log::to(&status_tx)
+                                .error(format!("RADIUS client {client_id} action failed: {e}"));
                         }
                     }
                 }

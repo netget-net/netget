@@ -82,8 +82,8 @@ impl TcpClient {
         // negotiated is read off the socket, not assumed from the parameter.
         let mptcp = multipath.then(|| {
             crate::utils::mptcp::is_mptcp(&stream).unwrap_or_else(|e| {
-                let _ = status_tx.send(format!(
-                    "[WARN] TCP client {client_id}: could not tell whether MPTCP was \
+                crate::logging::emit::Log::to(&status_tx).warn(format!(
+                    "TCP client {client_id}: could not tell whether MPTCP was \
                      negotiated ({e}); reporting plain TCP"
                 ));
                 false

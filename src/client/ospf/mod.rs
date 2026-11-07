@@ -26,6 +26,7 @@ use crate::client::ospf::actions::{
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::{Event, StartupParams};
 use crate::server::socket_helpers::create_ospf_raw_socket;
 use crate::state::app_state::AppState;
@@ -432,9 +433,8 @@ impl OspfClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("OSPF client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "OSPF client {} injected action failed: {}",
                     client_id, e
                 ));
             }
