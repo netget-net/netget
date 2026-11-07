@@ -139,7 +139,9 @@ pub struct ClientForm {
     pub memoize_across_connections: Option<bool>,
     /// Ask the model before re-sending, in answer to an event, the actions the client opened
     /// its session with (`crate::client::restart_check`). Omitted keeps it on (the default) on
-    /// create and unchanged on update. Applied in place.
+    /// create and unchanged on update. Applied in place. Set `false` for a client whose
+    /// instruction relies on retries or repeats the model decides on by itself: with it on, a
+    /// repeat the instruction names no trigger for is dropped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_check: Option<bool>,
 }

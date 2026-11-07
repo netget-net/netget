@@ -356,7 +356,10 @@ pub struct StartClientParams {
     pub memoize_across_connections: Option<bool>,
     /// Ask the model before re-sending, in answer to a server message, the actions the client
     /// opened its session with — the shape of a model starting its instruction over on every
-    /// reply. On by default; false sends every answer unasked.
+    /// reply — and drop the repeat unless the instruction and the message share a trigger word.
+    /// On by default. Set false for a client whose instruction relies on retries or repeats it
+    /// decides on by itself (a retry after an error the instruction does not mention): with it
+    /// on, those are dropped.
     #[serde(default)]
     pub restart_check: Option<bool>,
     /// Client-scoped scheduled LLM tasks. Same shape as start_server's:
@@ -603,7 +606,10 @@ pub struct UpdateClientParams {
     pub memoize_across_connections: Option<bool>,
     /// Ask the model before re-sending, in answer to a server message, the actions the client
     /// opened its session with — the shape of a model starting its instruction over on every
-    /// reply. On by default; false sends every answer unasked.
+    /// reply — and drop the repeat unless the instruction and the message share a trigger word.
+    /// On by default. Set false for a client whose instruction relies on retries or repeats it
+    /// decides on by itself (a retry after an error the instruction does not mention): with it
+    /// on, those are dropped.
     #[serde(default)]
     pub restart_check: Option<bool>,
     /// Scheduled tasks to add (hot-applied).

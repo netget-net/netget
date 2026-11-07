@@ -469,10 +469,13 @@ pub async fn render_protocol_docs(protocol: &str, state: &AppState) -> Result<St
         );
         out.push_str(
             "- `restart_check` (boolean) — before the client re-sends, in answer to a server \
-             message, every action its first answer sent (in the same order, word for word), \
-             ask the model once whether its instruction calls for that; if not, the repeat is \
-             dropped and whatever followed it is sent. On by default; false sends every answer \
-             unasked.\n",
+             message, what its first answer sent (from its first action on, word for word), \
+             ask the model once whether its instruction calls for that; the repeat is dropped, \
+             and whatever followed it sent, unless the instruction and the message share a \
+             trigger word. On by default. Set false for a client \
+             whose instruction relies on retries or repeats it decides on by itself (a retry \
+             after an error the instruction does not mention): with it on, those are \
+             dropped.\n",
         );
         out.push('\n');
 
