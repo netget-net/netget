@@ -6,12 +6,9 @@
 //! with. Anything that hand-writes a `"[LEVEL]"` string literal to send to the TUI can
 //! drift from its file-log level (that was the whole bug).
 //!
-//! Scope: `src/llm/` only. The ~1245 hand-rolled sites in `src/server/*` / `src/client/*`
-//! are the later per-protocol sweep and are intentionally NOT covered here. Within
-//! `src/llm/` we still tolerate the not-yet-migrated sites via a per-file BASELINE that
-//! records the *current* count — the "allowlist that starts full and shrinks": a file may
-//! only ever have FEWER `[LEVEL]` literals than its baseline, never more. A file with no
-//! entry must have zero. As Step 4 migrates a file to the facade, lower its baseline.
+//! Scope: `src/llm/`, where every site goes through the facade: the baseline is empty, so a
+//! `[LEVEL]` literal in any `src/llm/` file fails. The rest of `src/` is held by
+//! `tests/hand_rolled_dual_logging_ratchet_test.rs`, which parses `.send(...)` calls.
 //!
 //! (A string-literal count, rather than a `.send(...)` parse, is deliberate: it is robust
 //! to multi-line `send(format!(...))` calls and also catches a `[LEVEL]` string built for
@@ -28,12 +25,10 @@ const PREFIXES: [&str; 5] = [
     "\"[TRACE]",
 ];
 
-/// Current, tolerated counts of `[LEVEL]` string literals per `src/llm/` file. These are the
-/// sites not yet migrated to `logging::emit::Log`. They may only ever DECREASE. Any file not
-/// listed must be at zero.
+/// Tolerated counts of `[LEVEL]` string literals per `src/llm/` file (paths relative to
+/// `src/llm/`). Empty: every file must be at zero.
 fn baseline() -> HashMap<&'static str, usize> {
-    // Paths relative to `src/llm/`.
-    HashMap::from([("conversation.rs", 24usize)])
+    HashMap::new()
 }
 
 fn count_prefixes(contents: &str) -> usize {

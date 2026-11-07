@@ -16,9 +16,9 @@
 //! (`TRACE`/`DEBUG`) stay file-only and off the unbounded status channel unless a
 //! caller explicitly opts them in.
 //!
-//! This is the path the per-protocol logging sweep is meant to adopt everywhere;
-//! for now it is used only on the LLM request/response path
-//! (`llm::conversation`, `llm::ollama_client`).
+//! Every server and everything outside the protocol trees logs through it, the
+//! `console_*` macros in `src/logging.rs` included;
+//! `tests/hand_rolled_dual_logging_ratchet_test.rs` holds that.
 //!
 //! Note: because the `tracing` macro fires inside this module, file-log lines
 //! carry `netget::logging::emit` as their target rather than the originating

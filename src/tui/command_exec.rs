@@ -72,6 +72,8 @@ pub async fn execute(
             vec![format!("Backend URL: {}", state.get_ollama_url().await)]
         }
         UserCommand::TestOutput { count } => {
+            // Synthetic lines that exercise the activity feed, not events: they go to the
+            // status channel only, never to netget.log.
             for i in 1..=count {
                 let _ = status_tx.send(format!("[INFO] test output line {i}/{count}"));
             }

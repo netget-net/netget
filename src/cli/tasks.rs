@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::OllamaClient;
+use crate::logging::emit::Log;
 use crate::state::app_state::AppState;
 
 /// Execute all tasks that are due (public wrapper for non-interactive mode)
@@ -121,11 +122,10 @@ async fn execute_single_task(
 
     if let Some(gone) = task_target_gone(&state, &task.scope).await {
         let error = format!("{gone}; the task was removed");
-        let _ = status_tx.send(format!(
-            "[ERROR] Task '{}' cannot run: {}",
+        Log::to(&status_tx).error(format!(
+            "Scheduled task '{}' cannot run: {}",
             task.name, error
         ));
-        tracing::warn!("Scheduled task '{}' cannot run: {}", task.name, error);
         let result = TaskExecutionResult {
             success: false,
             actions: Vec::new(),
@@ -150,8 +150,8 @@ async fn execute_single_task(
         Ok(m) => m,
         Err(e) => {
             let error_msg = format!("Model selection failed: {}", e);
-            let _ = status_tx.send(format!(
-                "[ERROR] Failed to ensure model is selected for task execution: {}",
+            Log::to(&status_tx).error(format!(
+                "Failed to ensure model is selected for task execution: {}",
                 e
             ));
             // Update task status to failed
@@ -220,7 +220,7 @@ async fn execute_single_task(
         Err(e) => {
             // Execution failed
             let error = format!("LLM call failed: {}", e);
-            let _ = status_tx.send(format!("[ERROR] Task '{}' failed: {}", task.name, error));
+            Log::to(&status_tx).error(format!("Task '{}' failed: {}", task.name, error));
 
             let result = TaskExecutionResult {
                 success: false,
@@ -259,11 +259,10 @@ async fn execute_single_task(
         } else {
             "failed"
         };
-        let _ = status_tx.send(format!(
-            "[ERROR] Task '{}' {}: {}",
+        Log::to(&status_tx).error(format!(
+            "Scheduled task '{}' {}: {}",
             task.name, verdict, error
         ));
-        tracing::error!("Scheduled task '{}' {}: {}", task.name, verdict, error);
         let result = TaskExecutionResult {
             success: false,
             actions,
@@ -498,7 +497,7 @@ async fn handle_task_success(
                     state
                         .update_task_status(task.id, TaskStatus::Failed(error.to_string()))
                         .await;
-                    let _ = status_tx.send(format!("[ERROR] Task '{}': {}", task.name, error));
+                    Log::to(status_tx).error(format!("Task '{}': {}", task.name, error));
                     return;
                 }
             };
@@ -536,8 +535,8 @@ async fn handle_task_failure(
             )
             .await;
         state.remove_task(task.id).await;
-        let _ = status_tx.send(format!(
-            "[ERROR] Task '{}' failed {} times, removing from schedule",
+        Log::to(status_tx).error(format!(
+            "Task '{}' failed {} times, removing from schedule",
             task.name, MAX_FAILURES
         ));
     } else {
@@ -558,8 +557,8 @@ async fn handle_task_failure(
             .update_task_status(task.id, TaskStatus::Scheduled)
             .await;
 
-        let _ = status_tx.send(format!(
-            "[WARN] Task '{}' failed (attempt {}/{}), retrying in {} seconds",
+        Log::to(status_tx).warn(format!(
+            "Task '{}' failed (attempt {}/{}), retrying in {} seconds",
             task.name, failure_count, MAX_FAILURES, backoff_secs
         ));
     }

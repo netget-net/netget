@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::events::ActionExecutionError;
 use crate::llm::OllamaClient;
+use crate::logging::emit::Log;
 use crate::state::app_state::AppState;
 use crate::state::ClientId;
 
@@ -74,7 +75,7 @@ pub async fn start_client_by_id(
         Some(Ok(current)) => current,
         Some(Err(error)) => return Err(ActionExecutionError::Fatal(error.into())),
         None => {
-            let _ = status_tx.send(format!("[ERROR] Client #{} not found", client_id.as_u32()));
+            Log::to(status_tx).error(format!("Client #{} not found", client_id.as_u32()));
             return Ok(());
         }
     };
@@ -115,7 +116,7 @@ pub async fn start_client_by_id(
             state
                 .update_client_status(client_id, ClientStatus::Error(msg.clone()))
                 .await;
-            let _ = status_tx.send(format!("[ERROR] {}", msg));
+            Log::to(status_tx).error(&msg);
             let _ = status_tx.send("__UPDATE_UI__".to_string());
             return Err(ActionExecutionError::Fatal(anyhow::anyhow!(msg)));
         }
@@ -138,7 +139,7 @@ pub async fn start_client_by_id(
         state
             .update_client_status(client_id, ClientStatus::Error(msg.clone()))
             .await;
-        let _ = status_tx.send(format!("[ERROR] {}", msg));
+        Log::to(status_tx).error(&msg);
         let _ = status_tx.send("__UPDATE_UI__".to_string());
         return Err(ActionExecutionError::Fatal(anyhow::anyhow!(msg)));
     }
@@ -158,7 +159,7 @@ pub async fn start_client_by_id(
                 state
                     .update_client_status(client_id, ClientStatus::Error(msg.clone()))
                     .await;
-                let _ = status_tx.send(format!("[ERROR] {}", msg));
+                Log::to(status_tx).error(&msg);
                 let _ = status_tx.send("__UPDATE_UI__".to_string());
                 return Err(ActionExecutionError::Fatal(anyhow::anyhow!(msg)));
             }
@@ -198,8 +199,8 @@ pub async fn start_client_by_id(
             state
                 .update_client_status(client_id, ClientStatus::Error(e.to_string()))
                 .await;
-            let _ = status_tx.send(format!(
-                "[ERROR] Failed to connect {} client #{} to {}: {}",
+            Log::to(status_tx).error(format!(
+                "Failed to connect {} client #{} to {}: {}",
                 protocol_name,
                 client_id.as_u32(),
                 remote_addr,
@@ -364,9 +365,7 @@ pub async fn start_client_from_action(
         )
         .await?
     {
-        if let Some(tx) = &status_tx {
-            let _ = tx.send(format!("[INFO] Capturing to {}", path.display()));
-        }
+        Log::new(status_tx.as_ref()).info(format!("Capturing to {}", path.display()));
     }
 
     // Set initial memory if provided
