@@ -55,6 +55,38 @@ fn input_lines() -> tokio::sync::mpsc::Receiver<std::io::Result<String>> {
     receiver
 }
 
+/// One Ctrl+C subscription held for the whole run. `tokio::signal::ctrl_c()`
+/// subscribes only when first polled and unsubscribes when dropped, and Tokio
+/// discards a signal that arrives while nothing is subscribed — its handler is
+/// installed by then, so the default action no longer ends the process either.
+/// A fresh `ctrl_c()` per `select!` would lose any Ctrl+C landing between one
+/// select ending and the next being polled (just after "agent: waiting", say),
+/// and the listener would go on polling. This stream, made once before the first
+/// line is printed, remembers a signal delivered while no `recv` is pending,
+/// including during awaits that select nothing.
+struct Interrupt {
+    #[cfg(unix)]
+    inner: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    inner: tokio::signal::windows::CtrlC,
+}
+
+impl Interrupt {
+    fn new() -> Result<Self> {
+        #[cfg(unix)]
+        let inner = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
+        #[cfg(windows)]
+        let inner = tokio::signal::windows::ctrl_c();
+        Ok(Self {
+            inner: inner.context("cannot listen for Ctrl+C")?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        self.inner.recv().await;
+    }
+}
+
 async fn call(client: &Client, name: &'static str, arguments: Value) -> Result<Value> {
     let timeout = Duration::from_secs(
         match arguments.get("wait_seconds").and_then(Value::as_u64) {
@@ -116,6 +148,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
     if let Some(token) = token {
         config = config.auth_header(token);
     }
+    let mut interrupt = Interrupt::new()?;
     let mut input = input_lines();
     // Retain an unacknowledged answer across session failures. A claim token
     // prevents accidentally answering a new request after a server restart.
@@ -126,7 +159,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
         let transport = StreamableHttpClientTransport::with_client(http.clone(), config.clone());
         let connected = tokio::select! {
             result = serve_client((), transport) => result,
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            _ = interrupt.recv() => return Ok(()),
             line = input.recv() => {
                 if line.is_none() { return Ok(()); }
                 eprintln!("agent: wait for a request before sending an answer");
@@ -142,7 +175,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
                 eprintln!("agent: disconnected; reconnecting in {delay}s");
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(delay)) => {},
-                    _ = tokio::signal::ctrl_c() => return Ok(()),
+                    _ = interrupt.recv() => return Ok(()),
                     line = input.recv() => { if line.is_none() { return Ok(()); } }
                 }
                 delay = (delay * 2).min(10);
@@ -193,7 +226,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
                 eprintln!("agent: waiting");
                 let fetched = tokio::select! {
                     result = call(&client,"get_next_llm_request",json!({"wait_seconds":WAIT_SECONDS,"lease_seconds":60})) => result,
-                    _ = tokio::signal::ctrl_c() => { let _ = client.cancel().await; return Ok(()); }
+                    _ = interrupt.recv() => { let _ = client.cancel().await; return Ok(()); }
                     line = input.recv() => {
                         if line.is_none() { let _ = client.cancel().await; return Ok(()); }
                         eprintln!("agent: wait for a request before sending an answer");
@@ -236,7 +269,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
                     _ = heartbeat.tick() => {
                         let renewed = tokio::select! {
                             result = call(&client,"renew_llm_request",json!({"request_id":request["request_id"],"claim_token":request["claim_token"],"lease_seconds":60})) => result,
-                            _ = tokio::signal::ctrl_c() => {
+                            _ = interrupt.recv() => {
                                 let _ = tokio::time::timeout(Duration::from_secs(3),call(&client,"release_llm_request",json!({"request_id":request["request_id"],"claim_token":request["claim_token"]}))).await;
                                 let _ = client.cancel().await; return Ok(());
                             }
@@ -245,7 +278,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
                         continue;
                     }
                     line = input.recv() => line,
-                    _ = tokio::signal::ctrl_c() => {
+                    _ = interrupt.recv() => {
                         let _ = tokio::time::timeout(Duration::from_secs(3),call(&client,"release_llm_request",json!({"request_id":request["request_id"],"claim_token":request["claim_token"]}))).await;
                         let _ = client.cancel().await; return Ok(());
                     }
@@ -289,7 +322,7 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
             eprintln!("agent: answer submitted; waiting");
             let answered = tokio::select! {
                 result = call(&client,"answer_llm_request",answer) => result,
-                _ = tokio::signal::ctrl_c() => { let _ = client.cancel().await; return Ok(()); }
+                _ = interrupt.recv() => { let _ = client.cancel().await; return Ok(()); }
             };
             match answered {
                 Ok(_) => {
@@ -306,6 +339,6 @@ pub async fn run(endpoint: &str, token: Option<String>) -> Result<()> {
             }
         }
         let _ = client.cancel().await;
-        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(1)) => {}, _ = tokio::signal::ctrl_c() => return Ok(()) }
+        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(1)) => {}, _ = interrupt.recv() => return Ok(()) }
     }
 }

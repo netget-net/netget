@@ -245,3 +245,83 @@ async fn listener_delivers_answers_reconnects_and_exits_on_stdin_eof() {
     drop(client);
     drop(server);
 }
+
+/// Ctrl+C is delivered the instant each listener prints "agent: waiting",
+/// which is the moment one `select!` has ended and the next is not yet polled.
+/// A listener that subscribed to SIGINT per `select!` dropped the signal there
+/// (Tokio discards a signal nobody is subscribed to, and its handler has
+/// replaced the default action) and kept polling; about one listener in three
+/// did so on a quiet machine. Twelve at once make a lucky pass unlikely.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ctrl_c_right_after_waiting_is_never_lost() {
+    const LISTENERS: usize = 12;
+    let (server, port) = control(0);
+    let mut listeners = Vec::new();
+    let (sent_tx, sent_rx) = mpsc::channel();
+    for index in 0..LISTENERS {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_netget"))
+            .args([
+                "--agent-connect",
+                &format!("http://127.0.0.1:{port}/mcp"),
+                "--log-level",
+                "off",
+            ])
+            .env_remove("NETGET_MCP_TOKEN")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child_guard::tie_child(child.id());
+        let pid = child.id() as i32;
+        let stderr = child.stderr.take().unwrap();
+        let sent_tx = sent_tx.clone();
+        // Signal from the reader thread itself, with nothing in between, so the
+        // signal lands as close to the printed line as this process can put it.
+        std::thread::spawn(move || {
+            let mut signalled = false;
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if !signalled && line.contains("agent: waiting") {
+                    signalled = true;
+                    let sent = unsafe { libc::kill(pid, libc::SIGINT) } == 0;
+                    let _ = sent_tx.send((index, sent));
+                }
+            }
+        });
+        // stdin stays open (held beside the process) so only Ctrl+C can end it.
+        let stdin = child.stdin.take().unwrap();
+        listeners.push((Process(child), stdin));
+    }
+    drop(sent_tx);
+    for _ in 0..LISTENERS {
+        let (index, sent) = sent_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("every listener reaches \"agent: waiting\"");
+        assert!(sent, "SIGINT could not be sent to listener {index}");
+    }
+    // Exiting within 5 s means the signal was acted on: the poll a lost signal
+    // leaves it in renews every 5 s and never ends the process by itself.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut lost = Vec::new();
+    for (index, (process, _stdin)) in listeners.iter_mut().enumerate() {
+        let status = loop {
+            if let Some(status) = process.0.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        match status {
+            Some(status) => assert!(status.success(), "listener {index} exited {status}"),
+            None => lost.push(index),
+        }
+    }
+    assert!(
+        lost.is_empty(),
+        "Ctrl+C right after \"agent: waiting\" was lost by listeners {lost:?} of {LISTENERS}"
+    );
+    drop(listeners);
+    drop(server);
+}
