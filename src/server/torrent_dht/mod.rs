@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
@@ -44,14 +44,7 @@ impl TorrentDhtServer {
     ) -> Result<SocketAddr> {
         let socket = Arc::new(UdpSocket::bind(listen_addr).await?);
         let local_addr = socket.local_addr()?;
-        info!(
-            "BitTorrent DHT server (action-based) listening on {}",
-            local_addr
-        );
-        let _ = status_tx.send(format!(
-            "[INFO] BitTorrent DHT server listening on {}",
-            local_addr
-        ));
+        Log::to(&status_tx).info(format!("BitTorrent DHT server listening on {}", local_addr));
 
         let protocol = Arc::new(TorrentDhtProtocol::new());
 
@@ -238,17 +231,12 @@ impl TorrentDhtServer {
                                                     // wire. Staying silent would leave the
                                                     // querying node blocked until its own
                                                     // timeout, so answer with a category.
-                                                    tracing::warn!(
+                                                    Log::to(&status_clone).warn(format!(
                                                         "BitTorrent DHT {} from {} decision=\
-                                                     fail_closed_no_action",
-                                                        query_type,
-                                                        peer_addr
-                                                    );
-                                                    let _ = status_clone.send(format!(
-                                                    "[WARN] BitTorrent DHT {} from {}: no action \
-                                                     from the model, replying KRPC error",
-                                                    query_type, peer_addr
-                                                ));
+                                                         fail_closed_no_action: no action from \
+                                                         the model, replying KRPC error",
+                                                        query_type, peer_addr
+                                                    ));
                                                     Self::send_failure_reply(
                                                         &socket_clone,
                                                         peer_addr,
@@ -264,17 +252,12 @@ impl TorrentDhtServer {
                                                 // stream only — the peer gets a bare BEP 5 error
                                                 // code and a fixed category string.
                                                 let failure = WireFailure::classify(&e);
-                                                error!(
+                                                Log::to(&status_clone).error(format!(
                                                     "BitTorrent DHT {} from {} \
-                                                 decision=fail_closed_llm_error \
-                                                 category={:?}: {}",
+                                                     decision=fail_closed_llm_error \
+                                                     category={:?}: LLM call failed: {}",
                                                     query_type, peer_addr, failure, e
-                                                );
-                                                let _ = status_clone.send(format!(
-                                                "[ERROR] BitTorrent DHT LLM call failed for {} \
-                                                 from {}: {}",
-                                                query_type, peer_addr, e
-                                            ));
+                                                ));
                                                 Self::send_failure_reply(
                                                     &socket_clone,
                                                     peer_addr,
@@ -367,13 +350,9 @@ impl TorrentDhtServer {
 
         match socket.send_to(&encoded, peer_addr).await {
             Ok(sent) => {
-                debug!(
+                Log::to(status_tx).debug(format!(
                     "BitTorrent DHT sent KRPC error {} ({} bytes) to {}",
                     code, sent, peer_addr
-                );
-                let _ = status_tx.send(format!(
-                    "[DEBUG] BitTorrent DHT sent KRPC error {} to {}",
-                    code, peer_addr
                 ));
             }
             Err(e) => {

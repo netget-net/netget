@@ -175,8 +175,8 @@ impl OtlpServer {
                                 app_state_for_close
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_for_close
-                                    .send(format!("[INFO] OTLP connection {connection_id} closed"));
+                                crate::logging::emit::Log::to(&status_for_close)
+                                    .info(format!("OTLP connection {connection_id} closed"));
                                 let _ = status_for_close.send("__UPDATE_UI__".to_string());
                             })
                             .await;
@@ -313,9 +313,7 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
             .and_then(|v: &HeaderValue| v.to_str().ok())
             .map(str::to_string)
     };
-    let _ = ctx
-        .status_tx
-        .send(format!("[DEBUG] OTLP {} {}", parts.method, path));
+    log.debug(format!("OTLP {} {}", parts.method, path));
 
     let Some(signal) = Signal::from_path(&path) else {
         return text(StatusCode::NOT_FOUND, "404 page not found");

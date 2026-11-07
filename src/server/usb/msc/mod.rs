@@ -48,7 +48,7 @@ use std::sync::Arc;
 #[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::{mpsc, Mutex};
 #[cfg(all(unix, feature = "libusb"))]
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[cfg(all(unix, feature = "libusb"))]
 use crate::console_error;
@@ -623,16 +623,11 @@ impl UsbMscServer {
                 // served, so there is nothing for the host to be told and nothing to withdraw;
                 // detach has no wire left. Those log and stop.
                 if what == "attach" && protocol.fail_closed_eject(connection_id) {
-                    let _ = status_tx.send(format!(
-                        "[ERROR] USB MSC device on {connection_id} reports NOT READY / MEDIUM \
-                         NOT PRESENT: the model never said what the drive contains"
+                    crate::logging::emit::Log::to(&status_tx).error(format!(
+                        "USB MSC device on {connection_id} reports NOT READY / MEDIUM NOT \
+                         PRESENT: the model never said what the drive contains; the medium \
+                         stays ejected until a serve_files or mount_disk succeeds"
                     ));
-                    warn!(
-                        "USB MSC connection {} ejected the medium after the attach handler \
-                         failed; the host will see NOT READY / MEDIUM NOT PRESENT until a \
-                         serve_files or mount_disk succeeds",
-                        connection_id
-                    );
                 }
             }
         }

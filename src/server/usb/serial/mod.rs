@@ -30,7 +30,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 #[cfg(all(unix, feature = "libusb"))]
 use tokio::sync::{mpsc, Mutex};
 #[cfg(all(unix, feature = "libusb"))]
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[cfg(all(unix, feature = "libusb"))]
 use crate::{
@@ -348,15 +348,19 @@ impl UsbSerialServer {
                     if overran {
                         // Say so in CDC's own vocabulary rather than silently serving a
                         // truncated prefix to the model and nothing to the host.
-                        warn!(
-                            "USB serial connection {} clamped the host's backlog to {} bytes",
-                            connection_id, MAX_EVENT_BYTES
-                        );
+                        let log = crate::logging::emit::Log::to(&status_tx);
                         if protocol.signal_overrun(connection_id) {
-                            let _ = status_tx.send(format!(
-                                "[ERROR] USB serial port {connection_id} signalled \
-                                 SERIAL_STATE overrun: the host wrote more than \
-                                 {MAX_EVENT_BYTES} bytes while the model was busy"
+                            log.error(format!(
+                                "USB serial port {connection_id} clamped the host's backlog \
+                                 to {MAX_EVENT_BYTES} bytes and signalled SERIAL_STATE \
+                                 overrun: the host wrote more than {MAX_EVENT_BYTES} bytes \
+                                 while the model was busy"
+                            ));
+                        } else {
+                            log.warn(format!(
+                                "USB serial connection {} clamped the host's backlog to {} \
+                                 bytes",
+                                connection_id, MAX_EVENT_BYTES
                             ));
                         }
                     }
@@ -495,15 +499,11 @@ impl UsbSerialServer {
                 // Only `data_received` earns one: attach has had nothing written to it yet, and
                 // by detach the port is gone.
                 if what == "data_received" && protocol.signal_overrun(connection_id) {
-                    let _ = status_tx.send(format!(
-                        "[ERROR] USB serial port {connection_id} signalled SERIAL_STATE overrun: \
-                         the host's data was dropped because the model could not be reached"
+                    crate::logging::emit::Log::to(&status_tx).error(format!(
+                        "USB serial port {connection_id} queued a SERIAL_STATE overrun \
+                         notification after the data_received handler failed: the host's data \
+                         was dropped because the model could not be reached"
                     ));
-                    warn!(
-                        "USB serial connection {} queued a SERIAL_STATE overrun notification \
-                         after the data_received handler failed",
-                        connection_id
-                    );
                 }
             }
         }

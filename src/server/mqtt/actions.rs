@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, RwLock};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 // ============================================================================
 // Live connection directory
@@ -247,10 +247,7 @@ impl MqttProtocol {
     }
 
     fn log(&self, message: String) {
-        debug!("{}", message);
-        if let Some(tx) = &self.status_tx {
-            let _ = tx.send(format!("[DEBUG] {}", message));
-        }
+        crate::logging::emit::Log::new(self.status_tx.as_ref()).debug(message);
     }
 
     fn require_packet_id(action: &serde_json::Value) -> Result<u16> {
@@ -367,10 +364,7 @@ impl MqttProtocol {
                  sent; a connection gets exactly one",
                 self.current_client_id().unwrap_or_else(|| "?".into())
             );
-            warn!("{}", message);
-            if let Some(tx) = &self.status_tx {
-                let _ = tx.send(format!("[WARN] {}", message));
-            }
+            crate::logging::emit::Log::new(self.status_tx.as_ref()).warn(message);
             return Ok(ActionResult::NoAction);
         }
 

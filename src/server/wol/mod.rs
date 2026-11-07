@@ -388,7 +388,7 @@ impl WolServer {
                                 }
 
                                 let decision = Self::decision_tag(&execution_result);
-                                info!(
+                                Log::to(&status_clone).info(format!(
                                     "Wake-on-LAN magic packet for {} from {} decision={} \
                                  ({} action(s), {} failed)",
                                     target_mac,
@@ -396,10 +396,6 @@ impl WolServer {
                                     decision,
                                     execution_result.raw_actions.len(),
                                     execution_result.failures.len()
-                                );
-                                let _ = status_clone.send(format!(
-                                    "[INFO] Wake-on-LAN {} from {} decision={}",
-                                    target_mac, peer_addr, decision
                                 ));
 
                                 Self::process_announcements(

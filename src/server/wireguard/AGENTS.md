@@ -341,7 +341,7 @@ Server output:
 When peer connects, monitoring loop detects it:
 
 ```
-[INFO] New peer: xTIBA5rboUvnH4hto...
+[INFO] New WireGuard peer connected: xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 ```
 
 LLM can authorize with allowed IPs:

@@ -196,9 +196,8 @@ impl PrometheusServer {
                                 app_state_for_close
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_for_close.send(format!(
-                                    "[INFO] Prometheus connection {connection_id} closed"
-                                ));
+                                crate::logging::emit::Log::to(&status_for_close)
+                                    .info(format!("Prometheus connection {connection_id} closed"));
                                 let _ = status_for_close.send("__UPDATE_UI__".to_string());
                             })
                             .await;
@@ -302,10 +301,7 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
         "x-prometheus-scrape-timeout-seconds",
     ));
 
-    debug!("Prometheus {} {}", method, path);
-    let _ = ctx
-        .status_tx
-        .send(format!("[DEBUG] Prometheus {method} {path}"));
+    crate::logging::emit::Log::to(&ctx.status_tx).debug(format!("Prometheus {method} {path}"));
 
     // Bounded, and read before routing so the bound holds on every path. A body over the cap
     // is refused without the model being asked anything.
