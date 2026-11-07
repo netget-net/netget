@@ -1,0 +1,632 @@
+{
+  "schema": "netget.eval.v1",
+  "generated_at": "1794031423",
+  "model": "llama3.1:8b",
+  "runs_per_case": 5,
+  "seed": 42,
+  "temperature": null,
+  "determinism": "pass-rate over N independent runs, run N with sampler seed `seed` + N - 1: a rerun reproduces every run, and the runs of one case are distinct draws rather than N copies of one; agreement is measured (totals.cases_*_agree)",
+  "totals": {
+    "cases_total": 5,
+    "cases_attempted": 5,
+    "cases_skipped": 0,
+    "runs_total": 25,
+    "runs_passed": 25,
+    "pass_rate": 1.0,
+    "runs_recoverable": 0,
+    "pass_rate_with_lenient_parse": 1.0,
+    "cases_with_repeats": 5,
+    "cases_verdicts_agree": 5,
+    "cases_actions_agree": 1
+  },
+  "protocols": [
+    {
+      "protocol": "gearman",
+      "client": "gearman",
+      "independence": "protocol-client",
+      "instructions": 2,
+      "instructions_fully_passed": 2,
+      "runs": 10,
+      "runs_passed": 10,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    },
+    {
+      "protocol": "whois",
+      "client": "nc",
+      "independence": "generic-transport",
+      "instructions": 3,
+      "instructions_fully_passed": 3,
+      "runs": 15,
+      "runs_passed": 15,
+      "pass_rate": 1.0,
+      "dominant_failures": [],
+      "skipped_reason": null,
+      "runs_recoverable": 0
+    }
+  ],
+  "failure_modes": [],
+  "cases": [
+    {
+      "id": "whois/registrar-line",
+      "protocol": "whois",
+      "instruction": "Answer every query with a whois record whose registrar is NETGET-EVAL-REGISTRAR.",
+      "client": "nc -w 235 127.0.0.1 {PORT}",
+      "independence": "generic-transport",
+      "expectation": "contains [\"NETGET-EVAL-REGISTRAR\"]",
+      "note": "macOS whois segfaults with -p; driven with nc.",
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "seed": 42,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:00:55.523056Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet Ltd\"), \"registrant_organization\": String(\"NetGet Ltd\"), \"domain_status\": Array [String(\"ok\")], \"name_servers\": Array [String(\"ns1.netget.example\"), String(\"ns2.netget.example\")], \"extra_fields\": Object {\"Creation Date\": String(\"2022-01-01\"), \"Updated Date\": String(\"2022-01-01\")}}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet Ltd\"), \"registrant_organization\": String(\"NetGet Ltd\"), \"domain_status\": Array [String(\"ok\")], \"name_servers\": Array [String(\"ns1.netget.example\"), String(\"ns2.netget.example\")], \"extra_fields\": Object {\"Creation Date\": String(\"2022-01-01\"), \"Updated Date\": String(\"2022-01-01\")}}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 61687",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: NETGET-EVAL-REGISTRAR\r\nDomain Status: ok\r\nRegistrant Name: NetGet Ltd\r\nRegistrant Organization: NetGet Ltd\r\nCreation Date: 2022-01-01\r\nUpdated Date: 2022-01-01\r\nName Server: ns1.netget.example\r\nName Server: ns2.netget.example\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 29.342409333
+        },
+        {
+          "run": 2,
+          "seed": 43,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:04.712681Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 61799",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: NETGET-EVAL-REGISTRAR\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 8.96773775
+        },
+        {
+          "run": 3,
+          "seed": 44,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:10.979066Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 61822",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: NETGET-EVAL-REGISTRAR\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 6.24674375
+        },
+        {
+          "run": 4,
+          "seed": 45,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:19.875428Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet Example\"), \"registrant_organization\": String(\"Example Inc.\"), \"domain_status\": Array [String(\"ok\")], \"name_servers\": Array [String(\"ns1.example.com\"), String(\"ns2.example.com\")], \"extra_fields\": Object {\"Creation Date\": String(\"2020-01-01\"), \"Expiration Date\": String(\"2025-01-01\")}}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet Example\"), \"registrant_organization\": String(\"Example Inc.\"), \"domain_status\": Array [String(\"ok\")], \"name_servers\": Array [String(\"ns1.example.com\"), String(\"ns2.example.com\")], \"extra_fields\": Object {\"Creation Date\": String(\"2020-01-01\"), \"Expiration Date\": String(\"2025-01-01\")}}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 61848",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: NETGET-EVAL-REGISTRAR\r\nDomain Status: ok\r\nRegistrant Name: NetGet Example\r\nRegistrant Organization: Example Inc.\r\nCreation Date: 2020-01-01\r\nExpiration Date: 2025-01-01\r\nName Server: ns1.example.com\r\nName Server: ns2.example.com\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 8.906304083
+        },
+        {
+          "run": 5,
+          "seed": 46,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:25.853024Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet\"), \"registrant_organization\": String(\"NetGet Inc.\"), \"domain_status\": Array [String(\"ok\")], \"extra_fields\": Object {\"Creation Date\": String(\"2022-01-01\"), \"Expiration Date\": String(\"2025-01-01\")}, \"name_servers\": Array [String(\"ns1.example.com\"), String(\"ns2.example.com\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"NETGET-EVAL-REGISTRAR\"), \"registrant\": String(\"NetGet\"), \"registrant_organization\": String(\"NetGet Inc.\"), \"domain_status\": Array [String(\"ok\")], \"extra_fields\": Object {\"Creation Date\": String(\"2022-01-01\"), \"Expiration Date\": String(\"2025-01-01\")}, \"name_servers\": Array [String(\"ns1.example.com\"), String(\"ns2.example.com\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 61885",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: NETGET-EVAL-REGISTRAR\r\nDomain Status: ok\r\nRegistrant Name: NetGet\r\nRegistrant Organization: NetGet Inc.\r\nCreation Date: 2022-01-01\r\nExpiration Date: 2025-01-01\r\nName Server: ns1.example.com\r\nName Server: ns2.example.com\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 5.981763375
+        }
+      ]
+    },
+    {
+      "id": "whois/registrant-and-status",
+      "protocol": "whois",
+      "instruction": "For netget.example, report the registrant organisation as Example Holdings Ltd and the domain status as clientTransferProhibited.",
+      "client": "nc -w 235 127.0.0.1 {PORT}",
+      "independence": "generic-transport",
+      "expectation": "contains [\"Example Holdings\", \"clientTransferProhibited\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "seed": 42,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:40.918652Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 62343",
+          "client_output": "Domain Name: netget.example\r\nDomain Status: clientTransferProhibited\r\nRegistrant Organization: Example Holdings Ltd\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 15.045599958
+        },
+        {
+          "run": 2,
+          "seed": 43,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:49.535009Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 64345",
+          "client_output": "Domain Name: netget.example\r\nDomain Status: clientTransferProhibited\r\nRegistrant Organization: Example Holdings Ltd\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 8.613588958
+        },
+        {
+          "run": 3,
+          "seed": 44,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:01:56.049337Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"Example Inc.\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"Example Inc.\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 64968",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: Example Inc.\r\nDomain Status: clientTransferProhibited\r\nRegistrant Organization: Example Holdings Ltd\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 6.516815375
+        },
+        {
+          "run": 4,
+          "seed": 45,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:14.805453Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"Example Inc.\"), \"registrant\": String(\"Example Holdings Ltd\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrar\": String(\"Example Inc.\"), \"registrant\": String(\"Example Holdings Ltd\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 49528",
+          "client_output": "Domain Name: netget.example\r\nRegistrar: Example Inc.\r\nDomain Status: clientTransferProhibited\r\nRegistrant Name: Example Holdings Ltd\r\nRegistrant Organization: Example Holdings Ltd\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 18.74987675
+        },
+        {
+          "run": 5,
+          "seed": 46,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:22.598549Z DEBUG Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_whois_record\"), \"domain\": String(\"netget.example\"), \"registrant_organization\": String(\"Example Holdings Ltd\"), \"domain_status\": Array [String(\"clientTransferProhibited\")]}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 50852",
+          "client_output": "Domain Name: netget.example\r\nDomain Status: clientTransferProhibited\r\nRegistrant Organization: Example Holdings Ltd\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 7.79113225
+        }
+      ]
+    },
+    {
+      "id": "whois/no-match",
+      "protocol": "whois",
+      "instruction": "Report that no match was found for any domain ending in .invalid. Answer anything else with an ordinary record.",
+      "client": "nc -w 235 127.0.0.1 {PORT}",
+      "independence": "generic-transport",
+      "expectation": "matches /(?i)no match|not found|no entries|no data found/",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": true,
+      "runs": [
+        {
+          "run": 1,
+          "seed": 42,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:36.007847Z DEBUG Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 51251",
+          "client_output": "Error: No match for \"nothing.invalid\"\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 13.42174475
+        },
+        {
+          "run": 2,
+          "seed": 43,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:45.009751Z DEBUG Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 52229",
+          "client_output": "Error: No match for \"nothing.invalid\"\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 8.988359917
+        },
+        {
+          "run": 3,
+          "seed": 44,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:49.673539Z DEBUG Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 52289",
+          "client_output": "Error: No match for \"nothing.invalid\"\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 4.665683542
+        },
+        {
+          "run": 4,
+          "seed": 45,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:53.499982Z DEBUG Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 52347",
+          "client_output": "Error: No match for \"nothing.invalid\"\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 3.8366967499999998
+        },
+        {
+          "run": 5,
+          "seed": 46,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:02:57.763196Z DEBUG Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_error\"), \"message\": String(\"No match for \\\"nothing.invalid\\\"\")}"
+          ],
+          "client_command": "nc -w 235 127.0.0.1 52394",
+          "client_output": "Error: No match for \"nothing.invalid\"\r\n\r\n",
+          "client_exit": null,
+          "client_timed_out": false,
+          "elapsed_secs": 4.268351625
+        }
+      ]
+    },
+    {
+      "id": "gearman/reverse-text",
+      "protocol": "gearman",
+      "instruction": "You are a Gearman worker. The function reverse returns its input spelled backwards.",
+      "client": "gearman -h 127.0.0.1 -p {PORT} -t 230000 -f reverse stressed",
+      "independence": "protocol-client",
+      "expectation": "contains [\"desserts\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "seed": 42,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:06.843124Z DEBUG Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52575 -t 230000 -f reverse stressed",
+          "client_output": "desserts",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 7.055898083
+        },
+        {
+          "run": 2,
+          "seed": 43,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:11.306228Z DEBUG Executing action 0: Object {\"type\": String(\"send_gearman_data\"), \"data\": String(\"desserts\")}",
+            "2026-11-07T06:03:11.306416Z DEBUG Executing action 1: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gearman_data\"), \"data\": String(\"desserts\")}",
+            "Executing action 1: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52706 -t 230000 -f reverse stressed",
+          "client_output": "dessertsdesserts",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 4.459404625
+        },
+        {
+          "run": 3,
+          "seed": 44,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:14.371922Z DEBUG Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52769 -t 230000 -f reverse stressed",
+          "client_output": "desserts",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.065432208
+        },
+        {
+          "run": 4,
+          "seed": 45,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:16.865137Z DEBUG Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52798 -t 230000 -f reverse stressed",
+          "client_output": "desserts",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 2.493136125
+        },
+        {
+          "run": 5,
+          "seed": 46,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:19.986159Z DEBUG Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"complete_gearman_job\"), \"result\": String(\"desserts\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52821 -t 230000 -f reverse stressed",
+          "client_output": "desserts",
+          "client_exit": 0,
+          "client_timed_out": false,
+          "elapsed_secs": 3.120960875
+        }
+      ]
+    },
+    {
+      "id": "gearman/unknown-function-fails",
+      "protocol": "gearman",
+      "instruction": "You are a Gearman worker that only knows the function reverse. Any other function must fail.",
+      "client": "gearman -h 127.0.0.1 -p {PORT} -t 230000 -f translate hello",
+      "independence": "protocol-client",
+      "expectation": "contains [\"Job failed\"]",
+      "note": null,
+      "attempts": 5,
+      "passes": 5,
+      "pass_rate": 1.0,
+      "status": "attempted",
+      "status_reason": null,
+      "dominant_failure": null,
+      "recoverable_runs": 0,
+      "verdicts_agree": true,
+      "actions_agree": false,
+      "runs": [
+        {
+          "run": 1,
+          "seed": 42,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:26.445063Z DEBUG Executing action 0: Object {\"type\": String(\"fail_gearman_job\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"fail_gearman_job\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52844 -t 230000 -f translate hello",
+          "client_output": "Job failed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 6.4586905
+        },
+        {
+          "run": 2,
+          "seed": 43,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:32.711640Z DEBUG Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52898 -t 230000 -f translate hello",
+          "client_output": "Job failed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 6.2663465
+        },
+        {
+          "run": 3,
+          "seed": 44,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:36.283800Z DEBUG Executing action 0: Object {\"type\": String(\"send_gearman_exception\"), \"text\": String(\"The function 'translate' is not implemented by this worker\")}",
+            "2026-11-07T06:03:36.284016Z DEBUG Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"send_gearman_exception\"), \"text\": String(\"The function 'translate' is not implemented by this worker\")}",
+            "Executing action 1: Object {\"type\": String(\"close_connection\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52945 -t 230000 -f translate hello",
+          "client_output": "Job failed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.5721344999999998
+        },
+        {
+          "run": 4,
+          "seed": 45,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:38.893818Z DEBUG Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 52972 -t 230000 -f translate hello",
+          "client_output": "Job failed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 2.609145458
+        },
+        {
+          "run": 5,
+          "seed": 46,
+          "verdict": "pass",
+          "failure_mode": null,
+          "detail": null,
+          "model_output": [
+            "2026-11-07T06:03:42.792004Z DEBUG Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "recovered_actions": [],
+          "executed_actions": [
+            "Executing action 0: Object {\"type\": String(\"fail_gearman_job\"), \"job_handle\": String(\"H:netget:1\")}"
+          ],
+          "client_command": "gearman -h 127.0.0.1 -p 53045 -t 230000 -f translate hello",
+          "client_output": "Job failed\n",
+          "client_exit": 1,
+          "client_timed_out": false,
+          "elapsed_secs": 3.9110502499999997
+        }
+      ]
+    }
+  ]
+}

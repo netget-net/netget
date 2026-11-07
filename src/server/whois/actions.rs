@@ -412,7 +412,8 @@ fn send_whois_response_action() -> ActionDefinition {
 fn send_whois_record_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_whois_record".to_string(),
-        description: "Send a WHOIS record as standard `Key: value` lines. Every field the \
+        description: "Send the WHOIS record of a domain that has one, as standard `Key: value` \
+                      lines; for a query with no match use send_error. Every field the \
                       instruction mentions goes in its own parameter - registrar, registrant, \
                       registrant organisation, domain status - and anything else goes in \
                       extra_fields; a field you leave out is not printed. RFC 3912 has the \
@@ -495,7 +496,17 @@ fn send_whois_record_action() -> ActionDefinition {
 fn send_error_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_error".to_string(),
-        description: "Send error message for domain not found".to_string(),
+        // Measured with llama3.1:8b over seeds 1-46 against "Report that no match was found for
+        // any domain ending in .invalid": the old one-line description ("Send error message
+        // for domain not found") lost 5 of 46 queries to a record printing only `Domain Name:`;
+        // this wording, the example and the pointer in send_whois_record's description lost
+        // none, and an ordinary record for example.com stayed 46 of 46.
+        description: "Answer that the query has no record - no match, not found, not \
+                      registered. Printed as `Error: <message>`; say it in the message, e.g. \
+                      No match for \"example.invalid\". Use this, not send_whois_record, for a \
+                      domain with no record: a record printed for it reads as a registered \
+                      domain."
+            .to_string(),
         parameters: vec![Parameter {
             name: "message".to_string(),
             type_hint: "string".to_string(),
@@ -504,7 +515,7 @@ fn send_error_action() -> ActionDefinition {
         }],
         example: json!({
             "type": "send_error",
-            "message": "Domain not found in database"
+            "message": "No match for \"example.invalid\""
         }),
         log_template: Some(
             LogTemplate::new()

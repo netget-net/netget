@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 fail ```json { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"function 'translate' is not available"}, {"type":"close_connection"} ] } ``` <reasoning> The server only knows the function 'reverse'. The client requested the 'translate' function, which is not available. Therefor
+seed   3 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "function not found: translate" } ] } ``` <reasoning> Since the server only knows the function "reverse" and not "translate", the job must be failed with a server error.
+seed   4 fail ### Event ID: gearman_job_submitted #### Fields in the data below: - **function** (string): The function the client asked for: "translate" - **workload** (string): The job's input as text: "hello" - **workload_bytes** (number): The input's length in bytes: 5 - **unique_id** (string): The client's un
+seed   5 PASS 
+seed   6 fail { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "The function 'translate' is not supported" } ] }
+seed   7 fail ```json { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"translate is not supported"}, {"type":"close_connection"} ] } ``` The client requested a function that is not supported by this server. The function `translate` is not one of the functions that this server knows ab
+seed   8 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "Function 'translate' is not supported" }, { "type": "close_connection" } ] } ``` <reasoning> The function "translate" is not supported by the server, so we must send an error response to the client. We use th
+seed   9 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "The function 'translate' is not supported. Supported functions are 'reverse' only." } ] } ``` <reasoning>Since the server only knows the function "reverse", any other function must fail. The client asked for 
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 fail Here is the response in the correct format: ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "function not found: translate" } ] } ``` This response is because the instruction specifies that the server only knows the function "reverse", but the client reques
+seed  16 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "only function 'reverse' is available" }, { "type": "close_connection" } ] } ``` (reasoning: The client submitted a job with a function 'translate' that is not available. As per the server's instruction, any f
+seed  17 fail ```json { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"only reverse function is supported"} ] } ``` <reasoning> The function "translate" is not recognized, so I'm rejecting the job and sending an error message to the client.
+seed  18 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "unknown_function", "text": "The function 'translate' is not supported. Only 'reverse' is available." } ] } ``` <reasoning> The function "translate" is not supported by this Gearman worker, so we return a `send_gearman_error` action with
+seed  19 fail ```json { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"translate function not available"}, {"type":"close_connection"} ] } ``` <reasoning> The client requested the function "translate", but as per the server's instruction, it only knows the function "reverse". Therefor
+seed  20 fail ### Request Processing 1. **Understand the event**: The event is a job submission for the function `translate` with workload `hello`. 2. **Follow server instructions**: The server only knows the function `reverse`. Since `translate` is not `reverse`, the request will fail. 3. **Generate appropriate 
+TALLY variant=file:/tmp/gm-lane3/v-unk/ev_only.txt 7/20

@@ -121,3 +121,48 @@ fn an_extra_field_cannot_forge_a_line_through_its_key_or_value() {
         "a CR/LF in an extra field forged a line: {record:?}"
     );
 }
+
+/// "No match" is answered with `send_error`, and the query event says so from both sides. With a
+/// one-line `send_error` description ("Send error message for domain not found") llama3.1:8b
+/// answered `whois/no-match` with a bare `Domain Name:` record on 5 of 46 seeds. With the
+/// descriptions below and a `No match for` example it never did. The example renders as the
+/// line a reader greps for.
+#[test]
+fn a_query_with_no_match_is_pointed_at_send_error() {
+    use netget::server::whois::actions::WHOIS_QUERY_EVENT;
+
+    let offered = |name: &str| {
+        WHOIS_QUERY_EVENT
+            .actions
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("whois_query does not offer {name}"))
+            .clone()
+    };
+    let error = offered("send_error");
+    let record = offered("send_whois_record");
+    assert!(
+        error.description.contains("no match")
+            && error.description.contains("not send_whois_record"),
+        "send_error must say it is the answer for a query with no record: {}",
+        error.description
+    );
+    assert!(
+        record
+            .description
+            .contains("for a query with no match use send_error"),
+        "send_whois_record must point a no-match answer at send_error: {}",
+        record.description
+    );
+    let printed = match WhoisProtocol::new()
+        .execute_action(error.example.clone())
+        .unwrap()
+    {
+        ActionResult::Output(bytes) => String::from_utf8(bytes).unwrap(),
+        other => panic!("send_error must write a line, got {other:?}"),
+    };
+    assert!(
+        printed.starts_with("Error: No match for"),
+        "send_error's example should print a no-match line: {printed:?}"
+    );
+}
