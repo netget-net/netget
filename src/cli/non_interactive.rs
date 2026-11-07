@@ -607,6 +607,14 @@ pub async fn run_with_actions(
     let rate_limiter_config = args.build_rate_limiter_config();
     state.configure_rate_limiter(rate_limiter_config).await?;
 
+    // The model the operator named. Without this a `--load` run ignored `--model` (and the
+    // saved setting) and auto-selected the largest model the endpoint had, so a seeded
+    // measurement with `--model llama3.1:8b` silently measured some other model. Not
+    // validated here: a run whose handlers never consult the model must not need one.
+    if let Some(model) = args.model.clone().or_else(|| settings.model.clone()) {
+        state.set_ollama_model(Some(model)).await;
+    }
+
     // Determine scripting mode
     let mode_to_set = if let Some(mode) = args.parse_scripting_mode()? {
         Some(mode)
