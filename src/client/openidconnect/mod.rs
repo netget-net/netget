@@ -623,9 +623,8 @@ impl OpenIdConnectClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("OIDC client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "OIDC client {} injected action failed: {}",
                     client_id, e
                 ));
             }
