@@ -105,7 +105,7 @@ OllamaClient (3 backends)
 | `answer_intercept` | Answer a parked request with actions, or with `[]` ("say nothing") | `AppState::resolve_intercept()` |
 | `fail_intercept` | Refuse a parked request now — the peer gets the fail-closed reply | `AppState::dismiss_intercept()` |
 | `get_status` | Overall NetGet status: the model in use, whether the endpoint has it (asked live), how it was chosen, the last backend failure | `llm::model_selection::check_model()` + `AppState::model_health()` |
-| `set_model` | Change LLM model; refused when Ollama does not have it, warned when an OpenAI-compatible endpoint does not list it | `llm::model_selection::check_model()` + `AppState::set_ollama_model()` |
+| `set_model` | Change LLM model; never refused — a model the endpoint lists is set silently, one it does not list is set with a warning naming the endpoint and the installed models | `llm::model_selection::check_model()` + `AppState::set_ollama_model()` |
 | `get_protocol_docs` | MCP-shaped protocol documentation | `mcp_stdio::docs::render_protocol_docs()` |
 | `update_server_instruction` | Update just a running server's instruction | `AppState::with_server_mut()` |
 | `update_server` | Update a running server in place by id (supply only changed fields) — see below | `cli::management::update_server()` |
@@ -533,8 +533,18 @@ unlisted), so there an unlisted model is kept with a note; an endpoint that cann
 keeps the configured model, noted as unverified. `--llm-agent` is not checked: the calling
 agent answers whatever the model name. With no model configured nothing is asked at startup;
 the first request auto-selects one and stores it (`ensure_state_model`), so `get_status` names
-the model requests actually use. `tests/llm_model_not_installed_test.rs` covers startup,
-`set_model` and a request meeting Ollama's 404.
+the model requests actually use.
+
+**`set_model` never refuses a model.** The operator may be about to `ollama pull` it, or the
+endpoint may serve a name it does not list, so the tool stores whatever it is given. When the
+endpoint lists its models and this one is not among them, the reply carries a warning naming
+the model, the endpoint and the installed models, and the same warning stays on `get_status` as
+its `Model note`; an endpoint that cannot be asked gets an "unverified" warning instead. The
+check is advisory here because two other places tell the truth at the moment it matters:
+`get_status`'s `Model check` asks the endpoint live every time, and a request that meets the
+backend's model-not-found fails with "not installed" naming the model and the endpoint (below).
+`tests/llm_model_not_installed_test.rs` covers startup, `set_model` (listed and unlisted) and a
+request meeting Ollama's 404.
 
 **A backend failure is not a bad answer.** The transport raises `llm::LlmBackendError`
 (model not installed, unreachable, timed out, key rejected, refused with a status) naming the
