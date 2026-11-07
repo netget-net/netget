@@ -104,8 +104,8 @@ emitted by `src/server/http_common/handler.rs`, which is shared with ipp/openapi
 in `mod.rs`, because `build_response` cannot tell which protocol it is answering for. Two
 consequences worth knowing: the h2c-upgraded path is served by
 `src/server/http2/h2_server.rs` and carries whatever tags **that** protocol emits, not these;
-and `build_error_response`'s tag reaches `netget.log` through `error!` but its status-stream
-line (`✗ LLM error for …`) has no `decision=`, so the dashboard shows the failure untagged.
+and `build_error_response` writes one `Log` ERROR line carrying the tag and the status, so
+`netget.log` and the dashboard show the same tagged failure.
 
 ## Architecture
 

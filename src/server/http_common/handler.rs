@@ -9,7 +9,7 @@ use hyper::{Request, Response};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, warn};
 
 /// Extracted request data common to HTTP and HTTP/2
 #[derive(Debug)]
@@ -88,51 +88,31 @@ pub async fn extract_request_data(
         }
     };
 
-    // DEBUG: Log request summary to both file and TUI
-    debug!(
+    // DEBUG: request summary; TRACE: headers and body. Both stay in the file log.
+    let log = crate::logging::emit::Log::to(status_tx);
+    log.debug(format!(
         "{} request (action-based): {} {} {} ({} bytes)",
         protocol_label,
         method,
         uri,
         version,
         body_bytes.len(),
-    );
-    let _ = status_tx.send(format!(
-        "[DEBUG] {} request: {} {} {} ({} bytes)",
-        protocol_label,
-        method,
-        uri,
-        version,
-        body_bytes.len()
     ));
-
-    // TRACE: Log full request details
-    trace!("{} request headers:", protocol_label);
+    log.trace(format!("{} request headers:", protocol_label));
     for (name, value) in &headers {
-        trace!("  {}: {}", name, value);
-        let _ = status_tx.send(format!(
-            "[TRACE] {} header: {}: {}",
-            protocol_label, name, value
-        ));
+        log.trace(format!("{} header: {}: {}", protocol_label, name, value));
     }
     if !body_bytes.is_empty() {
         if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
             // Try to pretty-print if it's JSON
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_str) {
                 let pretty = serde_json::to_string_pretty(&json).unwrap_or(body_str.to_string());
-                trace!("{} request body (JSON):\n{}", protocol_label, pretty);
-                let _ = status_tx.send(format!(
-                    "[TRACE] {} request body (JSON):\r\n{}",
-                    protocol_label,
-                    pretty.replace('\n', "\r\n")
+                log.trace(format!(
+                    "{} request body (JSON):\n{}",
+                    protocol_label, pretty
                 ));
             } else {
-                trace!("{} request body:\n{}", protocol_label, body_str);
-                let _ = status_tx.send(format!(
-                    "[TRACE] {} request body:\r\n{}",
-                    protocol_label,
-                    body_str.replace('\n', "\r\n")
-                ));
+                log.trace(format!("{} request body:\n{}", protocol_label, body_str));
             }
         } else {
             console_trace!(
@@ -416,16 +396,12 @@ pub fn build_error_response(
         crate::utils::WireFailure::Overloaded => (503, "fail_closed_llm_overloaded"),
         crate::utils::WireFailure::Unavailable => (500, "fail_closed_llm_error"),
     };
-    error!(
-        "{} {} {} decision={} status={}: {}",
+    // The token goes on both sinks: `netget.log` and the TUI/MCP status stream — which is what
+    // an operator is actually watching, and what the e2e harness reads — can both tell a
+    // saturated backend from a broken one.
+    crate::logging::emit::Log::to(status_tx).error(format!(
+        "✗ {} {} {} decision={} status={}: LLM error: {}",
         protocol_label, method, uri, decision, status, error
-    );
-    // The token goes on both sinks. It used to be on the `error!` alone, so `netget.log`
-    // could tell a saturated backend from a broken one and the TUI/MCP status stream — which
-    // is what an operator is actually watching, and what the e2e harness reads — could not.
-    let _ = status_tx.send(format!(
-        "[ERROR] ✗ LLM error for {} {} → {} decision={}: {}",
-        method, uri, status, decision, error
     ));
 
     if status == 503 {
