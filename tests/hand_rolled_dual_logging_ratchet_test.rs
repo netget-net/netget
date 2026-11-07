@@ -33,9 +33,7 @@ use std::path::{Path, PathBuf};
 /// Files that may still hand-roll a `[LEVEL]` send, with the number of sites allowed.
 const BASELINE: &[(&str, usize)] = &[
     ("src/server/amqp/actions.rs", 1),
-    ("src/server/arp/mod.rs", 1),
     ("src/server/cassandra/actions.rs", 7),
-    ("src/server/datalink/mod.rs", 1),
     ("src/server/db2/actions.rs", 3),
     ("src/server/docker/mod.rs", 2),
     ("src/server/http_common/handler.rs", 5),
@@ -54,23 +52,14 @@ const BASELINE: &[(&str, usize)] = &[
     ("src/server/prometheus/mod.rs", 2),
     ("src/server/proxy/tls_mitm.rs", 13),
     ("src/server/redis/actions.rs", 9),
-    ("src/server/reverse_shell/mod.rs", 1),
     ("src/server/snmp/mod.rs", 7),
     ("src/server/snowflake/actions.rs", 4),
-    ("src/server/sse/mod.rs", 1),
-    ("src/server/ssh_agent/mod.rs", 1),
     ("src/server/ssh/sftp_handler.rs", 19),
-    ("src/server/stp/mod.rs", 1),
-    ("src/server/syslog/mod.rs", 1),
     ("src/server/torrent_dht/mod.rs", 4),
-    ("src/server/usb/msc/mod.rs", 1),
-    ("src/server/usb/serial/mod.rs", 2),
     ("src/server/vault/mod.rs", 2),
-    ("src/server/vrrp/mod.rs", 1),
     ("src/server/webrtc/mod.rs", 2),
     ("src/server/websocket/actions.rs", 3),
     ("src/server/wireguard/mod.rs", 7),
-    ("src/server/wol/mod.rs", 1),
     ("src/server/zookeeper/mod.rs", 4),
 ];
 
