@@ -735,8 +735,8 @@ impl SnmpClient {
         socket: &Arc<UdpSocket>,
         config: &Arc<SnmpConfig>,
     ) -> Result<()> {
-        // The response side has the same fatal decoder as the agent side: `rasn`'s BER parser
-        // recurses once per level of constructed nesting with no bound, and a stack overflow
+        // The response side has the same decoder as the agent side: `rasn`'s BER parser
+        // recurses once per level of constructed nesting (to its own bound of 128), and a stack overflow
         // is a `SIGABRT` that takes the whole NetGet process with it. A client is if anything
         // more exposed — the bytes come from whatever the operator pointed it at, and UDP means
         // an off-path attacker can beat the real agent to the reply. Screen before decoding.
@@ -756,7 +756,7 @@ impl SnmpClient {
         let (variables, error_status) = if let Some(manager) = &config.usm {
             match manager.unwrap_reply(response_data)? {
                 usm::Reply::Pdu(pdus) => Self::extract_v2c_response(&v2c::Message {
-                    version: Integer::Primitive(1),
+                    version: Integer::from(1),
                     community: Vec::new().into(),
                     data: pdus,
                 })?,
@@ -861,10 +861,7 @@ impl SnmpClient {
     fn extract_v1_response(msg: &v1::Message<v1::Pdus>) -> Result<(Vec<Value>, i32)> {
         let (var_binds, error_status) = match &msg.data {
             v1::Pdus::GetResponse(resp) => {
-                let err_status = match &resp.0.error_status {
-                    Integer::Primitive(v) => *v as i32,
-                    Integer::Variable(big) => big.to_string().parse().unwrap_or(0),
-                };
+                let err_status = i32::try_from(&resp.0.error_status).unwrap_or(0);
                 (&resp.0.variable_bindings, err_status)
             }
             _ => return Err(anyhow::anyhow!("Unexpected PDU type in response")),
@@ -897,9 +894,9 @@ impl SnmpClient {
 
     fn format_object_syntax_v2(syntax: &V2ObjectSyntax) -> Value {
         match syntax {
-            V2ObjectSyntax::Simple(V2SimpleSyntax::Integer(n)) => match n {
-                Integer::Primitive(val) => serde_json::json!(val),
-                Integer::Variable(val) => serde_json::json!(val.to_string()),
+            V2ObjectSyntax::Simple(V2SimpleSyntax::Integer(n)) => match i64::try_from(n) {
+                Ok(val) => serde_json::json!(val),
+                Err(_) => serde_json::json!(n.to_string()),
             },
             V2ObjectSyntax::Simple(V2SimpleSyntax::String(s)) => {
                 serde_json::json!(String::from_utf8_lossy(s))
@@ -912,9 +909,9 @@ impl SnmpClient {
     /// Format v1 value for JSON
     fn format_v1_value(value: &V1ObjectSyntax) -> Value {
         match value {
-            V1ObjectSyntax::Simple(V1SimpleSyntax::Number(n)) => match n {
-                Integer::Primitive(val) => serde_json::json!(val),
-                Integer::Variable(val) => serde_json::json!(val.to_string()),
+            V1ObjectSyntax::Simple(V1SimpleSyntax::Number(n)) => match i64::try_from(n) {
+                Ok(val) => serde_json::json!(val),
+                Err(_) => serde_json::json!(n.to_string()),
             },
             V1ObjectSyntax::Simple(V1SimpleSyntax::String(s)) => {
                 serde_json::json!(String::from_utf8_lossy(s))
@@ -944,7 +941,7 @@ impl SnmpClient {
         }));
 
         let message = v2c::Message {
-            version: Integer::Primitive(1), // v2c uses version 1
+            version: Integer::from(1), // v2c uses version 1
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -974,7 +971,7 @@ impl SnmpClient {
         }));
 
         let message = v2c::Message {
-            version: Integer::Primitive(1),
+            version: Integer::from(1),
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -1006,7 +1003,7 @@ impl SnmpClient {
         }));
 
         let message = v2c::Message {
-            version: Integer::Primitive(1),
+            version: Integer::from(1),
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -1034,7 +1031,7 @@ impl SnmpClient {
                     "integer" => {
                         let n = value.as_i64().unwrap_or(0);
                         v2::VarBindValue::Value(V2ObjectSyntax::Simple(V2SimpleSyntax::Integer(
-                            Integer::Primitive(n as isize),
+                            Integer::from(n as isize),
                         )))
                     }
                     "string" => {
@@ -1061,7 +1058,7 @@ impl SnmpClient {
         }));
 
         let message = v2c::Message {
-            version: Integer::Primitive(1),
+            version: Integer::from(1),
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -1080,14 +1077,14 @@ impl SnmpClient {
             .collect();
 
         let pdu = v1::Pdus::GetRequest(v1::GetRequest(v1::Pdu {
-            request_id: Integer::Primitive(request_id as isize),
-            error_status: Integer::Primitive(0),
-            error_index: Integer::Primitive(0),
+            request_id: Integer::from(request_id as isize),
+            error_status: Integer::from(0),
+            error_index: Integer::from(0),
             variable_bindings: var_binds,
         }));
 
         let message = v1::Message {
-            version: Integer::Primitive(0), // v1 uses version 0
+            version: Integer::from(0), // v1 uses version 0
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -1110,14 +1107,14 @@ impl SnmpClient {
             .collect();
 
         let pdu = v1::Pdus::GetNextRequest(v1::GetNextRequest(v1::Pdu {
-            request_id: Integer::Primitive(request_id as isize),
-            error_status: Integer::Primitive(0),
-            error_index: Integer::Primitive(0),
+            request_id: Integer::from(request_id as isize),
+            error_status: Integer::from(0),
+            error_index: Integer::from(0),
             variable_bindings: var_binds,
         }));
 
         let message = v1::Message {
-            version: Integer::Primitive(0),
+            version: Integer::from(0),
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };
@@ -1144,9 +1141,7 @@ impl SnmpClient {
                 let value_obj = match value_type {
                     "integer" => {
                         let n = value.as_i64().unwrap_or(0);
-                        V1ObjectSyntax::Simple(V1SimpleSyntax::Number(Integer::Primitive(
-                            n as isize,
-                        )))
+                        V1ObjectSyntax::Simple(V1SimpleSyntax::Number(Integer::from(n as isize)))
                     }
                     "string" => {
                         let s = value.as_str().unwrap_or("");
@@ -1163,14 +1158,14 @@ impl SnmpClient {
             .collect();
 
         let pdu = v1::Pdus::SetRequest(v1::SetRequest(v1::Pdu {
-            request_id: Integer::Primitive(request_id as isize),
-            error_status: Integer::Primitive(0),
-            error_index: Integer::Primitive(0),
+            request_id: Integer::from(request_id as isize),
+            error_status: Integer::from(0),
+            error_index: Integer::from(0),
             variable_bindings: var_binds,
         }));
 
         let message = v1::Message {
-            version: Integer::Primitive(0),
+            version: Integer::from(0),
             community: community.as_bytes().to_vec().into(),
             data: pdu,
         };

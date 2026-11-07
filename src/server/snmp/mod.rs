@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 // SNMP protocol support
-use rasn::{ber, types::Integer};
+use rasn::ber;
 use rasn_snmp::{v1, v2, v2c};
 
 use crate::llm::action_helper::call_llm;
@@ -67,19 +67,17 @@ pub const SNMP_ERROR_TOO_BIG: u8 = 1;
 /// `rasn`'s recursion to a depth no stack cares about.
 pub const MAX_BER_DEPTH: usize = 16;
 
-/// `rasn` 0.18 decodes a *constructed* OCTET STRING by calling
-/// `ber::de::parser::parse_encoded_value` on each of its segments, and a segment may itself be
-/// constructed — so the function calls itself, with no depth counter anywhere on the path.
+/// BER lets a *constructed* OCTET STRING hold segments that are themselves constructed, and
 /// `v1::Message` and `v2c::Message` both carry `community` as an OCTET STRING, so the nesting a
-/// datagram declares is the recursion depth we get, and the only bound is the datagram size.
+/// datagram declares is as deep as the peer likes. `24 80` (constructed OCTET STRING,
+/// indefinite length) is two bytes and buys one level and the end-of-contents markers can be
+/// omitted, so a single 64 KB UDP datagram declares roughly 32000 levels. A decoder that
+/// recursed once per level — `rasn` 0.18 did — aborted the process at 30000 with
+/// `fatal runtime error: stack overflow`. `rasn` 0.30 counts its depth and refuses past 128
+/// (`tests/server/snmp/ber_depth_test.rs` holds it to that); this screen refuses past
+/// [`MAX_BER_DEPTH`] before the decoder runs, so neither bound alone carries the process.
 ///
-/// `24 80` (constructed OCTET STRING, indefinite length) is two bytes and buys one level. The
-/// end-of-contents markers can be omitted entirely — the decoder descends while input remains
-/// and only discovers the missing EOC on the way back up — so a single 64 KB UDP datagram
-/// reaches roughly 32000 frames. Measured here: 30000 levels aborts the process with
-/// `fatal runtime error: stack overflow`.
-///
-/// That is not a recoverable fault. A Rust stack overflow is a guard-page `SIGSEGV`/`SIGABRT`,
+/// A stack overflow is not a recoverable fault. A Rust stack overflow is a guard-page `SIGSEGV`/`SIGABRT`,
 /// not a panic: `tokio::spawn` cannot isolate it and `catch_unwind` cannot see it, so one
 /// unauthenticated datagram takes down every other server the NetGet process is running.
 ///
@@ -781,8 +779,8 @@ impl SnmpServer {
     /// Parse SNMP message and extract relevant information
     pub fn parse_snmp_message(data: &[u8]) -> Result<ParsedSnmpInfo> {
         // Screen the TLV structure before rasn sees it. Its BER decoder recurses once per
-        // level of constructed nesting with no bound, and a stack overflow is fatal to the
-        // whole process rather than to this datagram. See `check_ber_structure`.
+        // level of constructed nesting (up to its own bound of 128), and a stack overflow is
+        // fatal to the whole process rather than to this datagram. See `check_ber_structure`.
         if let Err(reason) = check_ber_structure(data, MAX_BER_DEPTH) {
             return Err(anyhow::anyhow!(
                 "Rejected malformed SNMP message ({} bytes): {}",
@@ -866,13 +864,7 @@ impl SnmpServer {
         };
 
         // Convert Integer to i32
-        match integer {
-            Integer::Primitive(val) => *val as i32,
-            Integer::Variable(big) => {
-                // Try to convert BigInt to i32, default to 0 if out of range
-                big.to_string().parse::<i32>().unwrap_or(0)
-            }
-        }
+        i32::try_from(integer).unwrap_or(0)
     }
 
     /// Get requested OIDs for v1

@@ -163,9 +163,9 @@ h2 = { version = "0.4" }
 dhcproto = { version = "0.12" }
 
 # SNMP agent
-rasn-snmp = { version = "0.18" }
-rasn-smi = { version = "0.18" }
-rasn = { version = "0.18" }
+rasn-snmp = { version = "0.30" }
+rasn-smi = { version = "0.30" }
+rasn = { version = "0.30" }
 
 # Syslog server
 syslog_loose = { version = "0.22" }

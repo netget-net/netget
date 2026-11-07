@@ -560,6 +560,12 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   (`ber/de.rs:202-208`) checks `chars().nth(len - 5)` and slices at *byte* `len - 5`, so the
   GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") panics on a char boundary. No SNMP type
   carries a GeneralizedTime.
+  **7 November 2026: `rasn`, `rasn-snmp` and `rasn-smi` upgraded to 0.30.0.** The GeneralizedTime
+  parser works on bytes and returns `Err` (fixed in 0.26), and the BER decoder counts its depth
+  and refuses past 128 levels, constructed OCTET STRINGs included. `check_ber_structure` stays in
+  front at 16. `tests/server/snmp/ber_time_test.rs` feeds the GeneralizedTime bytes to
+  `rasn::ber::decode` and to `parse_snmp_message` (it fails on 0.18 at `ber/de.rs:208`), and
+  `ber_depth_test.rs` hands the 30000-level bomb to `rasn` unscreened on a 2 MiB stack.
 
 Tests: `tests/server/dns/compression_chain_test.rs`, `tests/server/cassandra/decoder_panic_test.rs`,
 `tests/server/mysql/sequence_id_test.rs`. Fuzz: `dns_message` now runs the screen first and has a

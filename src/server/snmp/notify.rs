@@ -38,10 +38,7 @@ pub struct Received {
 }
 
 fn integer(i: &Integer) -> i64 {
-    match i {
-        Integer::Primitive(v) => *v as i64,
-        Integer::Variable(big) => big.to_string().parse().unwrap_or(0),
-    }
+    i64::try_from(i).unwrap_or(0)
 }
 
 fn octets(bytes: &[u8]) -> Value {
@@ -443,7 +440,7 @@ pub async fn send(out: &Outgoing) -> Result<Value> {
                 continue;
             }
             // The acknowledgement is the target's bytes: screened for nesting depth before
-            // `rasn`'s unbounded recursion sees them, as every other received datagram is.
+            // `rasn`'s recursion sees them, as every other received datagram is.
             if super::check_ber_structure(&buf[..n], super::MAX_BER_DEPTH).is_err() {
                 continue;
             }

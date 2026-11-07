@@ -1,19 +1,20 @@
 //! A hostile SNMP datagram must be rejected, not crash the process.
 //!
 //! BER lets an OCTET STRING be *constructed*: its contents are themselves a series of
-//! OCTET STRINGs, which may in turn be constructed. `rasn` 0.18's
-//! `ber::de::parser::parse_encoded_value` walks that nesting by calling itself, with no
-//! depth counter, so nesting depth is bounded only by the datagram size. Two bytes buy one
-//! level (`24 80`, constructed OCTET STRING, indefinite length), so a single 64 KB UDP
+//! OCTET STRINGs, which may in turn be constructed. A decoder that walks that nesting by
+//! calling itself, with no depth counter, is bounded only by the datagram size: two bytes buy
+//! one level (`24 80`, constructed OCTET STRING, indefinite length), so a single 64 KB UDP
 //! datagram — the largest one a socket can deliver, and unauthenticated — reaches roughly
-//! 32000 frames.
+//! 32000 frames. `rasn` 0.18 was that decoder. `rasn` 0.30 counts its depth and refuses past
+//! 128 levels, which `rasn_bounds_constructed_octet_string_nesting_itself` holds it to.
 //!
 //! Rust does not unwind a stack overflow: it is `SIGSEGV`/`SIGABRT` from the guard page, so
 //! `tokio::spawn` cannot contain it, `catch_unwind` cannot see it, and the whole netget
 //! process dies. That makes this a remote kill switch for everything else the process is
 //! serving, not merely an SNMP fault.
 //!
-//! `parse_snmp_message` therefore screens the datagram's TLV structure before rasn sees it.
+//! `parse_snmp_message` screens the datagram's TLV structure before rasn sees it, at a depth of
+//! 16, so the process does not rest on the decoder's own bound alone.
 
 use netget::server::snmp::SnmpServer;
 
@@ -50,6 +51,26 @@ fn deeply_nested_ber_is_rejected_not_fatal() {
     assert!(
         result.is_err(),
         "a 30000-deep BER nesting must be rejected, not parsed"
+    );
+}
+
+/// The decoder behind the screen, handed the bomb unscreened, on a thread with a tokio worker's
+/// 2 MiB stack. The assertion is that the thread comes back at all: a decoder that recursed
+/// once per level would overflow the stack and abort the test binary rather than fail it.
+#[test]
+fn rasn_bounds_constructed_octet_string_nesting_itself() {
+    let payload = nested_community_message(30_000);
+    let refused = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            rasn::ber::decode::<rasn_snmp::v2c::Message<rasn_snmp::v2::Pdus>>(&payload).is_err()
+        })
+        .expect("spawn the decode thread")
+        .join()
+        .expect("rasn panicked on the bomb");
+    assert!(
+        refused,
+        "a 30000-deep constructed OCTET STRING must not decode"
     );
 }
 
