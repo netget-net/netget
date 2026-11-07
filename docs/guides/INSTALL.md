@@ -6,7 +6,7 @@
 | GitHub release | download `netget-<target>.tar.gz` / `.zip` from [Releases](https://github.com/netget-net/netget/releases) | The same binaries, plus the Linux `-full` archives; `SHA256SUMS` lists their checksums |
 | Cargo | `cargo install --locked netget-tool` | Every protocol, built from source ([system libraries](BUILDING.md)) |
 | Docker | `docker build -t netget .` in a checkout | The `-full` glibc Linux feature set; see [Docker](#docker) |
-| Homebrew | not published yet | `packaging/homebrew/netget.rb` is a draft formula for a future tap |
+| Homebrew | `brew install netget-net/tap/netget` | The release binary for macOS and plain glibc Linux ([netget-net/homebrew-tap](https://github.com/netget-net/homebrew-tap)) |
 
 The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command is
 `netget` everywhere.
