@@ -5,7 +5,7 @@
 | npm (recommended) | `npx -y @smotana/netget` or `npm install -g @smotana/netget` | The plain release binary for your platform (table below) |
 | GitHub release | download `netget-<target>.tar.gz` / `.zip` from [Releases](https://github.com/netget-net/netget/releases) | The same binaries, plus the Linux `-full` archives; `SHA256SUMS` lists their checksums |
 | Cargo | `cargo install --locked netget-tool` | Every protocol, built from source ([system libraries](BUILDING.md)) |
-| Docker | `docker build -t netget .` in a checkout | The `-full` glibc Linux feature set; see [Docker](#docker) |
+| Docker | `docker pull ghcr.io/netget-net/netget` | The `-full` glibc Linux feature set, linux/amd64 and linux/arm64; see [Docker](#docker) |
 | Homebrew | not published yet | `packaging/homebrew/netget.rb` is a draft formula for a future tap |
 
 The crate is `netget-tool` (crates.io's `netget` is an unrelated project); the command is
@@ -66,7 +66,20 @@ The packet-capture protocols need raw-socket privileges at run time (root, or `C
 ## Docker
 
 The repository's `Dockerfile` builds the `-full` glibc Linux feature set on Debian bookworm
-(the image installs the three libraries it links) and runs it as an unprivileged user. No image is published; build it yourself:
+(the image installs the three libraries it links) and runs it as an unprivileged user. It is
+published to the GitHub Container Registry as `ghcr.io/netget-net/netget`, one multi-arch image
+for `linux/amd64` and `linux/arm64` (Docker pulls the one matching the host):
+
+```bash
+docker pull ghcr.io/netget-net/netget            # latest; or :0.3.9 for a release
+docker run --rm -p 18040:18040 -e NETGET_MCP_TOKEN="$(openssl rand -hex 32)" \
+    ghcr.io/netget-net/netget
+```
+
+Each release tag `vX.Y.Z` publishes `X.Y.Z` and `latest`; the image can also be published by
+hand under any tag. `.github/workflows/docker.yml` builds each architecture on a native GitHub
+runner (no emulation), pushes both by digest and joins them into one manifest list, then pulls
+the result and runs `--version`. To build it yourself instead:
 
 ```bash
 docker build -t netget .
