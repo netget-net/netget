@@ -298,7 +298,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (64 servers as of 6 November 2026, after `redis` went to Stable and `profinet` to Beta;
+- **Beta** — human-reviewed, works against real clients (65 servers as of 6 November 2026, after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -312,7 +312,11 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   Beta on evidence that exists only in CI**: profinet-py and pnio_dcp pass its real-peer test
   in the `profinet` pair job (job 116898932856), but that test needs Linux and CAP_NET_RAW, so
   it cannot run on macOS and no local check reaches the raw transport — re-run the pair job
-  after touching it. Running the suites
+  after touching it. **`mercurial` is Beta for clone and pull**: the real `hg` 7.2.4 clones,
+  `hg verify`s (which recomputes every revlog node), reads back and pulls from it in
+  `tests/server/mercurial/real_client_test.rs`, which fails rather than skips without hg. Push,
+  bundle2, bookmarks and tags are not implemented, so the rating claims none of them. Running
+  the suites
   also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
   guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
   named, `afp-showmount`, had never run at all on an ephemeral port.

@@ -7,7 +7,7 @@ everything Mercurial computes for itself: filelog, manifest and changelog texts,
 nodes, and the changegroup `hg clone` / `hg pull` applies. A real `hg` clones it, and `hg verify`
 passes.
 
-**State**: Experimental. **Privilege**: none; the default port 8000 is above 1024.
+**State**: Beta, for clone and pull (see [Maturity](#maturity)). **Privilege**: none; the default port 8000 is above 1024.
 **Spec**: [WireProtocol](https://www.mercurial-scm.org/wiki/WireProtocol),
 [HttpCommandProtocol](https://wiki.mercurial-scm.org/HttpCommandProtocol); the formats below
 were checked against the installed `hg` 7.2.4's own source (`httppeer.py`,
@@ -218,7 +218,11 @@ it **fails**, naming `brew install mercurial`, when hg is absent:
   the log.
 
 `tests/server/mercurial/changegroup_test.rs` covers every `MAX_*` bound at the limit and one past
-it, and every refusal. That is the evidence Beta asks for (one real third-party client completing
-the protocol's own exchange); the rating is the maintainer's call. Not yet there for Stable: one
-client only, no pcap oracle (Wireshark has no Mercurial dissector — the bytes are HTTP to it), and
-no fuzz target.
+it, and every refusal.
+
+**Beta, and the rating covers clone and pull only.** One real third-party client completes the
+protocol's own read exchange — handshake, discovery, `lookup`, `getbundle` — and `hg verify`
+accepts every node, which is the evidence Beta asks for. Push (`unbundle`, `pushkey`), bundle2,
+bookmarks and tags are not implemented (above), so nothing about them is claimed. Not yet there
+for Stable: one client only, no pcap oracle (Wireshark has no Mercurial dissector — the bytes are
+HTTP to it), and no fuzz target.
