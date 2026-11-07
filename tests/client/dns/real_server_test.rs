@@ -211,6 +211,13 @@ async fn exercise(server: &RealServer) -> E2EResult<()> {
             .replace(" 100 3600", " 101 3600")
             .replace("192.0.2.80", "192.0.2.81"),
     )?;
+    // named reloads a zone file only when its mtime moved, at one-second resolution, and the
+    // edit usually lands within the second the zone was first loaded: SIGHUP then logs
+    // "reloading zones succeeded" and serves the old serial. Date the edit two seconds ahead.
+    std::fs::File::options()
+        .write(true)
+        .open(&zone)?
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(2))?;
     let pid: i32 = std::fs::read_to_string(server.dir().join("named.pid"))?
         .trim()
         .parse()?;
