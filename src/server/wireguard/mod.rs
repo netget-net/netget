@@ -54,7 +54,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace};
 
 /// Truncate a key for display without panicking on short or non-ASCII input.
 ///
@@ -333,9 +333,8 @@ impl WireguardServer {
                             peers.insert(peer_key.clone(), connection_id);
                         }
 
-                        info!("New WireGuard peer connected: {}", peer_key);
-                        let _ =
-                            status_tx.send(format!("[INFO] New peer: {}", short_key(&peer_key)));
+                        Log::to(&status_tx)
+                            .info(format!("New WireGuard peer connected: {}", peer_key));
 
                         // Determine endpoint
                         let remote_addr = peer.endpoint;
@@ -427,11 +426,7 @@ impl WireguardServer {
             };
 
             for (peer_key, connection_id) in disconnected_peers {
-                info!("WireGuard peer disconnected: {}", peer_key);
-                let _ = status_tx.send(format!(
-                    "[INFO] Peer disconnected: {}",
-                    short_key(&peer_key)
-                ));
+                Log::to(&status_tx).info(format!("WireGuard peer disconnected: {}", peer_key));
 
                 app_state
                     .close_connection_on_server(server_id, connection_id)
@@ -548,10 +543,9 @@ impl WireguardServer {
 
                     if ips.is_empty() {
                         decisions.push("model_authorize_invalid");
-                        warn!("authorize_peer for {} has no allowed_ips", public_key);
-                        let _ = status_tx.send(format!(
-                            "[WARN] authorize_peer for {} ignored: no allowed_ips",
-                            short_key(&public_key)
+                        Log::to(&status_tx).warn(format!(
+                            "WireGuard authorize_peer for {} ignored: no allowed_ips",
+                            public_key
                         ));
                         continue;
                     }
@@ -564,8 +558,10 @@ impl WireguardServer {
 
                     if let Err(e) = self.add_peer(public_key.clone(), ips, ep).await {
                         decisions.push("model_authorize_failed");
-                        error!("Failed to authorize WireGuard peer {}: {}", public_key, e);
-                        let _ = status_tx.send(format!("[ERROR] authorize_peer failed: {}", e));
+                        Log::to(&status_tx).error(format!(
+                            "WireGuard authorize_peer for {} failed: {}",
+                            public_key, e
+                        ));
                     } else {
                         decisions.push("model_authorize");
                     }
@@ -579,8 +575,10 @@ impl WireguardServer {
 
                     if let Err(e) = self.remove_peer(public_key.clone(), status_tx).await {
                         decisions.push("model_reject_failed");
-                        error!("Failed to remove WireGuard peer {}: {}", public_key, e);
-                        let _ = status_tx.send(format!("[ERROR] disconnect_peer failed: {}", e));
+                        Log::to(&status_tx).error(format!(
+                            "WireGuard disconnect_peer for {} failed: {}",
+                            public_key, e
+                        ));
                     } else {
                         decisions.push("model_reject");
                     }
@@ -623,11 +621,7 @@ impl WireguardServer {
         allowed_ips: Vec<String>,
         endpoint: Option<SocketAddr>,
     ) -> Result<()> {
-        info!("Adding WireGuard peer: {}", peer_public_key);
-        let _ = self.status_tx.send(format!(
-            "[INFO] Adding peer: {}",
-            short_key(&peer_public_key)
-        ));
+        Log::to(&self.status_tx).info(format!("Adding WireGuard peer: {}", peer_public_key));
 
         // Check peer limit
         let peer_count = {
@@ -667,11 +661,7 @@ impl WireguardServer {
         peer_public_key: String,
         status_tx: &mpsc::UnboundedSender<String>,
     ) -> Result<()> {
-        info!("Removing WireGuard peer: {}", peer_public_key);
-        let _ = status_tx.send(format!(
-            "[INFO] Removing peer: {}",
-            short_key(&peer_public_key)
-        ));
+        Log::to(&status_tx).info(format!("Removing WireGuard peer: {}", peer_public_key));
 
         // Parse peer public key
         let peer_key: Key = peer_public_key.parse().context("Invalid peer public key")?;

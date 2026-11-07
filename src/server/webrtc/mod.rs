@@ -663,16 +663,13 @@ impl PeerCtx {
                 // answer. It gets a category on that channel; the error stays in the log.
                 let failure = WireFailure::classify(&e);
                 let decision = backend_failure_tag(failure);
-                error!(
-                    "WebRTC LLM call failed for peer {} ({}) (decision={}): {}",
+                crate::logging::emit::Log::to(&self.status_tx).error(format!(
+                    "WebRTC peer {} ({}) (decision={}): no response generated, LLM call \
+                     failed: {}",
                     self.peer_id,
                     netget_event.id(),
                     decision,
                     e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[ERROR] WebRTC peer {} (decision={}): no response generated ({})",
-                    self.peer_id, decision, e
                 ));
                 self.send_on_channel(failure.prefixed_text().to_string())
                     .await;
@@ -821,9 +818,8 @@ impl WebRtcServer {
 
         let server_data = Arc::new(WebRtcServerData::new(ice_server_urls, max_peers)?);
 
-        info!("WebRTC signalling listening on {}", local_addr);
-        let _ = status_tx.send(format!(
-            "[INFO] WebRTC data-channel server, WebSocket SDP signalling, listening on {}",
+        crate::logging::emit::Log::to(&status_tx).info(format!(
+            "WebRTC data-channel server, WebSocket SDP signalling, listening on {}",
             local_addr
         ));
 

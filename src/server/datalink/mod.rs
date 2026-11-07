@@ -27,7 +27,7 @@ use bytes::Bytes;
 use pcap::{Capture, Device};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::client::datalink::packet::{decode_frame, LinkType};
 use crate::llm::action_helper::call_llm;
@@ -308,18 +308,13 @@ impl DataLinkServer {
                                     } else {
                                         "model_analysed"
                                     };
-                                    debug!(
+                                    Log::to(&status_clone).debug(format!(
                                         "Datalink packet ({} bytes) decision={} ({} actions, \
                                          {} protocol results)",
                                         full_len,
                                         decision,
                                         execution_result.raw_actions.len(),
                                         execution_result.protocol_results.len()
-                                    );
-                                    let _ = status_clone.send(format!(
-                                        "[DEBUG] Datalink packet decision={} ({} actions)",
-                                        decision,
-                                        execution_result.raw_actions.len()
                                     ));
 
                                     let _ = status_clone.send(format!(
