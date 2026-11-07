@@ -92,6 +92,11 @@ const SKIP_DIRS: &[&str] = &["target", ".git", ".claude", "node_modules", "tmp"]
 /// *serves* rather than contains.
 const FOREIGN_PATHS: &[(&str, &str, &str)] = &[
     (
+        "src/server/mysql/AGENTS.md",
+        "mysql/NETGET.md",
+        "the netget-net/opensrv fork's own patch notes, which NetGet builds from crates.io",
+    ),
+    (
         "src/server/bluetooth_ble_beacon/AGENTS.md",
         "src/adv.rs",
         "bluer 0.17.4's own sources, cited for how it builds an advertisement",
