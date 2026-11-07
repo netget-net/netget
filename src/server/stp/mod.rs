@@ -38,7 +38,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::ollama_client::OllamaClient;
@@ -585,17 +585,13 @@ impl StpServer {
                         Ok(frame) => match responder.send(frame.clone()).await {
                             Ok(()) => {
                                 frames_sent += 1;
-                                debug!(
+                                let log = Log::to(&status_tx);
+                                log.debug(format!(
                                     "STP sent {} byte frame to {}",
                                     frame.len(),
                                     responder.describe()
-                                );
-                                trace!("STP sent (hex): {}", hex::encode(&frame));
-                                let _ = status_tx.send(format!(
-                                    "[DEBUG] STP sent {} byte frame to {}",
-                                    frame.len(),
-                                    responder.describe()
                                 ));
+                                log.trace(format!("STP sent (hex): {}", hex::encode(&frame)));
                             }
                             Err(e) => {
                                 error!("STP transmit failed: {:#}", e);

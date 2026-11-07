@@ -179,8 +179,9 @@ All the framing refusals are fixed strings — nothing from the peer's bytes or 
 internal error reaches the wire.
 
 Every `decision=` tag above for a plain command, and its wire form, is asserted by
-`tests/server/redis/failure_decision_test.rs` — the tags are written to the status stream as
-well as `netget.log`, so the test reads them there. Each framing bound is driven at its
+`tests/server/redis/failure_decision_test.rs`. The fail-closed tags are WARN lines and
+`model_reject` is a DEBUG line, which stays in the file log; a non-interactive run writes the
+file log to stderr, so the test reads every tag from the process output. Each framing bound is driven at its
 boundary by `frame_bounds_test.rs` and `resp_depth_test.rs`.
 
 ### RESP nesting

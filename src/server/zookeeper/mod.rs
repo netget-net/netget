@@ -140,11 +140,8 @@ impl ZookeeperServer {
         let listener = TcpListener::bind(listen_addr).await?;
         let actual_addr = listener.local_addr()?;
 
-        info!("ZooKeeper server starting on {}", actual_addr);
-        let _ = status_tx.send(format!(
-            "[INFO] ZooKeeper server listening on {}",
-            actual_addr
-        ));
+        crate::logging::emit::Log::to(&status_tx)
+            .info(format!("ZooKeeper server listening on {}", actual_addr));
         let server = Arc::new(ZookeeperServer::new(
             llm_client,
             app_state.clone(),
@@ -207,11 +204,8 @@ impl ZookeeperServer {
                         // A persistent accept error (EMFILE, ENFILE, socket torn down) recurs
                         // immediately, so continuing here spins a hot loop that floods the
                         // unbounded status channel. Give up the listener instead.
-                        error!("ZooKeeper accept error, stopping accept loop: {}", e);
-                        let _ = status_tx_clone.send(format!(
-                            "[ERROR] ZooKeeper accept failed, listener stopped: {}",
-                            e
-                        ));
+                        crate::logging::emit::Log::to(&status_tx_clone)
+                            .error(format!("ZooKeeper accept failed, listener stopped: {}", e));
                         break;
                     }
                 }
@@ -754,16 +748,11 @@ impl ZookeeperServer {
                         // leaves the client blocked until its own session timeout. Answer with
                         // a bare error header — no body, and nothing derived from netget's
                         // internals can appear in one.
-                        warn!(
+                        crate::logging::emit::Log::to(&server.status_tx).warn(format!(
                             "ZooKeeper connection {} decision=fail_closed_no_answer operation={} \
                              xid={}: handler produced no zookeeper_response; replying \
                              ZSYSTEMERROR",
                             connection_id, request_info.operation, request_info.xid
-                        );
-                        let _ = server.status_tx.send(format!(
-                            "[WARN] ZooKeeper {} on connection {} unanswered by handler; \
-                             replying ZSYSTEMERROR",
-                            request_info.operation, connection_id
                         ));
                         Self::write_frame(
                             write_half,
@@ -789,17 +778,20 @@ impl ZookeeperServer {
                             (ZSYSTEMERROR, "fail_closed_llm_error")
                         }
                     };
-                    error!(
+                    let log = crate::logging::emit::Log::to(&server.status_tx);
+                    log.error(format!(
                         "ZooKeeper connection {} decision={} operation={} xid={} \
                          reply_error_code={}: LLM error: {}",
-                        connection_id, class, request_info.operation, request_info.xid, code, e
-                    );
-                    let _ = server.status_tx.send(format!(
-                        "[ERROR] ZooKeeper {} on connection {} failed ({}): {}",
-                        request_info.operation,
                         connection_id,
                         class,
+                        request_info.operation,
+                        request_info.xid,
+                        code,
                         crate::utils::truncate_for_log(&e.to_string(), 200)
+                    ));
+                    log.debug(format!(
+                        "ZooKeeper connection {} xid={} full LLM error: {:#}",
+                        connection_id, request_info.xid, e
                     ));
                     Self::write_frame(
                         write_half,

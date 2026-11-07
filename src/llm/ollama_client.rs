@@ -1675,12 +1675,25 @@ impl OllamaClient {
     /// stream, and onto [`crate::state::AppState`] so `get_status` can show it. A missing
     /// model is answered in milliseconds, so without this the only trace was a per-request
     /// failure entry that did not say why.
+    ///
+    /// For a credential-bearing request (`private_payloads`) the backend's own words are left
+    /// out of the log line and of `get_status`, because a backend that reflects the request
+    /// in its error body would otherwise write the credential there. Kind, model and endpoint
+    /// remain; the returned error keeps the detail for `record_backend_outcome` to hide.
     #[cfg(not(target_arch = "wasm32"))]
-    fn report_backend_failure(&self, failure: crate::llm::LlmBackendError) -> anyhow::Error {
-        self.log()
-            .error(format!("LLM backend failure: {}", failure));
+    fn report_backend_failure(
+        &self,
+        failure: crate::llm::LlmBackendError,
+        private_payloads: bool,
+    ) -> anyhow::Error {
+        let shown = if private_payloads {
+            failure.without_detail()
+        } else {
+            failure.clone()
+        };
+        self.log().error(format!("LLM backend failure: {}", shown));
         if let Some(state) = &self.app_state {
-            state.note_llm_backend_failure(failure.to_string());
+            state.note_llm_backend_failure(shown.to_string());
         }
         anyhow::Error::new(failure)
     }
@@ -1874,7 +1887,7 @@ impl OllamaClient {
                 if !http_response.status().is_success() {
                     let failure =
                         backend_response_error(backend, &endpoint, model, http_response).await;
-                    return Err(self.report_backend_failure(failure));
+                    return Err(self.report_backend_failure(failure, private_payloads));
                 }
 
                 let acc = self
@@ -1949,7 +1962,7 @@ impl OllamaClient {
                         http_response,
                     )
                     .await;
-                    return Err(self.report_backend_failure(failure));
+                    return Err(self.report_backend_failure(failure, private_payloads));
                 }
 
                 let acc = self
@@ -2393,7 +2406,7 @@ impl OllamaClient {
         if !http_response.status().is_success() {
             let failure =
                 backend_response_error(backend, &endpoint, &request.model, http_response).await;
-            return Err(self.report_backend_failure(failure));
+            return Err(self.report_backend_failure(failure, private_payloads));
         }
 
         let acc = self
@@ -2523,7 +2536,7 @@ impl OllamaClient {
                 http_response,
             )
             .await;
-            return Err(self.report_backend_failure(failure));
+            return Err(self.report_backend_failure(failure, private_payloads));
         }
 
         let acc = self

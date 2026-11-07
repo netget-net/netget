@@ -199,9 +199,8 @@ impl DockerServer {
                                 app_state_for_close
                                     .close_connection_on_server(server_id, connection_id)
                                     .await;
-                                let _ = status_for_close.send(format!(
-                                    "[INFO] Docker connection {connection_id} closed"
-                                ));
+                                crate::logging::emit::Log::to(&status_for_close)
+                                    .info(format!("Docker connection {connection_id} closed"));
                                 let _ = status_for_close.send("__UPDATE_UI__".to_string());
                             })
                             .await;
@@ -336,10 +335,7 @@ async fn handle_request(req: Request<Incoming>, ctx: RequestContext) -> Response
     let raw_path = parts.uri.path().to_string();
     let query = parse_query(parts.uri.query().unwrap_or(""));
 
-    debug!("Docker {} {}", method, raw_path);
-    let _ = ctx
-        .status_tx
-        .send(format!("[DEBUG] Docker {method} {raw_path}"));
+    crate::logging::emit::Log::to(&ctx.status_tx).debug(format!("Docker {method} {raw_path}"));
 
     // Bounded, and read before routing so the bound holds on every path.
     let body_len = match http_body_util::Limited::new(body, MAX_REQUEST_BODY_BYTES)

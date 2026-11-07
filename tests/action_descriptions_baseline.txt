@@ -252,12 +252,6 @@ desc/param/server:Memcached/memcached_delete/event_data/key
 desc/param/server:Memcached/memcached_store/event_data/value
 desc/param/server:Memcached/memcached_touch/event_data/exptime
 desc/param/server:Memcached/memcached_touch/event_data/key
-desc/param/server:Mercurial/hg_branchmap/action/hg_error/message
-desc/param/server:Mercurial/hg_capabilities/action/hg_error/message
-desc/param/server:Mercurial/hg_error/message
-desc/param/server:Mercurial/hg_getbundle/action/hg_error/message
-desc/param/server:Mercurial/hg_heads/action/hg_error/message
-desc/param/server:Mercurial/hg_listkeys/action/hg_error/message
 desc/param/server:MongoDB/error_response/message
 desc/param/server:MongoDB/mongodb_command/action/error_response/message
 desc/param/server:MSSQL/mssql_login/action/mssql_error_response/message

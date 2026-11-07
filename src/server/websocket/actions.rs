@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 // ============================================================================
 // Outbound message channel
@@ -340,10 +340,7 @@ impl WebSocketProtocol {
     }
 
     fn log(&self, message: String) {
-        debug!("{}", message);
-        if let Some(tx) = &self.status_tx {
-            let _ = tx.send(format!("[DEBUG] {}", message));
-        }
+        crate::logging::emit::Log::new(self.status_tx.as_ref()).debug(message);
     }
 
     fn conn_label(&self) -> String {
@@ -377,10 +374,7 @@ impl WebSocketProtocol {
                     chosen,
                     self.offered_subprotocols
                 );
-                warn!("{}", message);
-                if let Some(tx) = &self.status_tx {
-                    let _ = tx.send(format!("[WARN] {}", message));
-                }
+                crate::logging::emit::Log::new(self.status_tx.as_ref()).warn(message);
                 None
             }
             other => other,
@@ -462,10 +456,7 @@ impl WebSocketProtocol {
                  connection open is treated as no greeting",
                 self.conn_label()
             );
-            warn!("{}", message);
-            if let Some(tx) = &self.status_tx {
-                let _ = tx.send(format!("[WARN] {}", message));
-            }
+            crate::logging::emit::Log::new(self.status_tx.as_ref()).warn(message);
             return Ok(ActionResult::Custom {
                 name: "send_websocket_text".to_string(),
                 data: json!({ "bytes": 0, "dropped": true }),
