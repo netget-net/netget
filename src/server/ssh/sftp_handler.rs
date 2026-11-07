@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
 /// LLM-controlled SFTP handler
 ///
@@ -206,11 +206,9 @@ impl LlmSftpHandler {
                 if !execution_result.raw_actions.is_empty() {
                     let pretty = serde_json::to_string_pretty(&execution_result.raw_actions[0])
                         .unwrap_or_else(|_| format!("{:?}", execution_result.raw_actions[0]));
-                    trace!("SFTP LLM response ({}) JSON:\n{}", operation, pretty);
-                    let _ = self.status_tx.send(format!(
-                        "[TRACE] SFTP LLM response ({}) JSON:\r\n{}",
-                        operation,
-                        pretty.replace('\n', "\r\n")
+                    Log::to(&self.status_tx).trace(format!(
+                        "SFTP LLM response ({}) JSON:\n{}",
+                        operation, pretty
                     ));
                 }
 
@@ -239,14 +237,14 @@ impl LlmSftpHandler {
                 // classified as a generic one and a saturated backend was indistinguishable
                 // from a broken one. `context()`/plain propagation keep the chain intact.
                 let failure = WireFailure::classify(&e);
-                error!(
+                let log = Log::to(&self.status_tx);
+                log.error(format!(
                     "SFTP {}: decision=fail_closed_backend_error category={:?}: {}",
-                    operation, failure, e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[ERROR] SFTP {}: decision=fail_closed_backend_error category={:?}",
-                    operation, failure
+                    operation,
+                    failure,
+                    crate::utils::truncate_for_log(&e.to_string(), 200)
                 ));
+                log.debug(format!("SFTP {} backend error chain: {:#}", operation, e));
                 Err(e)
             }
         }
@@ -293,17 +291,15 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
         match self.llm_sftp_operation("opendir", params).await {
             Ok(response) => {
                 if let Some(status) = sftp_error_status(&response) {
-                    debug!("SFTP opendir refused by handler for {}: {:?}", path, status);
-                    let _ = self.status_tx.send(format!(
-                        "[DEBUG] SFTP opendir for {path}: decision=model_reject"
+                    Log::to(&self.status_tx).debug(format!(
+                        "SFTP opendir for {path}: decision=model_reject ({status:?})"
                     ));
                     return Err(status);
                 }
 
                 if sftp_no_answer(&response) {
-                    error!("SFTP opendir for {}: decision=fail_closed_no_answer", path);
-                    let _ = self.status_tx.send(format!(
-                        "[ERROR] SFTP opendir for {path}: decision=fail_closed_no_answer"
+                    Log::to(&self.status_tx).error(format!(
+                        "SFTP opendir for {path}: decision=fail_closed_no_answer"
                     ));
                     return Err(BACKEND_FAILURE_STATUS);
                 }
@@ -349,9 +345,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
             }
             Err(_) => {
                 // Already logged with its category by `llm_sftp_operation`.
-                debug!("SFTP response: SSH_FXP_STATUS id={}, status=FAILURE", id);
-                let _ = self.status_tx.send(format!(
-                    "[DEBUG] SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (opendir '{}')",
+                Log::to(&self.status_tx).debug(format!(
+                    "SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (opendir '{}')",
                     id, path
                 ));
 
@@ -405,9 +400,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                         // An empty listing is a legitimate answer and looks nothing like this:
                         // it arrives as `sftp_directory_listing` with no `entries`. A reply
                         // with no fields at all means the handler said nothing.
-                        error!("SFTP readdir for {}: decision=fail_closed_no_answer", path);
-                        let _ = self.status_tx.send(format!(
-                            "[ERROR] SFTP readdir for {path}: decision=fail_closed_no_answer"
+                        Log::to(&self.status_tx).error(format!(
+                            "SFTP readdir for {path}: decision=fail_closed_no_answer"
                         ));
                         return Err(BACKEND_FAILURE_STATUS);
                     }
@@ -472,9 +466,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                 }
                 Err(_) => {
                     // Already logged with its category by `llm_sftp_operation`.
-                    debug!("SFTP response: SSH_FXP_STATUS id={}, status=FAILURE", id);
-                    let _ = self.status_tx.send(format!(
-                        "[DEBUG] SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (readdir '{}')",
+                    Log::to(&self.status_tx).debug(format!(
+                        "SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (readdir '{}')",
                         id, handle
                     ));
 
@@ -482,10 +475,7 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                 }
             }
         } else {
-            error!("SFTP readdir: invalid handle {}", handle);
-            let _ = self
-                .status_tx
-                .send(format!("[ERROR] SFTP readdir: invalid handle {}", handle));
+            Log::to(&self.status_tx).error(format!("SFTP readdir: invalid handle {}", handle));
 
             // DEBUG: SFTP error response
             Log::to(&self.status_tx).debug(format!(
@@ -520,17 +510,15 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
         match self.llm_sftp_operation("open", params).await {
             Ok(response) => {
                 if let Some(status) = sftp_error_status(&response) {
-                    debug!("SFTP open refused by handler for {}: {:?}", path, status);
-                    let _ = self.status_tx.send(format!(
-                        "[DEBUG] SFTP open for {path}: decision=model_reject"
+                    Log::to(&self.status_tx).debug(format!(
+                        "SFTP open for {path}: decision=model_reject ({status:?})"
                     ));
                     return Err(status);
                 }
 
                 if sftp_no_answer(&response) {
-                    error!("SFTP open for {}: decision=fail_closed_no_answer", path);
-                    let _ = self.status_tx.send(format!(
-                        "[ERROR] SFTP open for {path}: decision=fail_closed_no_answer"
+                    Log::to(&self.status_tx).error(format!(
+                        "SFTP open for {path}: decision=fail_closed_no_answer"
                     ));
                     return Err(BACKEND_FAILURE_STATUS);
                 }
@@ -573,9 +561,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
             }
             Err(_) => {
                 // Already logged with its category by `llm_sftp_operation`.
-                debug!("SFTP response: SSH_FXP_STATUS id={}, status=FAILURE", id);
-                let _ = self.status_tx.send(format!(
-                    "[DEBUG] SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (open '{}')",
+                Log::to(&self.status_tx).debug(format!(
+                    "SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (open '{}')",
                     id, path
                 ));
 
@@ -628,9 +615,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                         // Without this the missing `content` defaults to "", `offset >= 0` is
                         // immediately past the end, and the client is told EOF — i.e. it
                         // downloads a successful zero-byte file and reports no error at all.
-                        error!("SFTP read for {}: decision=fail_closed_no_answer", path);
-                        let _ = self.status_tx.send(format!(
-                            "[ERROR] SFTP read for {path}: decision=fail_closed_no_answer"
+                        Log::to(&self.status_tx).error(format!(
+                            "SFTP read for {path}: decision=fail_closed_no_answer"
                         ));
                         return Err(BACKEND_FAILURE_STATUS);
                     }
@@ -690,9 +676,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                     // it at offset 0 writes out a complete zero-byte file and exits 0, so a
                     // backend outage silently truncated every download. Already logged with
                     // its category by `llm_sftp_operation`.
-                    debug!("SFTP response: SSH_FXP_STATUS id={}, status=FAILURE", id);
-                    let _ = self.status_tx.send(format!(
-                        "[DEBUG] SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (read '{}')",
+                    Log::to(&self.status_tx).debug(format!(
+                        "SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (read '{}')",
                         id, handle
                     ));
 
@@ -700,10 +685,7 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                 }
             }
         } else {
-            error!("SFTP read: invalid handle {}", handle);
-            let _ = self
-                .status_tx
-                .send(format!("[ERROR] SFTP read: invalid handle {}", handle));
+            Log::to(&self.status_tx).error(format!("SFTP read: invalid handle {}", handle));
 
             // DEBUG: SFTP error response
             Log::to(&self.status_tx).debug(format!(
@@ -779,9 +761,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
         match self.llm_sftp_operation("lstat", params).await {
             Ok(response) => {
                 if let Some(status) = sftp_error_status(&response) {
-                    debug!("SFTP lstat refused by handler for {}: {:?}", path, status);
-                    let _ = self.status_tx.send(format!(
-                        "[DEBUG] SFTP lstat for {path}: decision=model_reject"
+                    Log::to(&self.status_tx).debug(format!(
+                        "SFTP lstat for {path}: decision=model_reject ({status:?})"
                     ));
                     return Err(status);
                 }
@@ -792,9 +773,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
                     // nothing stats *any* path successfully, including ones it would have
                     // refused. That is the fail-open shape CLAUDE.md calls the most dangerous
                     // pattern here.
-                    error!("SFTP lstat for {}: decision=fail_closed_no_answer", path);
-                    let _ = self.status_tx.send(format!(
-                        "[ERROR] SFTP lstat for {path}: decision=fail_closed_no_answer"
+                    Log::to(&self.status_tx).error(format!(
+                        "SFTP lstat for {path}: decision=fail_closed_no_answer"
                     ));
                     return Err(BACKEND_FAILURE_STATUS);
                 }
@@ -846,9 +826,8 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
             }
             Err(_) => {
                 // Already logged with its category by `llm_sftp_operation`.
-                debug!("SFTP response: SSH_FXP_STATUS id={}, status=FAILURE", id);
-                let _ = self.status_tx.send(format!(
-                    "[DEBUG] SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (lstat '{}')",
+                Log::to(&self.status_tx).debug(format!(
+                    "SFTP response: SSH_FXP_STATUS id={}, status=FAILURE (lstat '{}')",
                     id, path
                 ));
 
@@ -883,10 +862,7 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
             ));
             self.lstat(id, path).await
         } else {
-            error!("SFTP fstat: invalid handle {}", handle);
-            let _ = self
-                .status_tx
-                .send(format!("[ERROR] SFTP fstat: invalid handle {}", handle));
+            Log::to(&self.status_tx).error(format!("SFTP fstat: invalid handle {}", handle));
 
             // DEBUG: SFTP error response
             Log::to(&self.status_tx).debug(format!(
@@ -959,10 +935,7 @@ impl russh_sftp::server::Handler for LlmSftpHandler {
     }
 
     fn unimplemented(&self) -> Self::Error {
-        error!("SFTP unimplemented packet received");
-        let _ = self
-            .status_tx
-            .send("[ERROR] SFTP unimplemented packet received".to_string());
+        Log::to(&self.status_tx).error("SFTP unimplemented packet received");
         StatusCode::OpUnsupported
     }
 }

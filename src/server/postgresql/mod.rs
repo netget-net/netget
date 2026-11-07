@@ -4,6 +4,7 @@ pub mod actions;
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
 use crate::state::app_state::AppState;
@@ -29,7 +30,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 /// PostgreSQL server implementation
 pub struct PostgresqlServer {
@@ -68,11 +69,7 @@ impl PostgresqlServer {
         let listener = TcpListener::bind(listen_addr).await?;
         let actual_addr = listener.local_addr()?;
 
-        info!("PostgreSQL server starting on {}", actual_addr);
-        let _ = status_tx.send(format!(
-            "[INFO] PostgreSQL server listening on {}",
-            actual_addr
-        ));
+        Log::to(&status_tx).info(format!("PostgreSQL server listening on {}", actual_addr));
 
         let server = Arc::new(PostgresqlServer::new(
             llm_client,
@@ -240,12 +237,9 @@ impl PostgresqlServer {
                                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData => {
                                     // The vendored pgwire refused a message that does not
                                     // decode and has already answered it FATAL 08P01.
-                                    error!(
-                                        "PostgreSQL connection {} decision=refused_malformed_message: {}",
-                                        connection_id, e
-                                    );
-                                    let _ = conn_status_tx.send(format!(
-                                        "[WARN] PostgreSQL connection {} closed: the peer sent a \
+                                    Log::to(&conn_status_tx).warn(format!(
+                                        "PostgreSQL connection {} closed \
+                                         decision=refused_malformed_message: the peer sent a \
                                          malformed message ({})",
                                         connection_id, e
                                     ));
@@ -254,16 +248,11 @@ impl PostgresqlServer {
                                     error!("PostgreSQL connection error: {:?}", e);
                                 }
                                 Err(join_error) if join_error.is_panic() => {
-                                    error!(
+                                    Log::to(&conn_status_tx).error(format!(
                                         "PostgreSQL connection {} decision=connection_aborted_decoder_panic: \
                                          pgwire panicked decoding a message from the peer (a \
                                          malformed frame; IMPROVEMENTS #77). The connection is \
                                          closed; the server is unaffected.",
-                                        connection_id
-                                    );
-                                    let _ = conn_status_tx.send(format!(
-                                        "[ERROR] PostgreSQL connection {} killed by a malformed \
-                                         message (pgwire decoder panic)",
                                         connection_id
                                     ));
                                 }
@@ -499,10 +488,7 @@ impl PostgresqlHandler {
         // must not count any of it, so the connection is marked busy for the whole of it and
         // the guard's `Drop` clears the mark on every exit path, including the `?`-shaped ones.
         let _busy = self.activity.busy();
-        debug!("PostgreSQL query: {}", sql);
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] PostgreSQL query: {}", sql));
+        Log::to(&self.status_tx).debug(format!("PostgreSQL query: {}", sql));
 
         self.record_stats(Some(sql.len() as u64), None, Some(1), None)
             .await;
@@ -546,14 +532,19 @@ impl PostgresqlHandler {
                 } else {
                     ("fail_closed_llm_error", "XX000")
                 };
-                error!(
-                    "PostgreSQL connection {} decision={} sqlstate={}: {}",
-                    self.connection_id, decision, code, e
-                );
                 let message = crate::utils::WireFailure::classify(&e).prefixed_text();
-                let _ = self
-                    .status_tx
-                    .send(format!("[ERROR] PostgreSQL {}: {}", code, message));
+                let log = Log::to(&self.status_tx);
+                log.error(format!(
+                    "PostgreSQL connection {} decision={} sqlstate={}: {}",
+                    self.connection_id,
+                    decision,
+                    code,
+                    crate::utils::truncate_for_log(&e.to_string(), 200)
+                ));
+                log.debug(format!(
+                    "PostgreSQL connection {} LLM error chain: {:#}",
+                    self.connection_id, e
+                ));
                 self.record_stats(None, Some(message.len() as u64), None, Some(1))
                     .await;
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
@@ -643,16 +634,12 @@ impl PostgresqlHandler {
                             .unwrap_or("Unknown error")
                             .to_string();
 
-                        let _ = self.status_tx.send(format!(
-                            "[ERROR] PostgreSQL error {} {}: {}",
-                            severity, code, message
-                        ));
                         // A refusal the model chose, not a backend failure — tagged so the log
                         // distinguishes the two, as `radius` does.
-                        warn!(
-                            "PostgreSQL connection {} decision=model_reject sqlstate={}: {}",
-                            self.connection_id, code, message
-                        );
+                        Log::to(&self.status_tx).warn(format!(
+                            "PostgreSQL connection {} decision=model_reject {} sqlstate={}: {}",
+                            self.connection_id, severity, code, message
+                        ));
                         self.record_stats(None, Some(message.len() as u64), None, Some(1))
                             .await;
 
@@ -689,14 +676,17 @@ impl PostgresqlHandler {
         // real one. Fail closed instead, with the same shape the backend-error path above uses
         // so the two are consistent on the wire. 02000 (no_data) is deliberately NOT used: it
         // would again assert something about the data rather than about netget.
-        warn!(
-            "PostgreSQL: no response action produced for {:?} (decision=fail_closed_no_action)",
-            sql
-        );
-        let _ = self.status_tx.send(
-            "[ERROR] PostgreSQL: no response action produced (decision=fail_closed_no_action)"
-                .to_string(),
-        );
+        // The statement text stays in the file log: it can carry a password literal.
+        let log = Log::to(&self.status_tx);
+        log.error(format!(
+            "PostgreSQL connection {}: no response action produced \
+             (decision=fail_closed_no_action)",
+            self.connection_id
+        ));
+        log.debug(format!(
+            "PostgreSQL connection {} statement with no response action: {:?}",
+            self.connection_id, sql
+        ));
         self.record_stats(
             None,
             Some(crate::utils::WireFailure::Unavailable.prefixed_text().len() as u64),

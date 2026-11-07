@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::mpsc;
-use tracing::debug;
 
 /// Cassandra protocol action handler
 pub struct CassandraProtocol {
@@ -226,8 +225,7 @@ impl Server for CassandraProtocol {
 
 impl CassandraProtocol {
     fn execute_cassandra_ready(&self) -> Result<ActionResult> {
-        debug!("Cassandra READY response");
-        let _ = self.status_tx.send(format!("[DEBUG] Cassandra → READY"));
+        crate::logging::emit::Log::to(&self.status_tx).debug("Cassandra → READY");
 
         Ok(ActionResult::Custom {
             name: "cassandra_ready".to_string(),
@@ -241,11 +239,8 @@ impl CassandraProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("org.apache.cassandra.auth.PasswordAuthenticator");
 
-        debug!("Cassandra AUTHENTICATE challenge: {}", authenticator);
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Cassandra → AUTHENTICATE ({})",
-            authenticator
-        ));
+        crate::logging::emit::Log::to(&self.status_tx)
+            .debug(format!("Cassandra → AUTHENTICATE ({})", authenticator));
 
         Ok(ActionResult::Custom {
             name: "cassandra_authenticate".to_string(),
@@ -273,13 +268,10 @@ impl CassandraProtocol {
                 .unwrap_or_default()
             });
 
-        debug!(
-            "Cassandra SUPPORTED response with {} option(s)",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Cassandra → SUPPORTED with {} option(s)",
             options.len()
-        );
-        let _ = self
-            .status_tx
-            .send("[DEBUG] Cassandra → SUPPORTED".to_string());
+        ));
 
         Ok(ActionResult::Custom {
             name: "cassandra_supported".to_string(),
@@ -298,14 +290,8 @@ impl CassandraProtocol {
             .and_then(|v| v.as_array())
             .context("Missing 'rows' array")?;
 
-        debug!(
-            "Cassandra result rows: {} columns, {} rows",
-            columns.len(),
-            rows.len()
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Cassandra → Result set: {} columns, {} rows",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Cassandra → Result set: {} columns, {} rows",
             columns.len(),
             rows.len()
         ));
@@ -327,14 +313,8 @@ impl CassandraProtocol {
 
         let params = action.get("params").and_then(|v| v.as_array()).cloned();
 
-        debug!(
-            "Cassandra prepared statement: {} result columns, {} params",
-            columns.len(),
-            params.as_ref().map(|p| p.len()).unwrap_or(0)
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Cassandra → Prepared statement ({} columns, {} params)",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Cassandra → Prepared statement ({} result columns, {} params)",
             columns.len(),
             params.as_ref().map(|p| p.len()).unwrap_or(0)
         ));
@@ -349,11 +329,7 @@ impl CassandraProtocol {
     }
 
     fn execute_cassandra_auth_success(&self) -> Result<ActionResult> {
-        debug!("Cassandra authentication successful");
-
-        let _ = self
-            .status_tx
-            .send(format!("[DEBUG] Cassandra → AUTH_SUCCESS"));
+        crate::logging::emit::Log::to(&self.status_tx).debug("Cassandra → AUTH_SUCCESS");
 
         Ok(ActionResult::Custom {
             name: "cassandra_auth_success".to_string(),
@@ -384,13 +360,8 @@ impl CassandraProtocol {
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown error");
 
-        debug!(
-            "Cassandra error response: 0x{:04X} - {}",
-            error_code, message
-        );
-
-        let _ = self.status_tx.send(format!(
-            "[DEBUG] Cassandra ✗ Error 0x{:04X}: {}",
+        crate::logging::emit::Log::to(&self.status_tx).debug(format!(
+            "Cassandra ✗ Error 0x{:04X}: {}",
             error_code, message
         ));
 

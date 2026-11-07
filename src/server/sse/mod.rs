@@ -378,12 +378,12 @@ fn response(status: u16, content_type: &str, body: &[u8], extra: &str) -> Vec<u8
 
 fn outcome(ctx: &SpawnContext, id: ConnectionId, path: &str, decision: &str) {
     let line = format!("SSE connection {id} path={path} decision={decision}");
+    let log = crate::logging::emit::Log::to(&ctx.status_tx);
     if decision.starts_with("fail_closed") {
-        tracing::warn!("{line}");
+        log.warn(line);
     } else {
-        tracing::info!("{line}");
+        log.info(line);
     }
-    let _ = ctx.status_tx.send(format!("[INFO] {line}"));
 }
 
 /// What the model's answer says to do with the request.

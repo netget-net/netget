@@ -71,7 +71,7 @@ published to the GitHub Container Registry as `ghcr.io/netget-net/netget`, one m
 for `linux/amd64` and `linux/arm64` (Docker pulls the one matching the host):
 
 ```bash
-docker pull ghcr.io/netget-net/netget            # latest; or :0.3.9 for a release
+docker pull ghcr.io/netget-net/netget            # latest; release tags (:X.Y.Z) from v0.3.10 on
 docker run --rm -p 18040:18040 -e NETGET_MCP_TOKEN="$(openssl rand -hex 32)" \
     ghcr.io/netget-net/netget
 ```

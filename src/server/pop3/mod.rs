@@ -440,9 +440,8 @@ impl Pop3Server {
                         // Do not continue: an accept() error here is persistent (the listener
                         // is gone, or the process is out of descriptors), and looping on it
                         // spins a core at 100% while the server still reports Running.
-                        error!("Failed to accept POP3 connection, stopping listener: {}", e);
-                        let _ = status_tx.send(format!(
-                            "[ERROR] POP3 listener stopped, failed to accept connection: {}",
+                        Log::to(&status_tx).error(format!(
+                            "POP3 listener stopped, failed to accept connection: {}",
                             e
                         ));
                         break;
@@ -601,19 +600,18 @@ impl Pop3Session {
                 } else {
                     "fail_closed_llm_error"
                 };
-                error!(
-                    "POP3 greeting on connection {} decision={}: {}",
-                    connection_id, token, e
-                );
-                let _ = status_tx.send(format!(
-                    "[ERROR] POP3 greeting on connection {} decision={}",
-                    connection_id, token
-                ));
                 let reply = pop3_failure_reply(&e);
-                let _ = status_tx.send(format!(
-                    "[ERROR] POP3 connection {} refused: {}",
+                let log = Log::to(&status_tx);
+                log.error(format!(
+                    "POP3 greeting on connection {} decision={}: {}; refused: {}",
                     connection_id,
+                    token,
+                    crate::utils::truncate_for_log(&e.to_string(), 200),
                     reply.trim_end()
+                ));
+                log.debug(format!(
+                    "POP3 greeting on connection {} LLM error chain: {:#}",
+                    connection_id, e
                 ));
                 let mut writer = write_half.lock().await;
                 let _ = writer.write_all(reply.as_bytes()).await;
@@ -683,14 +681,11 @@ impl Pop3Session {
                     let reply = format!(
                         "-ERR [SYS/PERM] command line exceeds {MAX_COMMAND_BYTES} bytes\r\n"
                     );
-                    error!(
+                    Log::to(&status_tx).error(format!(
                         "POP3 connection {} sent a command line over {} bytes with no newline; \
-                         decision=fail_closed_oversized_command",
-                        connection_id, MAX_COMMAND_BYTES
-                    );
-                    let _ = status_tx.send(format!(
-                        "[ERROR] POP3 connection {} refused: {}",
+                         decision=fail_closed_oversized_command; refused: {}",
                         connection_id,
+                        MAX_COMMAND_BYTES,
                         reply.trim_end()
                     ));
                     {
@@ -741,12 +736,8 @@ impl Pop3Session {
             );
 
             if verb == "CAPA" {
-                info!(
+                Log::to(&status_tx).info(format!(
                     "POP3 CAPA on connection {} decision=netget_answer: answered by NetGet",
-                    connection_id
-                );
-                let _ = status_tx.send(format!(
-                    "[INFO] POP3 CAPA on connection {} decision=netget_answer",
                     connection_id
                 ));
                 {
@@ -864,19 +855,19 @@ impl Pop3Session {
                     } else {
                         "fail_closed_llm_error"
                     };
-                    error!(
-                        "POP3 {} on connection {} decision={}: {}",
-                        verb, connection_id, token, e
-                    );
-                    let _ = status_tx.send(format!(
-                        "[ERROR] POP3 {} on connection {} decision={}",
-                        verb, connection_id, token
-                    ));
                     let reply = pop3_failure_reply(&e);
-                    let _ = status_tx.send(format!(
-                        "[ERROR] POP3 connection {} replying: {}",
+                    let log = Log::to(&status_tx);
+                    log.error(format!(
+                        "POP3 {} on connection {} decision={}: {}; replying: {}",
+                        verb,
                         connection_id,
+                        token,
+                        crate::utils::truncate_for_log(&e.to_string(), 200),
                         reply.trim_end()
+                    ));
+                    log.debug(format!(
+                        "POP3 {} on connection {} LLM error chain: {:#}",
+                        verb, connection_id, e
                     ));
                     let mut writer = write_half.lock().await;
                     let _ = writer.write_all(reply.as_bytes()).await;
@@ -962,16 +953,12 @@ impl Pop3Session {
                         );
                         (answer.replies, control)
                     } else {
-                        error!(
+                        Log::to(&status_tx).error(format!(
                             "POP3 connection {} decision=fail_closed_batch_mismatch: {} replies \
                              for {} pipelined commands; answering -ERR to each",
                             connection_id,
                             answer.replies.len(),
                             total
-                        );
-                        let _ = status_tx.send(format!(
-                            "[ERROR] POP3 connection {} decision=fail_closed_batch_mismatch",
-                            connection_id
                         ));
                         let reply = format!(
                             "-ERR [SYS/TEMP] {}\r\n",
@@ -987,13 +974,17 @@ impl Pop3Session {
                     } else {
                         "fail_closed_llm_error"
                     };
-                    error!(
+                    let log = Log::to(&status_tx);
+                    log.error(format!(
                         "POP3 {} pipelined commands on connection {} decision={}: {}",
-                        total, connection_id, token, e
-                    );
-                    let _ = status_tx.send(format!(
-                        "[ERROR] POP3 pipelined commands on connection {} decision={}",
-                        connection_id, token
+                        total,
+                        connection_id,
+                        token,
+                        crate::utils::truncate_for_log(&e.to_string(), 200)
+                    ));
+                    log.debug(format!(
+                        "POP3 pipelined commands on connection {} LLM error chain: {:#}",
+                        connection_id, e
                     ));
                     let reply = pop3_failure_reply(&e).into_bytes();
                     (vec![reply; total], SessionControl::Close)
@@ -1067,13 +1058,9 @@ impl Pop3Session {
         let failures = llm_result.failures.len();
         let mut llm_result = llm_result;
         if let Some(assembled) = assemble_multiline_answer(&command, &llm_result) {
-            info!(
+            Log::to(&status_tx).info(format!(
                 "POP3 {} on connection {} decision=multiline_assembled: a +OK status line and \
                  the message as raw text, framed by NetGet",
-                command, connection_id
-            );
-            let _ = status_tx.send(format!(
-                "[INFO] POP3 {} on connection {} decision=multiline_assembled",
                 command, connection_id
             ));
             llm_result.protocol_results = vec![ActionResult::Output(assembled)];
@@ -1145,17 +1132,13 @@ impl Pop3Session {
         }
 
         if dropped_replies > 0 {
-            tracing::warn!(
+            Log::to(&status_tx).warn(format!(
                 "POP3 {} on connection {} decision=duplicate_response_dropped: {} extra \
                  repl{} not sent; one command gets one reply",
                 command,
                 connection_id,
                 dropped_replies,
                 if dropped_replies == 1 { "y" } else { "ies" }
-            );
-            let _ = status_tx.send(format!(
-                "[WARN] POP3 {} on connection {} decision=duplicate_response_dropped ({})",
-                command, connection_id, dropped_replies
             ));
         }
 
