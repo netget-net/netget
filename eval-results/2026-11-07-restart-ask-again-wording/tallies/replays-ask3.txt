@@ -1,0 +1,42 @@
+seed   1 send_command "Paris"
+seed   2 send_command "Paris"
+seed   3 wait_for_more
+seed   4 send_command "Paris"
+seed   5 send_command "Paris"
+seed   6 send_command "Paris"
+seed   7 send_command "Paris"
+seed   8 send_command "Paris"
+seed   9 send_command "Paris"
+seed  10 send_command "Paris"
+seed  11 send_command "Paris"
+seed  12 send_command "Paris"
+seed  13 send_command "Paris"
+seed  14 send_command "Paris"
+seed  15 send_command "Paris"
+seed  16 wait_for_more
+seed  17 send_command "Paris"
+seed  18 send_command "Paris"
+seed  19 send_command "Paris"
+seed  20 send_command "Paris"
+TALLY 00004-api_generate.req.json combo_cur_W5.py {'send_command "Paris"': 18, 'wait_for_more': 2}
+seed   1 disconnect
+seed   2 send_command "4"
+seed   3 send_command "4"
+seed   4 disconnect
+seed   5 wait_for_more
+seed   6 (unparseable)
+seed   7 send_command "answer"
+seed   8 send_command "red"
+seed   9 send_command "4"
+seed  10 send_command "blue"
+seed  11 disconnect
+seed  12 command "answer"
+seed  13 (none)
+seed  14 send_command "4"
+seed  15 None "answer"
+seed  16 send_command "4"
+seed  17 (unparseable)
+seed  18 send_command "blue"; disconnect
+seed  19 (unparseable)
+seed  20 send_command "help"
+TALLY 00043-api_generate.req.json ask_W5.py {'send_command "4"': 5, 'disconnect': 3, '(unparseable)': 3, 'wait_for_more': 1, 'send_command "answer"': 1, 'send_command "red"': 1, 'send_command "blue"': 1, 'command "answer"': 1, '(none)': 1, 'None "answer"': 1, 'send_command "blue"; disconnect': 1, 'send_command "help"': 1}

@@ -28,8 +28,9 @@
 //! - [`SKIP_REPEAT`], or a [`SEND_AGAIN`] whose trigger is not in both, drops the repeated
 //!   actions and sends whatever followed them in the answer. When nothing follows them — the
 //!   whole answer was the restart — the model is asked once more for the same event, told
-//!   that the opening's actions are done and not to be sent again ([`continue_instruction`]),
-//!   and its answer is sent without any of them ([`without_opening_actions`]). That is what
+//!   that the lines or commands the opening sent are done and must not be sent again, while its
+//!   action is still the way to send anything new ([`continue_instruction`]), and its answer is
+//!   sent without any of them ([`without_opening_actions`]). That is what
 //!   keeps a conversation going: the model has not answered the message yet, it has only
 //!   repeated itself. Dropping every opening action there, not only a restart from the top,
 //!   is measured too: asked "what next", llama3.1:8b answered a redis PONG with `GET mykey`,
@@ -208,12 +209,40 @@ impl Checked {
 /// hello and then answer each question answered the first question with "hello" again; with
 /// the repeat dropped and nothing else in the answer, the client said nothing and the server
 /// waited for an answer that never came.
+///
+/// It says the opening's *content* is done and names its action as still the way to send
+/// anything new. Saying the actions themselves were "not to be sent again" reads as the verb
+/// being spent. Replayed with llama3.1:8b over seeds, against that wording: a client told to
+/// disconnect on `DONE` disconnected on 10 of 20 instead of 0 (it sent its `PING` again, which
+/// is dropped as a repeat, so it said nothing and never hung up); a telnet quiz told `BYE`
+/// disconnected on 12 of 20 instead of 4; a redis client told to stop after `PING`, `GET mykey`
+/// sent a new command on 1 of 80 instead of 7. Telling the model the action "is not used up"
+/// did worse for that redis client (15 of 80), and adding "including your answer to the latest
+/// message" worse still (10 of 40). `eval-results/2026-11-07-restart-ask-again-wording/` has
+/// the replays.
 pub fn continue_instruction(instruction: &str, opening: &[Value]) -> String {
     let done = opening.iter().map(describe).collect::<Vec<_>>().join("; ");
+    let mut verbs: Vec<&str> = Vec::new();
+    for name in opening
+        .iter()
+        .filter_map(|action| action.get("type").and_then(Value::as_str))
+    {
+        if !verbs.contains(&name) {
+            verbs.push(name);
+        }
+    }
+    let still = match verbs.as_slice() {
+        [] => String::new(),
+        [one] => format!("; {one} is still the way to send anything new"),
+        many => format!(
+            "; {} are still the way to send anything new",
+            many.join(", ")
+        ),
+    };
     format!(
-        "{instruction}\n\nAlready done at the start of this session, and not to be sent \
-         again: {done}. Answer the latest message with what your instruction calls for next; \
-         if nothing is left to do, answer with no actions."
+        "{instruction}\n\nAlready done at the start of this session: {done}. Those lines or \
+         commands must not be sent again{still}. Answer the latest message with what your \
+         instruction calls for next; if nothing is left to do, answer with no actions."
     )
 }
 

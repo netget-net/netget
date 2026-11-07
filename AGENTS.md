@@ -1028,7 +1028,9 @@ What does stop it is `client::restart_check`, in the one choke point every clien
   enough — the model said "send again" to a PONG. An unfounded trigger counts as `skip_repeat`.
 - On `skip_repeat` the repeated actions are dropped and the rest of the answer is sent. When
   nothing is left — the whole answer was the restart — the model is asked once more for the same
-  event, told the opening is done, and that answer is sent without any opening action. Without
+  event, told the lines or commands the opening sent are done and must not be sent again while
+  its action is still the way to send anything new, and that answer is sent without any opening
+  action. Without
   this second turn a conversation stalls: a quiz client that answered question 1 with "hello"
   again fell silent in 6 of 8 runs.
 - A question that cannot be asked or answered (budget spent, model error, unreadable answer)
@@ -1044,21 +1046,26 @@ instruction relies on self-initiated retries or repeats must be started with
 `restart_check: false` (`--restart-check off`).
 
 Measured with llama3.1:8b, seeds 42–49, each run 60 s (`--load`, `--llm-seed`, `batching: false`,
-servers answered by script handlers), check off → on:
+servers answered by script handlers), check off → on (6 November), and on again on 7 November
+after the telnet client's action descriptions and the asked-again wording below changed:
 
-| Case | Off | On |
-|---|---|---|
-| redis: "Send PING, then GET mykey, then stop sending commands." — exactly PING, GET on the wire | 0 of 8 (the script again on every reply until the run ended) | 7 of 8 (the eighth sent a literal `STOP`; nothing restarted) |
-| telnet, legitimate repeats: "Send PING. Each time the server answers AGAIN, send PING again. When it answers DONE, disconnect." — exactly 3 PINGs | 0 of 8 (seven sent 4–14 PINGs, DONE ignored; one never sent its first) | 7 of 8 (the eighth never sent its first PING, off or on) |
-| telnet quiz (conversational): "Say hello, then answer each question… When it says BYE, disconnect." — extra hellos on the wire / reached the last question / model answered question 1 | 105 / 1 of 8 / 7 of 8 | 19 / 3 of 8 / 8 of 8 |
+| Case | Off | On | On, 7 November |
+|---|---|---|---|
+| redis: "Send PING, then GET mykey, then stop sending commands." — exactly PING, GET on the wire | 0 of 8 (the script again on every reply until the run ended) | 7 of 8 (the eighth sent a literal `STOP`; nothing restarted) | 8 of 8 (7 of 8 that day with the old asked-again wording; the eighth sent `quit`) |
+| telnet, legitimate repeats: "Send PING. Each time the server answers AGAIN, send PING again. When it answers DONE, disconnect." — exactly 3 PINGs | 0 of 8 (seven sent 4–14 PINGs, DONE ignored; one never sent its first) | 7 of 8 (the eighth never sent its first PING, off or on) | 8 of 8 (8 of 8 with the old wording too) |
+| telnet quiz (conversational): "Say hello, then answer each question… When it says BYE, disconnect." — extra hellos on the wire / reached the last question / model answered question 1 | 105 / 1 of 8 / 7 of 8 | 19 / 3 of 8 / 8 of 8 | 0 / 2 of 8 / 7 of 8 (the eighth answered with JSON that does not parse; most runs stop at question 2, answered "2") |
 
 One quiz number goes the other way, and why matters: the answer to question 1 reached the
 server as a line in 7 of 8 runs off and 4 of 8 on. In the four the model answered with the
 telnet client's `send_text`, which sends no line ending; off, the restarted `hello` line that
 followed it happened to end the line (`Parishello`). That was the model picking the wrong
-telnet action, not the check, and the check made it likelier: the question asked again says
-`send_command {"command":"hello"}` is not to be sent again, and the model read the *action* as
-spent (22 of 30 replayed seeds answered with `send_text`). The telnet client's action
+telnet action, not the check, and the check made it likelier: the question asked again said
+`send_command {"command":"hello"}` was "not to be sent again", and the model read the *action*
+as spent (22 of 30 replayed seeds answered with `send_text`). It now says the lines or commands
+are done and the action is still the way to send anything new
+(`restart_check::continue_instruction`, whose doc comment has the replays: a client told to
+disconnect on `DONE` did so on 10 of 20 seeds instead of 0, and the redis client sent a new
+command on 1 of 80 instead of 7). The telnet client's action
 descriptions now name `send_command` as the way to answer anything and `send_text` as not for
 answers; with the check on, question 1 then reached the server as a line in 7 of 8 runs (3 of
 8 on the same day's master; the eighth answered with JSON that does not parse).
