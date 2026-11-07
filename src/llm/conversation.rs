@@ -15,7 +15,7 @@ use crate::logging::emit::Log;
 use crate::state::app_state::{AppState, ConversationSource, WebApprovalRequest, WebSearchMode};
 use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 /// Extract reasoning from LLM response and return (reasoning, cleaned_response)
 ///
@@ -969,32 +969,24 @@ impl ConversationHandler {
                     unknown_actions.clone()
                 };
 
-                // Log warning with the actual response
-                warn!(
+                // The operator line names the actions; the response itself stays in the file.
+                let log = self.log();
+                log.warn(format!(
+                    "LLM returned unknown action(s): {:?}",
+                    shown_unknown_actions
+                ));
+                log.debug(format!(
                     "LLM returned unknown action(s): {:?}. Response was: {}",
                     shown_unknown_actions,
                     self.display_payload(&crate::utils::truncate_for_log(&cleaned_response, 500))
-                );
-
-                if let Some(ref tx) = self.status_tx {
-                    let _ = tx.send(format!(
-                        "[WARN] LLM returned unknown action(s): {:?}",
-                        shown_unknown_actions
-                    ));
-                }
+                ));
 
                 if unknown_action_retries >= MAX_UNKNOWN_ACTION_RETRIES {
                     // All retries exhausted - log error
-                    error!(
+                    self.log().error(format!(
                         "LLM failed to use valid actions after {} retries. Unknown actions: {:?}",
                         unknown_action_retries, shown_unknown_actions
-                    );
-                    if let Some(ref tx) = self.status_tx {
-                        let _ = tx.send(format!(
-                            "[ERROR] LLM failed to use valid actions after {} retries",
-                            unknown_action_retries
-                        ));
-                    }
+                    ));
                     // Return error instead of silently continuing
                     anyhow::bail!(
                         "LLM returned unknown action(s) after {} retries: {:?}",
@@ -1010,23 +1002,13 @@ impl ConversationHandler {
                         &valid_action_names_list,
                     );
 
-                // Log the correction before adding to messages
-                trace!(
+                // The correction is a prompt body: TRACE, file only.
+                let log = self.log();
+                log.trace(format!(
                     "→ Sending unknown action correction and retrying (attempt {})...",
                     unknown_action_retries + 1
-                );
-                if let Some(ref tx) = self.status_tx {
-                    let _ = tx.send(
-                        "[TRACE] → Sending correction to LLM for unknown action...".to_string(),
-                    );
-                    // Show the correction message being sent (indented and dimmed)
-                    for line in crate::llm::format_indented_dimmed_lines(
-                        &self.display_payload(&correction),
-                        8,
-                    ) {
-                        let _ = tx.send(format!("[TRACE] {}", line));
-                    }
-                }
+                ));
+                log.payload("Unknown action correction", &correction, usize::MAX);
 
                 // The rejected response is already in `messages` (pushed above); pushing it a
                 // second time only made the model read its own mistake twice.
@@ -1110,9 +1092,10 @@ impl ConversationHandler {
             if !malformed_actions.is_empty() {
                 malformed_action_retries += 1;
 
-                // Log error with the actual malformed actions
+                // Each malformed action, with the JSON the model returned. The eval harness's
+                // classifier keys on "LLM returned malformed action:" (tests/eval/classify.rs).
                 for (action_json, error) in &malformed_actions {
-                    error!(
+                    self.log().error(format!(
                         "LLM returned malformed action: {}. Error: {}. JSON: {}",
                         action_json
                             .get("type")
@@ -1123,28 +1106,7 @@ impl ConversationHandler {
                             &serde_json::to_string(action_json)
                                 .unwrap_or_else(|_| action_json.to_string())
                         )
-                    );
-                }
-
-                if let Some(ref tx) = self.status_tx {
-                    for (action_json, error) in &malformed_actions {
-                        let action_type = action_json
-                            .get("type")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("unknown");
-                        let _ = tx.send(format!(
-                            "[ERROR] Malformed action '{}': {}",
-                            action_type, error
-                        ));
-                        // Show the actual JSON that was returned
-                        let _ = tx.send(format!(
-                            "[ERROR]   JSON: {}",
-                            self.display_payload(
-                                &serde_json::to_string(action_json)
-                                    .unwrap_or_else(|_| action_json.to_string())
-                            )
-                        ));
-                    }
+                    ));
                 }
 
                 if malformed_action_retries >= MAX_MALFORMED_ACTION_RETRIES {
@@ -1153,16 +1115,10 @@ impl ConversationHandler {
                         .iter()
                         .map(|(a, _)| a.get("type").and_then(|t| t.as_str()).unwrap_or("unknown"))
                         .collect();
-                    error!(
+                    self.log().error(format!(
                         "LLM failed to provide valid actions after {} retries. Malformed: {:?}",
                         malformed_action_retries, action_types
-                    );
-                    if let Some(ref tx) = self.status_tx {
-                        let _ = tx.send(format!(
-                            "[ERROR] LLM failed to provide valid actions after {} retries",
-                            malformed_action_retries
-                        ));
-                    }
+                    ));
                     anyhow::bail!(
                         "LLM returned malformed action(s) after {} retries: {:?}",
                         malformed_action_retries,
@@ -1176,16 +1132,10 @@ impl ConversationHandler {
                         &malformed_actions,
                     );
 
-                trace!(
-                    "→ Sending malformed action correction and retrying (attempt {})...",
-                    malformed_action_retries + 1
-                );
-                if let Some(ref tx) = self.status_tx {
-                    let _ = tx.send(format!(
-                        "[INFO] → Retrying due to malformed action(s) (attempt {}/{})...",
-                        malformed_action_retries, MAX_MALFORMED_ACTION_RETRIES
-                    ));
-                }
+                self.log().info(format!(
+                    "→ Retrying due to malformed action(s) (attempt {}/{})...",
+                    malformed_action_retries, MAX_MALFORMED_ACTION_RETRIES
+                ));
 
                 // The rejected response is already in `messages` (pushed above); pushing it a
                 // second time only made the model read its own mistake twice.
@@ -1322,40 +1272,26 @@ impl ConversationHandler {
 
             // If this is the last iteration, warn about unused tool calls
             if iteration == self.max_tool_iterations {
-                warn!(
-                    "Maximum iterations reached with {} pending tool calls",
+                self.log().warn(format!(
+                    "Maximum iterations ({}) reached with {} pending tool call(s)",
+                    self.max_tool_iterations,
                     tools.len()
-                );
-                if let Some(ref tx) = self.status_tx {
-                    let _ = tx.send(format!(
-                        "[WARN] Maximum iterations ({}) reached with {} pending tool call(s)",
-                        self.max_tool_iterations,
-                        tools.len()
-                    ));
-                }
+                ));
                 anyhow::bail!("Tool iteration limit reached before a final action response");
             }
 
             // Execute tool calls
-            debug!("Executing {} tool calls", tools.len());
-            if let Some(ref tx) = self.status_tx {
-                let _ = tx.send(format!("[INFO] Executing {} tool call(s)...", tools.len()));
-            }
+            self.log()
+                .info(format!("Executing {} tool call(s)...", tools.len()));
             tool_results.clear();
 
             for tool_json in tools {
                 match ToolAction::from_json(&tool_json) {
                     Ok(tool_action) => {
-                        info!(
+                        self.log().info(format!(
                             "→ Executing tool: {}",
                             self.display_payload(&tool_action.describe())
-                        );
-                        if let Some(ref tx) = self.status_tx {
-                            let _ = tx.send(format!(
-                                "[INFO] → Executing tool: {}",
-                                self.display_payload(&tool_action.describe())
-                            ));
-                        }
+                        ));
 
                         // Track tool call in conversation state
                         if let Ok(mut state) = self.conversation_state.lock() {
@@ -1404,15 +1340,12 @@ impl ConversationHandler {
                         } else {
                             execution.await
                         };
-                        info!("  Result: {}", self.display_payload(&result.summary()));
-                        if let Some(ref tx) = self.status_tx {
-                            let status = if result.success { "✓" } else { "✗" };
-                            let _ = tx.send(format!(
-                                "[INFO]   {} {}",
-                                status,
-                                self.display_payload(&result.summary())
-                            ));
-                        }
+                        let status = if result.success { "✓" } else { "✗" };
+                        self.log().info(format!(
+                            "  {} {}",
+                            status,
+                            self.display_payload(&result.summary())
+                        ));
 
                         // Mark protocol docs as read if the tool succeeded
                         // This will update the system prompt to enable open_server/open_client actions
@@ -1560,11 +1493,8 @@ impl ConversationHandler {
                         } else {
                             e.to_string()
                         };
-                        error!("Failed to parse tool action: {}", error);
-                        if let Some(ref tx) = self.status_tx {
-                            let _ =
-                                tx.send(format!("[ERROR] Failed to parse tool action: {}", error));
-                        }
+                        self.log()
+                            .error(format!("Failed to parse tool action: {}", error));
                         tool_results.push(ToolResult::error(
                             "unknown",
                             "parse_error",
@@ -1578,30 +1508,17 @@ impl ConversationHandler {
             let all_failed = !tool_results.is_empty() && tool_results.iter().all(|r| !r.success);
             if all_failed {
                 consecutive_tool_failures += 1;
-                warn!(
+                self.log().warn(format!(
                     "All {} tool calls failed (consecutive failures: {})",
                     tool_results.len(),
                     consecutive_tool_failures
-                );
-                if let Some(ref tx) = self.status_tx {
-                    let _ = tx.send(format!(
-                        "[WARN] All {} tool calls failed (consecutive failures: {})",
-                        tool_results.len(),
-                        consecutive_tool_failures
-                    ));
-                }
+                ));
 
                 if consecutive_tool_failures >= MAX_CONSECUTIVE_FAILURES {
-                    error!(
-                        "Breaking tool calling loop after {} consecutive failures",
+                    self.log().error(format!(
+                        "Breaking tool loop after {} consecutive failures",
                         consecutive_tool_failures
-                    );
-                    if let Some(ref tx) = self.status_tx {
-                        let _ = tx.send(format!(
-                            "[ERROR] Breaking tool loop after {} consecutive failures",
-                            consecutive_tool_failures
-                        ));
-                    }
+                    ));
                     // Add a final message explaining the issue
                     self.messages.push(Message::user(
                         "CRITICAL: All tool calls are failing. Stop calling tools and respond with regular actions instead.".to_string()
@@ -1619,20 +1536,12 @@ impl ConversationHandler {
                 self.messages.push(Message::user(tool_results_text));
             }
 
-            debug!(
-                "Completed iteration {}/{}, {} tool results provided for next iteration",
+            self.log().debug(format!(
+                "Iteration {}/{} complete, continuing with {} tool result(s)...",
                 iteration,
                 self.max_tool_iterations,
                 tool_results.len()
-            );
-            if let Some(ref tx) = self.status_tx {
-                let _ = tx.send(format!(
-                    "[TRACE] Iteration {}/{} complete, continuing with {} tool result(s)...",
-                    iteration,
-                    self.max_tool_iterations,
-                    tool_results.len()
-                ));
-            }
+            ));
         }
 
         let all_actions = final_actions.context(
@@ -1722,28 +1631,17 @@ impl ConversationHandler {
             };
 
             let details = self.display_payload(&details);
-            let log_msg = if details.is_empty() {
-                format!("[INFO]   → {}", action_type)
+            self.log().info(if details.is_empty() {
+                format!("  → {}", action_type)
             } else {
-                format!("[INFO]   → {} ({})", action_type, details)
-            };
-
-            info!("Action: {} {}", action_type, details);
-            if let Some(ref tx) = self.status_tx {
-                let _ = tx.send(log_msg);
-            }
+                format!("  → {} ({})", action_type, details)
+            });
         }
 
-        info!(
-            "Conversation complete: {} total actions collected",
+        self.log().info(format!(
+            "✓ Conversation complete: {} action(s)",
             all_actions.len()
-        );
-        if let Some(ref tx) = self.status_tx {
-            let _ = tx.send(format!(
-                "[INFO] ✓ Conversation complete: {} action(s)",
-                all_actions.len()
-            ));
-        }
+        ));
 
         // End conversation tracking if enabled
         if let Some(state) = &self.state {
@@ -1977,14 +1875,8 @@ impl ConversationHandler {
                     }
 
                     if attempt > 1 {
-                        info!(
-                            "✓ Retry successful! LLM provided valid format on attempt {}",
-                            attempt
-                        );
-                        if let Some(ref tx) = self.status_tx {
-                            let _ = tx
-                                .send(format!("[INFO] ✓ Retry successful on attempt {}", attempt));
-                        }
+                        self.log()
+                            .info(format!("✓ Retry successful on attempt {}", attempt));
                         // This response supersedes the failed attempts: drop them and their
                         // corrections rather than carrying them for the rest of the
                         // conversation. Nothing was appended on the success path, so the
@@ -2015,9 +1907,22 @@ impl ConversationHandler {
                         e
                     };
                     if attempt <= self.max_retries {
-                        // We have retries left, send corrective feedback
-                        warn!("✗ Parse error on attempt {}: {}", attempt, e);
-                        warn!(
+                        // We have retries left, send corrective feedback. The operator line
+                        // carries a short preview; the file also gets the longer raw one.
+                        let log = self.log();
+                        let error_preview = if normalized_response.is_empty() {
+                            "(empty)".to_string()
+                        } else {
+                            self.display_payload(&crate::utils::truncate_for_log(
+                                &normalized_response,
+                                100,
+                            ))
+                        };
+                        log.warn(format!(
+                            "✗ Invalid format (attempt {}): {}. Response: {}",
+                            attempt, e, error_preview
+                        ));
+                        log.debug(format!(
                             "Malformed response (raw): {}",
                             if response_text.is_empty() {
                                 "(empty response)".to_string()
@@ -2027,22 +1932,7 @@ impl ConversationHandler {
                                     500,
                                 ))
                             }
-                        );
-
-                        if let Some(ref tx) = self.status_tx {
-                            let error_preview = if normalized_response.is_empty() {
-                                "(empty)".to_string()
-                            } else {
-                                self.display_payload(&crate::utils::truncate_for_log(
-                                    &normalized_response,
-                                    100,
-                                ))
-                            };
-                            let _ = tx.send(format!(
-                                "[WARN] ✗ Invalid format (attempt {}): {}. Response: {}",
-                                attempt, e, error_preview
-                            ));
-                        }
+                        ));
 
                         // Add the malformed response as an assistant message (use normalized for conversation)
                         self.messages
@@ -2056,41 +1946,27 @@ impl ConversationHandler {
                         // Build corrective user message using minimal retry prompt
                         let correction =
                             crate::llm::prompt::PromptBuilder::build_retry_prompt(&e.to_string());
-                        debug!(
-                            "Correction message preview: {}",
-                            crate::utils::truncate_for_log(&correction, 200)
-                        );
 
                         // Track retry instruction in conversation state
                         if let Ok(mut state) = self.conversation_state.lock() {
                             state.add_retry_instruction(correction.clone());
                         }
 
-                        info!(
-                            "→ Sending correction and retrying (attempt {})...",
+                        // The correction is shown to the operator, indented under its line.
+                        let log = self.log();
+                        log.info(format!(
+                            "→ Sending correction to LLM (attempt {})...",
                             attempt + 1
-                        );
-                        if let Some(ref tx) = self.status_tx {
-                            let _ = tx.send("[INFO] → Sending correction to LLM...".to_string());
-                            // Show the correction message being sent (indented and dimmed)
-                            for line in crate::llm::format_indented_dimmed_lines(
-                                &self.display_payload(&correction),
-                                8,
-                            ) {
-                                let _ = tx.send(format!("[INFO] {}", line));
-                            }
+                        ));
+                        for line in self.display_payload(&correction).lines() {
+                            log.info(format!("        {line}"));
                         }
 
                         self.messages.push(Message::user(correction));
                     } else {
                         // No more retries
-                        error!("✗ Failed to get valid response after {} attempts", attempt);
-                        if let Some(ref tx) = self.status_tx {
-                            let _ = tx.send(format!(
-                                "[ERROR] ✗ Failed after {} attempts: {}",
-                                attempt, e
-                            ));
-                        }
+                        self.log()
+                            .error(format!("✗ Failed after {} attempts: {}", attempt, e));
                         return Err(e).context("LLM failed to provide valid format after retry");
                     }
                 }
