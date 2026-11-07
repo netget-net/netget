@@ -8,7 +8,7 @@ circular: `tokio-postgres` (Rust) and `psql` 14 / libpq (C).
 |---|---|---|---|
 | `test.rs` | tokio-postgres | Four simple-query cases through the mock-model harness | 8 |
 | `extended_query_test.rs` | tokio-postgres | Parse/Describe/Bind/Execute really works | 0 |
-| `decoder_panic_test.rs` | raw socket | A malformed Query gets FATAL 08P01, not a panic (`vendor/pgwire`); counters move | 0 |
+| `decoder_panic_test.rs` | raw socket | A malformed Query gets FATAL 08P01, not a panic (the `netget-pgwire` fork); counters move | 0 |
 | `llm_failure_test.rs` | tokio-postgres | The SQLSTATE a driver sees when the backend fails | 1 |
 | `real_client_test.rs` | **psql / libpq** | A real session, asserted on what psql printed | 4 |
 
@@ -156,10 +156,10 @@ with SQLSTATE, and tokio-postgres's Parse/Describe/Bind/Execute/Sync with a bina
 DataRow.
 
 **Condition 3.** `fuzz/fuzz_targets/pgwire_frontend.rs` drives `pgwire`'s frontend decoder —
-the patched copy in `vendor/pgwire`, which the fuzz workspace patches in the same way the root
-manifest does — through the SSL, startup and query states. The format is flat; the corpus
+NetGet's `netget-pgwire` fork, which the fuzz workspace depends on as the root manifest does —
+through the SSL, startup and query states. The format is flat; the corpus
 carries length lies and a 60 000-parameter Bind. Its first seed found an upstream defect:
 `CopyFail::message_type()` was `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail did
-not decode. The server only decodes CopyFail and was unaffected; `vendor/pgwire` now carries the
-fix and `tests/vendored_pgwire_patch_test.rs` the round trip. Run 120 s clean on 6 November
+not decode. The server only decodes CopyFail and was unaffected; the fork carries the fix and
+`tests/vendored_pgwire_patch_test.rs` the round trip. Run 120 s clean on 6 November
 2026 (unoptimised, `-s none`, macOS): 12 812 executions, no crash.

@@ -4,13 +4,14 @@
 //! Upstream `pgwire` 0.35's `decode_packet` bounds a message's declared length only from above
 //! and then hands `decode_fn` the whole remaining buffer, so `get_cstring` can
 //! `split_to(remaining + 1)` and panic on a message that carries no NUL. Six bytes after a valid
-//! startup handshake are enough (IMPROVEMENTS #77). NetGet builds the patched copy in
-//! `vendor/pgwire` (README there), which answers such a message the way PostgreSQL does —
+//! startup handshake are enough (IMPROVEMENTS #77). NetGet builds its fork `netget-pgwire`
+//! (github.com/netget-net/pgwire, NETGET.md there), which answers such a message the way
+//! PostgreSQL does —
 //! `ErrorResponse`, severity FATAL, SQLSTATE 08P01 — and closes. Against upstream pgwire the
 //! connection dies with no reply at all, and this test fails on that.
 //!
-//! The containment around the session task stays: any other panic in pgwire or in the handler,
-//! or the unpatched crate as published to crates.io, still takes the `JoinError` path. Before it,
+//! The containment around the session task stays: any other panic in pgwire or in the handler
+//! still takes the `JoinError` path. Before it,
 //! the panic unwound straight past `close_connection_on_server`: the dashboard kept an `Active`
 //! row for a socket that was already gone, and PostgreSQL is not `connectionless`, so the
 //! 10-second idle sweep never collected it either.

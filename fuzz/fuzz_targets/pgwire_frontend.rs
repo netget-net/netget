@@ -1,12 +1,12 @@
 //! The PostgreSQL server's frontend decoder: `pgwire::messages::PgWireFrontendMessage::decode`,
-//! from the **patched copy in `vendor/pgwire`** (this crate's `[patch.crates-io]` points there,
-//! as the root manifest's does), driven through the connection states pgwire's own server codec
+//! from **NetGet's fork, `netget-pgwire`** (github.com/netget-net/pgwire; this crate depends on
+//! it as the root manifest does), driven through the connection states pgwire's own server codec
 //! walks: SSL/GSS negotiation, then Startup or CancelRequest, then every post-startup message.
 //!
 //! NetGet has no PostgreSQL byte parser of its own — the server hands the socket to pgwire's
 //! `process_socket` — so this decoder is the whole pre-authentication surface. Upstream
-//! pgwire 0.35.0 panics on six bytes after a valid handshake (`vendor/pgwire/README.md` has the
-//! table); the patch refuses those as `FATAL 08P01`. This target is the search for the shapes
+//! pgwire 0.35.0 panics on six bytes after a valid handshake (the fork's NETGET.md has the
+//! table); the fork refuses those as `FATAL 08P01`. This target is the search for the shapes
 //! that table does not list. Built against unpatched pgwire, the `query_without_nul` seed
 //! panics at once.
 //!
@@ -17,7 +17,7 @@
 //!    zero-length verdict the SSL state exists for.
 //! 3. Re-encoding is a fixed point: a message that decodes encodes, its encoding decodes, and
 //!    that re-encodes to the same bytes. This found upstream pgwire encoding CopyFail with
-//!    CopyDone's tag on its first seed; `vendor/pgwire` carries the fix.
+//!    CopyDone's tag on its first seed; the fork carries the fix.
 //!
 //! The wire format is flat — a type byte, an `Int32` length, a body — so there is no depth
 //! bomb. The corpus carries the size lies instead: lengths of `0x7fffffff`, of 3, a Bind whose
