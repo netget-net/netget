@@ -70,7 +70,9 @@ which reads as a registered domain. When the captured prompt is replayed over se
 old one-line `send_error` description ("Send error message for domain not found") lost 5 of
 46. Three changes lost none: a description saying it is the answer for a query with no record,
 an example message `No match for "example.invalid"`, and `send_whois_record`'s description
-saying it is for a domain that has a record. An ordinary record for `example.com` stayed 46/46.
+saying it is for a domain that has a record. An ordinary record for `example.com` stayed 46/46,
+and the eval's `whois/no-match` scores 5/5 at seeds 42–46
+(`eval-results/2026-11-07-gearman-whois-replay/`).
 Rewording `send_error` alone, with the old example, was worse in one way: on 3 of 20 seeds the
 model answered `example.com` with `No match for example.invalid`, copied from the description.
 

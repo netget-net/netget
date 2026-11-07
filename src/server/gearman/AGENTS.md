@@ -69,7 +69,9 @@ parameter even named `unknown_function` as an example), llama3.1:8b, told "only 
 other function must fail", answered `translate` with `send_gearman_error` on 33 of 40 seeds
 (seeds 1–40, the captured prompt replayed). With the action removed from the event, it failed
 the job on 37 of 40. With the descriptions reworded and the action still offered, it failed the
-job on 29 of 40. `send_gearman_error` stays in `get_sync_actions()`, so a static rule may name it
+job on 29 of 40. The real-model eval's `gearman/unknown-function-fails` scores 5/5 at seeds
+42–46 with the action removed (`eval-results/2026-11-07-gearman-whois-replay/`).
+`send_gearman_error` stays in `get_sync_actions()`, so a static rule may name it
 (`llm_failure_test.rs`), and so may an action sent from the dashboard.
 
 Every job action takes an optional `job_handle`. Answering the event, it may be omitted: the

@@ -60,3 +60,19 @@ Master fails on 5 of 46 seeds, and three of them are 42, 45 and 46, which is why
 read 2/5. The rewording alone, with the old `Domain not found in database` example, answered
 `example.com` on three seeds with `No match for example.invalid`, copied from the description.
 Changing the example as well removed that. All three changes are made.
+
+## The eval with both changes
+
+`eval-after/` is the harness's own output for `gearman` and `whois`: five runs per case at seeds
+42–46, from a build of this branch with the lane flags `--no-default-features --features
+mcp-stdio,mcp-http,sqlite,terminal-snapshot`. Neither prompt depends on those features. Before is
+the per-run-seed baseline in `../latest.json`, at the same seeds.
+
+| Case | Before | After |
+|---|---:|---:|
+| `gearman/reverse-text` | 4/5 | 5/5 |
+| `gearman/unknown-function-fails` | 0/5 | **5/5** |
+| `whois/registrar-line` | 5/5 | 5/5 |
+| `whois/registrant-and-status` | 5/5 | 5/5 |
+| `whois/no-match` | 2/5 | **5/5** |
+| **Total** | **16/25** | **25/25** |
