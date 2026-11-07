@@ -1,117 +1,81 @@
-//! The vendored opensrv-mysql in `vendor/opensrv-mysql` is the one Cargo builds, and it has the
-//! fixes `vendor/opensrv-mysql/README.md` lists.
+//! NetGet's opensrv-mysql fork (`netget-opensrv-mysql`, github.com/netget-net/opensrv) is the
+//! one Cargo builds, and it has the fixes its `NETGET.md` lists.
 //!
-//! Two halves, like `vendored_pgwire_patch_test.rs`:
+//! Two halves, like `vendored_kafka_protocol_patch_test.rs`:
 //!
-//! - Cargo must actually build the copy. `[patch.crates-io]` silently stops applying (it is
-//!   listed under `[[patch.unused]]`) when something wants a different opensrv-mysql.
+//! - Cargo must build the fork, at the version whose patches were checked, in the root
+//!   workspace and in `fuzz/` (its own workspace, whose session target runs the crate's loop),
+//!   and upstream `opensrv-mysql` must not be in the graph at all.
 //! - The crate itself, run bare over an in-memory pipe with a shim of the test's own, and fed
 //!   every shape upstream 0.7.0 gets wrong: two pipelined packets in one read (parsed out of a
 //!   freed buffer), an execute too short to parse (answered OK), a malformed command that has
 //!   no reply (answered OK), `COM_STMT_RESET` (not parsed, long data kept). The MySQL
 //!   server's own suite (`tests/server/mysql/`) covers the server built on it.
 
+#[path = "helpers/fork_source.rs"]
+mod fork_source;
+
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fork_source::{assert_fork_is_built, fork_dir, read_fork};
 use opensrv_mysql::{
     AsyncMysqlIntermediary, AsyncMysqlShim, Column, ColumnFlags, ColumnType, OkResponse,
     ParamParser, QueryResultWriter, StatementMetaWriter, ValueInner,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
-fn read(rel: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+const FORK: &str = "netget-opensrv-mysql";
+const DEPENDENCY: &str =
+    r#"opensrv-mysql = { package = "netget-opensrv-mysql", version = "0.7.0" }"#;
+
+#[test]
+fn cargo_builds_the_opensrv_mysql_fork_from_crates_io() {
+    assert_fork_is_built("opensrv-mysql", "0.7.0");
+    let locked = fork_source::locked_packages(FORK);
+    assert!(
+        locked.iter().all(|(_, source)| source.as_deref()
+            == Some("registry+https://github.com/rust-lang/crates.io-index")),
+        "Cargo.lock resolves {FORK} from {locked:?}, not crates.io: a local [patch] or path \
+         dependency is standing in for the published fork"
+    );
 }
 
-fn manifest_version(manifest: &str) -> String {
-    let mut in_package = false;
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_package = line == "[package]";
-            continue;
-        }
-        if in_package {
-            if let Some(v) = line.strip_prefix("version = ") {
-                return v.trim_matches('"').to_string();
-            }
-        }
-    }
-    panic!("vendor/opensrv-mysql/Cargo.toml has no [package] version");
+/// `fuzz/` is its own workspace, so the root manifest says nothing about what it builds. Its
+/// `mysql_session` target runs the crate's protocol loop, which has to be the server's.
+#[test]
+fn the_fuzz_workspace_depends_on_the_same_fork() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/Cargo.toml");
+    let fuzz = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert!(
+        fuzz.lines().any(|l| l.trim() == DEPENDENCY),
+        "fuzz/Cargo.toml must depend on `{DEPENDENCY}`: upstream opensrv-mysql 0.7.0 parses \
+         pipelined packets out of freed memory, and the fuzzer would search a crate the server \
+         does not run"
+    );
+    assert!(
+        !fuzz.contains("vendor/opensrv-mysql"),
+        "fuzz/Cargo.toml still names vendor/opensrv-mysql, which no longer exists"
+    );
 }
 
 #[test]
-fn cargo_builds_the_vendored_opensrv_mysql_at_the_vendored_version() {
-    for (manifest, lockfile, entry) in [
-        (
-            "Cargo.toml",
-            Some("Cargo.lock"),
-            r#"opensrv-mysql = { path = "vendor/opensrv-mysql" }"#,
-        ),
-        // The fuzz workspace's lock is not committed; its manifest must still patch.
-        (
-            "fuzz/Cargo.toml",
-            None,
-            r#"opensrv-mysql = { path = "../vendor/opensrv-mysql" }"#,
-        ),
-    ] {
-        let root = read(manifest);
-        // The section header is a line of its own; the same words also appear in comments
-        // (fuzz/Cargo.toml explains "the [patch.crates-io] below"), so match the line.
-        let patch = root
-            .split_once("\n[patch.crates-io]\n")
-            .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
-            .unwrap_or("");
-        assert!(
-            patch.lines().any(|l| l.trim() == entry),
-            "{manifest}'s [patch.crates-io] must point opensrv-mysql at vendor/opensrv-mysql \
-             (vendor/opensrv-mysql/README.md)"
-        );
-        let Some(lockfile) = lockfile else { continue };
-
-        let vendored = manifest_version(&read("vendor/opensrv-mysql/Cargo.toml"));
-        let lock = read(lockfile);
-        let locked: Vec<(String, Option<String>)> = lock
-            .split("[[package]]")
-            .skip(1)
-            .filter_map(|entry| {
-                let field = |key: &str| {
-                    entry.lines().find_map(|l| {
-                        l.strip_prefix(&format!("{key} = "))
-                            .map(|v| v.trim_matches('"').to_string())
-                    })
-                };
-                (field("name")? == "opensrv-mysql")
-                    .then(|| (field("version").unwrap(), field("source")))
-            })
-            .collect();
-        assert!(!locked.is_empty(), "Cargo.lock has no opensrv-mysql at all");
-        for (version, source) in &locked {
-            assert!(
-                source.is_none() && *version == vendored,
-                "Cargo.lock resolves opensrv-mysql {version} from {} but vendor/opensrv-mysql is \
-                 {vendored}: the patched crate is not the one being built. Re-vendor and \
-                 re-apply the patch as vendor/opensrv-mysql/README.md describes, or restore the \
-                 [patch.crates-io] entry.",
-                source.as_deref().unwrap_or("a path")
-            );
-        }
-        let unused = lock.split("[[patch.unused]]").skip(1).any(|entry| {
-            entry
-                .lines()
-                .take_while(|l| !l.starts_with("[["))
-                .any(|l| l.trim() == r#"name = "opensrv-mysql""#)
-        });
-        assert!(
-            !unused,
-            "Cargo.lock lists vendor/opensrv-mysql under [[patch.unused]]: Cargo is building \
-             crates.io's opensrv-mysql, which parses pipelined packets out of freed memory."
-        );
+fn opensrv_mysql_fork_keeps_its_version_license_and_patches() {
+    let manifest = read_fork(FORK, "Cargo.toml");
+    assert!(manifest.contains("name = \"netget-opensrv-mysql\""));
+    assert!(manifest.contains("version = \"0.7.0\""));
+    assert!(manifest.contains("license = \"Apache-2.0\""));
+    for file in ["LICENSE", "NETGET.md"] {
+        assert!(fork_dir(FORK).join(file).is_file(), "{file} missing");
     }
+    let reader = read_fork(FORK, "src/packet_reader.rs");
+    assert!(
+        !reader.contains("self.bytes = rest.to_vec();"),
+        "the fork's packet_reader.rs replaces its buffer while a returned packet still points \
+         into it again (upstream 0.7.0's use-after-free)"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

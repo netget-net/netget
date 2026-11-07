@@ -148,11 +148,11 @@ earlier `(message_length - 16) as usize` abort.
 
 ### pgwire 0.35.0 — RISKY, and NetGet's PostgreSQL server is crashable in six bytes
 
-**Status:** NetGet builds `vendor/pgwire`, which fixes the frontend half of this (each message
-isolated before its body decoder runs, checked reads, `FATAL 08P01` instead of a panic;
-`vendor/pgwire/README.md`, `tests/vendored_pgwire_patch_test.rs`). The backend-message sites
-below are pgwire's *client* path, which NetGet does not use, and are unchanged apart from the
-framing fix. The finding stands for upstream and for `cargo install` builds.
+**Status:** NetGet builds its fork `netget-pgwire` (github.com/netget-net/pgwire), which fixes
+the frontend half of this (each message isolated before its body decoder runs, checked reads,
+`FATAL 08P01` instead of a panic; the fork's NETGET.md, `tests/vendored_pgwire_patch_test.rs`).
+The backend-message sites below are pgwire's *client* path, which NetGet does not use, and are
+unchanged apart from the framing fix. The finding stands for upstream pgwire.
 
 **This is the most severe finding in the audit.** The framing layer never restricts the body
 slice to the declared message length and never *lower*-bounds it. `decode_packet`
@@ -197,7 +197,7 @@ prove them unreachable by reading alone, but they are moot next to the above.
 | `src/params.rs:86` | `Params::next` | `rest[1..].split_at(2 * self.params)` — panics when the new-params-bound flag is set without a full type map. |
 | `src/params.rs:103` | `Params::next` | `&self.bound_types[self.col as usize]` — empty when the client clears the new-params-bound byte on the first execution → index out of bounds. |
 | `src/params.rs:127` | `Params::next` | `Value::parse_from(...).unwrap()` — `parse_from` correctly returns `Err` on a truncated value and this converts it back into a panic. |
-| `src/packet_reader.rs:132-141` | `PacketReader::next_async` | **Use-after-free, not a panic.** The packet it returns borrows `self.bytes` through `slice::from_raw_parts`, and when the read held more than one packet `self.bytes = rest.to_vec()` frees that buffer first. Any two pipelined commands. Fixed in `vendor/opensrv-mysql`; for the crates.io build, `src/server/mysql/command_tap.rs` never lets a read cross a packet boundary. |
+| `src/packet_reader.rs:132-141` | `PacketReader::next_async` | **Use-after-free, not a panic.** The packet it returns borrows `self.bytes` through `slice::from_raw_parts`, and when the read held more than one packet `self.bytes = rest.to_vec()` frees that buffer first. Any two pipelined commands. Fixed in NetGet's fork `netget-opensrv-mysql` (github.com/netget-net/opensrv), which every NetGet build uses; upstream fixed it on `main` (databendlabs/opensrv#67) but has released nothing since 0.7.0. |
 | `src/lib.rs:663-678` | `run` (`Command::SendLongData`) | **Unbounded memory, not a panic.** Every `COM_STMT_SEND_LONG_DATA` chunk is appended to the statement's buffer and kept until it is executed or closed. Defended: `command_tap::LongDataGate` withholds chunks past 64 MiB a statement / 128 MiB a connection; ERR 1105 at the next execute. |
 | `src/packet_reader.rs:252`, `:266` | `packet` | `assert_eq!(nseq, seq + 1)` — non-consecutive sequence bytes on a >16 MB payload; `seq + 1` is also a `u8` addition that overflows at 255 in debug builds. |
 | `src/errorcodes.rs:2807` | `impl From<u16> for ErrorKind` | `_ => panic!("Unknown error type {}", x)` — anything outside its ~886-code table. |

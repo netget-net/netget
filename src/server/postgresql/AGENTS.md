@@ -166,14 +166,15 @@ Two consequences worth keeping:
   from above and hands the body decoder the whole remaining buffer, so a Query
   with no NUL (six bytes after the handshake), a Close or Describe with no body,
   or a Bind whose parameter runs past the message panicked the connection task.
-  NetGet builds `vendor/pgwire` (README there), which isolates each message,
+  NetGet builds its fork `netget-pgwire` (github.com/netget-net/pgwire, from
+  crates.io; NETGET.md there lists the changes), which isolates each message,
   reads with checked getters, and answers `FATAL 08P01`; `process_socket` then
   returns `InvalidData` and the connection is logged
   `decision=refused_malformed_message`. `tests/vendored_pgwire_patch_test.rs`
-  drives every shape against the decoder and
+  checks Cargo builds the fork and drives every shape against the decoder;
   `tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from
-  the wire. A `[patch]` does not reach the crate as published to crates.io, so
-  the panic containment above stays.
+  the wire. The panic containment above stays for any other panic in pgwire or
+  the handler.
 - `record_stats` keeps `update_connection_stats` current. pgwire never exposes the
   raw byte streams, so the counters are application-visible payload sizes at the
   handler boundary, not exact wire bytes — before this, nothing on this protocol

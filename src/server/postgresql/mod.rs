@@ -182,10 +182,9 @@ impl PostgresqlServer {
                             //
                             // Upstream pgwire 0.35 panics decoding a malformed frontend message
                             // (a Query with no NUL, six bytes after the handshake; IMPROVEMENTS
-                            // #77). The copy in `vendor/pgwire` answers those FATAL 08P01 and
-                            // returns `InvalidData` instead, but a `[patch]` does not reach the
-                            // crate as published to crates.io, and any other panic in pgwire or
-                            // in our handler would take the same path.
+                            // #77). NetGet's fork, `netget-pgwire`, answers those FATAL 08P01
+                            // and returns `InvalidData` instead; any other panic in pgwire or in
+                            // our handler would still take this path.
                             //
                             // What NetGet can do is not lose the connection's bookkeeping to
                             // it. The panic used to unwind straight past
@@ -235,7 +234,7 @@ impl PostgresqlServer {
                             match joined {
                                 Ok(Ok(())) => {}
                                 Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData => {
-                                    // The vendored pgwire refused a message that does not
+                                    // The pgwire fork refused a message that does not
                                     // decode and has already answered it FATAL 08P01.
                                     Log::to(&conn_status_tx).warn(format!(
                                         "PostgreSQL connection {} closed \

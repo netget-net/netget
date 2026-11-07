@@ -101,7 +101,7 @@ impl Protocol for PostgresqlProtocol {
                  NOT proven: psql 14 sends every statement as a simple Query (no \\bind), so the \
                  extended protocol and binary formats rest on tokio-postgres alone; no client \
                  here exercises authentication or TLS (neither is implemented), bound parameter \
-                 values, COPY, LISTEN/NOTIFY, cursors, or multi-statement simple queries. PCAP ORACLE: psql's two sessions and tokio-postgres's prepared-statement session run through a recording relay and tshark's pgsql dissector reads every stream (SSLRequest refusal, startup, rows, command tag, ErrorResponse, Parse/Bind/Describe/Execute with a binary DataRow). FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs drives the patched vendor/pgwire frontend decoder.",
+                 values, COPY, LISTEN/NOTIFY, cursors, or multi-statement simple queries. PCAP ORACLE: psql's two sessions and tokio-postgres's prepared-statement session run through a recording relay and tshark's pgsql dissector reads every stream (SSLRequest refusal, startup, rows, command tag, ErrorResponse, Parse/Bind/Describe/Execute with a binary DataRow). FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs drives the frontend decoder of the netget-pgwire fork.",
             )
             .notes(
                 "No authentication, no TLS; simple and extended query protocols, text format only",

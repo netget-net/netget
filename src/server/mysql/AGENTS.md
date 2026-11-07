@@ -266,7 +266,7 @@ Two pieces replace it:
   `COM_STMT_EXECUTE` (whole), `COM_STMT_SEND_LONG_DATA` (statement, parameter, a
   prefix of at most 516 bytes and the chunk's length — long data is how a client
   sends a value bigger than a packet, so only what the model is shown is kept) and
-  `COM_STMT_RESET` (which opensrv does not parse at all). It captures only
+  `COM_STMT_RESET` (on which the shim drops that prefix). It captures only
   sequence-0 packets, so no connection-phase packet is ever taken for a command,
   and only packets long enough for opensrv's own parser to accept, so every
   capture has exactly one `on_execute`. `on_execute` pops the queue up to the
@@ -277,20 +277,19 @@ Two pieces replace it:
   is `packet_limit::MAX_PACKET_BYTES` at most — the limiter sits beneath the tap
   and trips first.
 
-  **The tap also hands the crate at most the rest of one packet per read, and
-  that is for the crates.io build.** Upstream 0.7.0's `PacketReader::next_async`
-  (`packet_reader.rs:132-141`) parses from a raw-pointer slice of `self.bytes`
-  and, when a read held more than one packet, runs `self.bytes = rest.to_vec()`
-  before returning — freeing the buffer the returned packet points into. Any two
-  pipelined commands hit it: two `COM_STMT_SEND_LONG_DATA` chunks (what
-  `mysql_async` sends), or `COM_STMT_CLOSE` and the next command. Measured as a
-  stray OK packet per long-data chunk, after which every reply was one behind.
-  This repository builds `vendor/opensrv-mysql`, whose reader is fixed
-  (`tests/vendored_opensrv_patch_test.rs` drives the bare crate with exactly
-  that burst); `cargo install netget-tool` builds upstream, where the tap is what
-  keeps a read from ever leaving a remainder.
-  `stmt_params_test.rs::pipelined_commands_reach_opensrv_one_packet_per_read`
-  drives the crate through the tap.
+  **The tap passes reads up as they come**, a read ending mid-packet or holding
+  several. Upstream 0.7.0's `PacketReader::next_async` (`packet_reader.rs:132-141`)
+  parses from a raw-pointer slice of `self.bytes` and, when a read held more than
+  one packet, runs `self.bytes = rest.to_vec()` before returning — freeing the
+  buffer the returned packet points into. Any two pipelined commands hit it: two
+  `COM_STMT_SEND_LONG_DATA` chunks (what `mysql_async` sends), or `COM_STMT_CLOSE`
+  and the next command; measured as a stray OK packet per long-data chunk, after
+  which every reply was one behind. NetGet builds its fork, whose reader is fixed
+  (see "The opensrv-mysql fork" below), so nothing beneath the crate has to keep
+  reads inside one packet.
+  `stmt_params_test.rs::pipelined_commands_through_the_tap_each_get_their_own_reply`
+  sends that burst in one write through the tap; `tests/vendored_opensrv_patch_test.rs`
+  sends it to the bare crate.
 - **`LongDataGate` (in `command_tap.rs`, beneath the tap) — the long-data bound.**
   `opensrv-mysql` appends every `COM_STMT_SEND_LONG_DATA` chunk to the
   statement's buffer with no limit (`lib.rs:663-678`) and keeps it until the
@@ -303,14 +302,17 @@ Two pieces replace it:
   and discarded whole, so the crate never stores it. Long data has no reply, so
   dropping a chunk desynchronises nothing; the refusal is queued and answered
   1105 at the statement's next execute, where mysqld reports it. A statement's
-  count is released by its execute or `COM_STMT_CLOSE` (what makes the crate free
-  it), not by `COM_STMT_RESET`, which the crate does not parse. A chunk chained
+  count and its refusal are released by its execute, `COM_STMT_CLOSE` or
+  `COM_STMT_RESET` — the three commands on which the crate frees its long data —
+  so after a reset the statement starts again, as in mysqld. A chunk chained
   past 16 MiB is decided on its first fragment, so a bound can be overshot by one
   packet at most, which `packet_limit` bounds.
   `stmt_params_test.rs::long_data_past_its_bounds_never_reaches_the_crate` checks
   both bounds at small sizes, and
   `prepared_params_test.rs::long_data_past_max_allowed_packet_is_refused_at_execute`
-  sends 80 MB to reach the real one.
+  sends 80 MB to reach the real one;
+  `reset_after_refused_long_data_lets_the_statement_start_again` sends the same,
+  then a reset, a small chunk and an execute that binds it.
 - **`stmt_params.rs` — decoding them.** Every length is compared, as a `u64`,
   with the bytes remaining before it is used, so an 8-byte length-encoded size of
   2⁶⁴−1 is a refusal, not an overflow; values are borrowed from the packet, not
@@ -505,19 +507,21 @@ The prepared-statement path has three more of the crate's defects, each handled 
 `ParamParser`'s iterator panics (`params.rs:86`, `:91`, `:127` and two more) and is never
 iterated; `COM_STMT_SEND_LONG_DATA`'s unbounded append (`lib.rs:663-678`) is bounded by
 `command_tap::LongDataGate`; and the reader's use-after-free on pipelined packets is fixed in
-`vendor/opensrv-mysql` and kept out of reach of the crates.io build by the tap. See
-"Prepared-statement parameters" above.
+NetGet's fork of the crate (below). See "Prepared-statement parameters" above.
 
-## The vendored crate
+## The opensrv-mysql fork
 
-This repository builds `vendor/opensrv-mysql` (`[patch.crates-io]` in the root and fuzz
-manifests; `vendor/opensrv-mysql/README.md` has the diff and the upgrade steps). It is 0.7.0
-with the freed-buffer reader fixed, a malformed `COM_STMT_EXECUTE` (or empty packet) answered
-**1835** instead of OK — so an execute too short to name its statement, which never reaches
-the shim, is no longer reported to the client as a write that succeeded — a malformed command
-that has no reply given none, and `COM_STMT_RESET` parsed, discarding long data as mysqld does.
-Its API is upstream's, so the crates.io build still compiles; there, upstream's OK for a short
-execute remains.
+NetGet builds `netget-opensrv-mysql` 0.7.0 from crates.io — its fork,
+github.com/netget-net/opensrv, branch `netget`, whose `mysql/NETGET.md` has the diff and the
+upgrade steps — in the root and fuzz workspaces alike, so `cargo install netget-tool` gets it
+too. It is 0.7.0 with the freed-buffer reader fixed, a malformed `COM_STMT_EXECUTE` (or empty
+packet) answered **1835** instead of OK — so an execute too short to name its statement, which
+never reaches the shim, is not reported to the client as a write that succeeded — a malformed
+command that has no reply given none, and `COM_STMT_RESET` parsed, discarding long data as mysqld
+does. Its API is upstream's, so `ParamParser` and long data are still handled beneath it
+(above). Upstream fixed the reader on `main` (databendlabs/opensrv#67) and has not released it.
+`tests/vendored_opensrv_patch_test.rs` fails if Cargo.lock stops resolving the fork from
+crates.io or upstream `opensrv-mysql` enters the graph.
 
 ## One query, one answer
 

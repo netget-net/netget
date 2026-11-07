@@ -254,8 +254,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     connections; psql's two sessions and tokio-postgres's extended-protocol session; Python
     websockets' permessage-deflate session). The targets are `etcd_request` (prost behind
     `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level bomb),
-    `pgwire_frontend` (the patched `vendor/pgwire`, which `fuzz/Cargo.toml` now patches in
-    too — without it the fuzz workspace built crates.io's panicking copy) and
+    `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
+    too — without it the fuzz workspace would build crates.io's panicking pgwire) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
   - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
