@@ -1415,6 +1415,10 @@ and libpcsclite.
 `Dockerfile` in step.
 `ci.yml` runs on pull requests and on demand. **A push to `master` does not start CI.**
 `fuzz.yml` remains an on-demand search.
+`docker.yml` publishes the `Dockerfile` as the multi-arch image `ghcr.io/netget-net/netget` on
+release tags (`X.Y.Z` and `latest`) and on manual dispatch (`-f tag=<tag>`, default `latest`):
+amd64 and arm64 each build on a native runner and push by digest, a final job joins them with
+`imagetools create`, checks both platforms are listed and runs `--version` on the pulled image.
 
 **Local verification is the evidence for routine work.** Before pushing Rust changes, run
 `cargo fmt --check`, relevant regressions and the affected server/client suites with their
