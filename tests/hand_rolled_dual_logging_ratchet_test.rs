@@ -8,9 +8,9 @@
 //!
 //! # The rule
 //!
-//! No `.rs` file under `src/server/` may hold a send whose message starts with a level
-//! bracket — `.send(format!("[INFO] …"` or `.send("[WARN] …"`, across line breaks. There is no
-//! baseline: every server site goes through `Log`.
+//! No `.rs` file under `src/server/` or `src/client/` may hold a send whose message starts with
+//! a level bracket — `.send(format!("[INFO] …"` or `.send("[WARN] …"`, across line breaks. There
+//! is no baseline: every server and client site goes through `Log`.
 //!
 //! ```ignore
 //! Log::to(&status_tx).info(format!("POP3 connection {} closed", connection_id));
@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read src/server") {
+    for entry in std::fs::read_dir(dir).expect("read source tree") {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
             rust_files(&path, out);
@@ -61,16 +61,16 @@ fn hand_rolled_sends(source: &str) -> usize {
     count
 }
 
-#[test]
-fn server_dual_logging_goes_through_the_log_facade() {
+/// Every `.rs` file under `tree` (relative to the crate root) that holds a hand-rolled send,
+/// with its count. `min_files` guards against a scan of nothing passing.
+fn hand_rolled_problems(tree: &str, min_files: usize) -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    rust_files(&root.join("src/server"), &mut files);
+    rust_files(&root.join(tree), &mut files);
     files.sort();
-    // A scan of nothing passes; make sure it read the server tree.
     assert!(
-        files.len() > 300,
-        "only {} .rs files found under src/server",
+        files.len() > min_files,
+        "only {} .rs files found under {tree}",
         files.len()
     );
 
@@ -90,7 +90,18 @@ fn server_dual_logging_goes_through_the_log_facade() {
             ));
         }
     }
+    problems
+}
 
+#[test]
+fn server_dual_logging_goes_through_the_log_facade() {
+    let problems = hand_rolled_problems("src/server", 300);
+    assert!(problems.is_empty(), "\n{}\n", problems.join("\n"));
+}
+
+#[test]
+fn client_dual_logging_goes_through_the_log_facade() {
+    let problems = hand_rolled_problems("src/client", 300);
     assert!(problems.is_empty(), "\n{}\n", problems.join("\n"));
 }
 
