@@ -1,0 +1,2 @@
+seed  42 fail Here is the response to the event: ```json { "type": "send_gearman_error", "code": "unknown_function", "text": "only 'reverse' is implemented" } ``` <reasoning>Since the client submitted a job for the "translate" function, and our server only knows the "reverse" function, we should send a "send_gear
+TALLY variant=file:/tmp/gm-lane3/v-unk/base.txt 0/1

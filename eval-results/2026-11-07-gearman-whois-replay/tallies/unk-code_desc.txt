@@ -1,0 +1,21 @@
+seed   1 fail {"type":"send_gearman_error","code":"unknown_function","text":"function translate not found, known functions are reverse"}
+seed   2 PASS 
+seed   3 fail ```json { "actions": [ { "type": "send_gearman_error", "code": "not_supported", "text": "function not supported" } ] } ``` (reasoning) The function "translate" is not supported by the server. The server only knows the function "reverse".
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 PASS 
+seed  11 fail ```json { "type": "send_gearman_error", "code": "job_not_supported", "text": "Function translate is not supported" } ``` <reasoning> The client requested a function named "translate" but the Gearman worker only knows the "reverse" function. Therefore, it is not possible to execute the job. The error
+seed  12 PASS 
+seed  13 PASS 
+seed  14 fail ### Response ```json { "actions": [ { "type": "send_gearman_error", "code": "unavailable_function", "text": "Only the function 'reverse' is available" } ] } ``` ### Reasoning The client requested the function 'translate', which is not available for this server. Therefore, a `send_gearman_error` acti
+seed  15 PASS 
+seed  16 PASS 
+seed  17 fail ```json { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"unknown function translate"} ] } ``` <reasoning>The function "translate" is unknown to this Gearman worker, so it should return an ERROR packet with an unknown_function code. This is not a failed job, so a fail_gea
+seed  18 PASS 
+seed  19 fail ``` { "actions": [ {"type":"send_gearman_error","code":"unknown_function","text":"You only know the reverse function."} ] } ``` <reasoning> The client submitted a job with the function "translate" which is not known to the server. According to the server's instruction, any function other than "rever
+seed  20 PASS 
+TALLY variant=file:/tmp/gm-lane3/v-unk/code_desc.txt 14/20

@@ -1,0 +1,21 @@
+seed  21 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Client asked for function 'translate', but we only know 'reverse'"}]
+seed  22 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function 'translate' is not supported"}]
+seed  23 PASS 
+seed  24 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function 'translate' is not supported"}]
+seed  25 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function not supported"}]
+seed  26 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function 'translate' is not supported"}, {"type": "close_connection"}]
+seed  27 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Function 'translate' is not known"}]
+seed  28 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function translate is not supported"}]
+seed  29 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "You only know the 'reverse' function."}]
+seed  30 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function 'translate' not supported"}]
+seed  31 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "unknown function: translate"}]
+seed  32 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only 'reverse' function is supported"}]
+seed  33 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Function not supported"}]
+seed  34 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "unknown function: translate"}, {"type": "close_connection"}]
+seed  35 PASS 
+seed  36 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "translate is not a supported function"}, {"type": "close_connection"}]
+seed  37 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function 'translate' not supported"}, {"type": "close_connection"}]
+seed  38 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only reverse is supported"}]
+seed  39 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Only 'reverse' function is supported"}, {"type": "close_connection"}]
+seed  40 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "this worker only knows the reverse function"}]
+TALLY /tmp/gm-lane3/v-unk/base.txt gearman_fail 2/20

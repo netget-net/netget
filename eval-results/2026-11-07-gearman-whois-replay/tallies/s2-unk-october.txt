@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only \"reverse\" function is supported"}, {"type": "fail_gearman_job"}]
+seed   3 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only know function reverse"}]
+seed   4 PASS 
+seed   5 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function not implemented: translate"}, {"type": "close_connection"}]
+seed   6 fail []
+seed   7 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "function is not supported"}, {"type": "close_connection"}]
+seed   8 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Only the function 'reverse' is supported"}]
+seed   9 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "translate not available, try reverse"}]
+seed  10 PASS 
+seed  11 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Client requested unknown function translate"}]
+seed  12 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only reverse function is supported"}]
+seed  13 PASS 
+seed  14 PASS 
+seed  15 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Client asked for unknown function translate"}]
+seed  16 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "Client meant to use the function 'reverse', not 'translate'"}, {"type": "close_connection"}]
+seed  17 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "only reverse function supported"}, {"type": "fail_gearman_job"}, {"type": "close_connection"}]
+seed  18 fail [{"type": "send_gearman_error", "code": "unknown_function", "text": "This function is not implemented by the worker"}, {"type": "close_connection"}]
+seed  19 fail [{"type": "complete_gearman_job", "result": "olleh"}]
+seed  20 fail [{"type": "check_function", "function": "reverse"}]
+TALLY /tmp/gm-lane3/v-unk/october.txt gearman_fail 5/20

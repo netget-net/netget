@@ -1,0 +1,21 @@
+seed  21 fail [{"type": "complete_gearman_job", "result": "olleh"}]
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 PASS 
+seed  28 PASS 
+seed  29 PASS 
+seed  30 PASS 
+seed  31 PASS 
+seed  32 PASS 
+seed  33 PASS 
+seed  34 PASS 
+seed  35 PASS 
+seed  36 PASS 
+seed  37 PASS 
+seed  38 PASS 
+seed  39 PASS 
+seed  40 PASS 
+TALLY /tmp/gm-lane3/v-unk/no_error.txt gearman_fail 19/20
