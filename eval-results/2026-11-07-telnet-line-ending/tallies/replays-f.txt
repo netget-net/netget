@@ -1,0 +1,271 @@
+F
+F2
+F_plain
+F2_plain
+seed   1 other_answer [{"type": "send_command", "command": "2"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 says4        [{"type": "send_command", "command": "42"}]
+seed   6 other_answer [{"type": "send_command", "command": "2"}]
+seed   7 other_answer [{"type": "send_command", "command": "2"}]
+seed   8 says4        [{"type": "send_command", "command": "4"}]
+seed   9 other_answer [{"type": "send_command", "command": "2"}]
+seed  10 other_answer [{"type": "send_command", "command": "2"}]
+seed  11 other_answer [{"type": "send_command", "command": "2"}]
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 says4        [{"type": "send_command", "command": "4"}]
+seed  14 other_answer [{"type": "send_command", "command": "2"}]
+seed  15 other_answer [{"type": "send_command", "command": "3"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 says4        [{"type": "send_command", "command": "4"}]
+seed  19 other_answer [{"type": "send_command", "command": "2"}]
+seed  20 other_answer [{"type": "send_command", "command": "2"}]
+seed  21 says4        [{"type": "send_command", "command": "4"}]
+seed  22 other_answer [{"type": "send_command", "command": "Correct."}]
+seed  23 other_answer [{"type": "send_command", "command": "2"}]
+seed  24 says4        [{"type": "send_command", "command": "4"}]
+seed  25 other_answer [{"type": "send_command", "command": "Correct"}]
+seed  26 other_answer [{"type": "send_command", "command": "2"}]
+seed  27 other_answer [{"type": "send_command", "command": "2"}]
+seed  28 other_answer [{"type": "send_command", "command": "2"}]
+seed  29 other_answer [{"type": "send_command", "command": "2"}]
+seed  30 other_answer [{"type": "send_command", "command": "2"}]
+seed  31 other_answer [{"type": "send_command", "command": "2"}]
+seed  32 other_answer [{"type": "send_command", "command": "2"}]
+seed  33 other_answer [{"type": "send_command", "command": "2"}]
+seed  34 says4        [{"type": "send_command", "command": "4"}]
+seed  35 other_answer [{"type": "send_command", "command": "2"}]
+seed  36 says4        [{"type": "send_command", "command": "4"}]
+seed  37 other_answer [{"type": "send_command", "command": "2"}]
+seed  38 says4        [{"type": "send_command", "command": "Paris"}, {"type": "send_command", "command": "4"}]
+seed  39 no_send      []
+seed  40 other_answer [{"type": "send_command", "command": "2"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/f_F_plain.py {'says4': 9, 'other_answer': 30, 'no_send': 1, 'TEXT': 0}
+seed   1 says4        [{"type": "send_command", "command": "4"}]
+seed   2 other_answer [{"type": "send_command", "command": "2"}]
+seed   3 other_answer [{"type": "send_command", "command": "2"}]
+seed   4 other_answer [{"type": "send_command", "command": "2"}]
+seed   5 other_answer [{"type": "send_command", "command": "3"}]
+seed   6 says4        [{"type": "send_command", "command": "4"}]
+seed   7 says4        [{"type": "send_command", "command": "42"}]
+seed   8 says4        [{"type": "send_command", "command": "4"}]
+seed   9 says4        [{"type": "send_command", "command": "4"}]
+seed  10 other_answer [{"type": "send_command", "command": "2"}]
+seed  11 other_answer [{"type": "send_command", "command": "2"}]
+seed  12 other_answer [{"type": "send_command", "command": "2"}]
+seed  13 other_answer [{"type": "send_command", "command": "5"}]
+seed  14 other_answer [{"type": "send_command", "command": "2"}]
+seed  15 other_answer [{"type": "send_command", "command": "3"}]
+seed  16 other_answer [{"type": "send_command", "command": "2"}]
+seed  17 other_answer [{"type": "send_command", "command": "2"}]
+seed  18 no_send      []
+seed  19 says4        [{"type": "send_command", "command": "42"}]
+seed  20 other_answer [{"type": "send_command", "command": "2"}]
+seed  21 says4        [{"type": "send_command", "command": "42"}]
+seed  22 other_answer [{"type": "send_command", "command": "2"}]
+seed  23 other_answer [{"type": "send_command", "command": "2"}]
+seed  24 says4        [{"type": "send_command", "command": "4"}]
+seed  25 other_answer [{"type": "send_command", "command": "5"}]
+seed  26 other_answer [{"type": "send_command", "command": "2"}]
+seed  27 says4        [{"type": "send_command", "command": "4"}]
+seed  28 other_answer [{"type": "send_command", "command": "2"}]
+seed  29 other_answer [{"type": "send_command", "command": "What is the answer to the second question?"}]
+seed  30 other_answer [{"type": "send_command", "command": "2"}]
+seed  31 other_answer [{"type": "send_command", "command": "2"}]
+seed  32 other_answer [{"type": "send_command", "command": "2"}]
+seed  33 other_answer [{"type": "send_command", "command": "2"}]
+seed  34 other_answer [{"type": "send_command", "command": "2"}]
+seed  35 no_send      []
+seed  36 says4        [{"type": "send_command", "command": "42"}]
+seed  37 says4        [{"type": "send_command", "command": "42"}]
+seed  38 says4        [{"type": "send_command", "command": "hello"}, {"type": "send_command", "command": "Paris"}, {"type": "send_command", "command": "4"}]
+seed  39 no_send      []
+seed  40 other_answer [{"type": "send_command", "command": "2"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/f_F2_plain.py {'says4': 12, 'other_answer': 25, 'no_send': 3, 'TEXT': 0}
+seed  21 says4        [{"type": "send_command", "command": "4"}]
+seed  22 other_answer [{"type": "send_command", "command": "correct"}]
+seed  23 other_answer [{"type": "send_command", "command": "Correct."}]
+seed  24 other_answer [{"type": "send_command", "command": "2"}]
+seed  25 other_answer [{"type": "send_command", "command": "Correct"}]
+seed  26 other_answer [{"type": "send_command", "command": "Correct"}]
+seed  27 other_answer [{"type": "send_command", "command": "2"}]
+seed  28 other_answer [{"type": "send_command", "command": "2"}]
+seed  29 other_answer [{"type": "send_command", "command": "2"}]
+seed  30 other_answer [{"type": "send_command", "command": "2"}]
+seed  31 other_answer [{"type": "send_command", "command": "2"}]
+seed  32 other_answer [{"type": "send_command", "command": "2"}]
+seed  33 other_answer [{"type": "send_command", "command": "2"}]
+seed  34 says4        [{"type": "send_command", "command": "4"}]
+seed  35 other_answer [{"type": "send_command", "command": "2"}]
+seed  36 other_answer [{"type": "send_command", "command": "2"}]
+seed  37 other_answer [{"type": "send_command", "command": "2"}]
+seed  38 other_answer [{"type": "send_command", "command": "I don't know"}]
+seed  39 other_answer [{"type": "send_command", "command": "2"}]
+seed  40 other_answer [{"type": "send_command", "command": "2"}]
+TALLY 00026-api_generate.req.json /tmp/telnet-line/variants/q2_B_plain.py {'says4': 2, 'other_answer': 18, 'no_send': 0, 'TEXT': 0}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 other []
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 other []
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/f_F.py {'LINE': 28, 'TEXT': 0, 'other': 2}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 other []
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 other []
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+seed  31 LINE  
+seed  32 LINE  
+seed  33 LINE  
+seed  34 LINE  
+seed  35 LINE  
+seed  36 LINE  
+seed  37 LINE  
+seed  38 other []
+seed  39 other []
+seed  40 other []
+seed  41 LINE  
+seed  42 other []
+seed  43 LINE  
+seed  44 LINE  
+seed  45 LINE  
+seed  46 LINE  
+seed  47 LINE  
+seed  48 LINE  
+seed  49 LINE  
+seed  50 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/f_F.py {'LINE': 44, 'TEXT': 0, 'other': 6}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 other []
+seed  29 LINE  
+seed  30 LINE  
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/f_F2.py {'LINE': 29, 'TEXT': 0, 'other': 1}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 other []
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 other []
+seed  19 LINE  
+seed  20 LINE  
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+seed  31 LINE  
+seed  32 LINE  
+seed  33 LINE  
+seed  34 LINE  
+seed  35 other []
+seed  36 LINE  
+seed  37 LINE  
+seed  38 LINE  
+seed  39 other []
+seed  40 LINE  
+seed  41 LINE  
+seed  42 LINE  
+seed  43 LINE  
+seed  44 LINE  
+seed  45 LINE  
+seed  46 LINE  
+seed  47 LINE  
+seed  48 LINE  
+seed  49 other []
+seed  50 LINE  
+TALLY 00002-api_generate.req.json /tmp/telnet-line/variants/f_F2.py {'LINE': 45, 'TEXT': 0, 'other': 5}

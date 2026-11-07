@@ -1,0 +1,124 @@
+seed   1 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   2 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   3 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   4 LINE  
+seed   5 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   6 other []
+seed   7 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   8 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed   9 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  10 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  11 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  12 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  13 other []
+seed  14 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  15 other []
+seed  16 other []
+seed  17 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  18 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  19 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  20 LINE  
+seed  21 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  22 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  23 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  24 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  25 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  26 other []
+seed  27 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  28 other []
+seed  29 TEXT  [{"type": "send_text", "text": "Paris"}]
+seed  30 TEXT  [{"type": "send_text", "text": "Paris"}]
+TALLY 00004-api_generate.req.json - {'LINE': 2, 'TEXT': 22, 'other': 6}
+seed   1 LINE  
+seed   2 other [{"type": "command", "command": "answer: Paris"}]
+seed   3 other [{"type": "command", "command": "what is the capital of France?"}]
+seed   4 other [{"command": "answer: Paris"}]
+seed   5 LINE  
+seed   6 LINE  
+seed   7 other [{"type": "command", "command": "answer: Paris"}]
+seed   8 other [{"type": "command", "command": "answer1"}]
+seed   9 other []
+seed  10 other [{"type": "command", "command": "answer: Paris"}]
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 other []
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 other [{"type": "command", "command": "Paris"}]
+seed  20 other [{"command": "answer 1: Paris"}]
+seed  21 LINE  
+seed  22 other [{"type": "command", "command": "answer1"}, {"type": "command", "command": "answer2"}]
+seed  23 other [{"type": "command", "command": "answer 1 Paris"}]
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 other [{"type": "command", "command": "I don't know"}]
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/v_B2_event.py {'LINE': 17, 'TEXT': 0, 'other': 13}
+seed   1 LINE  
+seed   2 LINE  
+seed   3 LINE  
+seed   4 LINE  
+seed   5 LINE  
+seed   6 LINE  
+seed   7 LINE  
+seed   8 LINE  
+seed   9 LINE  
+seed  10 LINE  
+seed  11 LINE  
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 other []
+seed  17 LINE  
+seed  18 LINE  
+seed  19 LINE  
+seed  20 LINE  
+seed  21 LINE  
+seed  22 LINE  
+seed  23 LINE  
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 LINE  
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/v_B_wording.py {'LINE': 29, 'TEXT': 0, 'other': 1}
+seed   1 other []
+seed   2 other [{"type": "command", "command": "answer 1 Paris"}]
+seed   3 other [{"type": "command", "command": "my answer is Paris"}]
+seed   4 other []
+seed   5 LINE  
+seed   6 LINE  
+seed   7 other [{"type": "command", "command": "answer 1: Paris"}]
+seed   8 other [{"type": "command", "command": "answer1"}]
+seed   9 other []
+seed  10 other [{"type": "command", "command": "answer 1: Paris"}]
+seed  11 other [{"type": "wait_for_more"}]
+seed  12 LINE  
+seed  13 LINE  
+seed  14 LINE  
+seed  15 LINE  
+seed  16 LINE  
+seed  17 LINE  
+seed  18 LINE  
+seed  19 other [{"type": "command", "command": "your answer here"}]
+seed  20 other []
+seed  21 LINE  
+seed  22 other [{"type": "command", "command": "answer1: Paris"}]
+seed  23 other [{"type": "command", "command": "answer"}]
+seed  24 LINE  
+seed  25 LINE  
+seed  26 LINE  
+seed  27 LINE  
+seed  28 LINE  
+seed  29 LINE  
+seed  30 other [{"type": "command", "command": "capital of France?"}]
+TALLY 00004-api_generate.req.json /tmp/telnet-line/variants/v_E_drop.py {'LINE': 16, 'TEXT': 0, 'other': 14}

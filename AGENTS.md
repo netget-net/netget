@@ -1055,9 +1055,15 @@ servers answered by script handlers), check off → on:
 One quiz number goes the other way, and why matters: the answer to question 1 reached the
 server as a line in 7 of 8 runs off and 4 of 8 on. In the four the model answered with the
 telnet client's `send_text`, which sends no line ending; off, the restarted `hello` line that
-followed it happened to end the line (`Parishello`). That is the model picking the wrong telnet
-action, not the check — but a measurement of conversation over telnet should read the model's
-actions, not only the server's lines.
+followed it happened to end the line (`Parishello`). That was the model picking the wrong
+telnet action, not the check, and the check made it likelier: the question asked again says
+`send_command {"command":"hello"}` is not to be sent again, and the model read the *action* as
+spent (22 of 30 replayed seeds answered with `send_text`). The telnet client's action
+descriptions now name `send_command` as the way to answer anything and `send_text` as not for
+answers; with the check on, question 1 then reached the server as a line in 7 of 8 runs (3 of
+8 on the same day's master; the eighth answered with JSON that does not parse).
+`src/client/telnet/AGENTS.md` has the measurement. A measurement of conversation over telnet
+should still read the model's actions, not only the server's lines.
 
 A scripted client is still better written as a script or static handler (`--client-handlers`),
 which costs no model call at all. `tests/client_restart_check_test.rs` drives the mechanism
