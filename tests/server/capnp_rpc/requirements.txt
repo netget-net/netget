@@ -1,10 +1,18 @@
 # pycapnp (MIT), the Python binding of the C++ Cap'n Proto runtime it bundles, and its
-# jinja2 dependency; CPython 3.12
-# and 3.13 manylinux wheels.
+# jinja2 dependency; CPython 3.12 and 3.13 wheels for manylinux x86_64 and for macOS
+# (x86_64 and arm64), so the same pins install on CI and on a developer's Mac.
 pycapnp==2.2.4 \
     --hash=sha256:80e12e4713dca8683188aae7dd883b25d9175c1b41455af2b5d5a35dd0d3c42a \
-    --hash=sha256:3d5444575a2f9c2f1cf50c99ef08d9a76dde47a3a13fdf02909fe6c6e1b69901
+    --hash=sha256:3d5444575a2f9c2f1cf50c99ef08d9a76dde47a3a13fdf02909fe6c6e1b69901 \
+    --hash=sha256:5ce72f99b089966b27e43a95911f2f448c2167ed9e56355b626423ab197c729e \
+    --hash=sha256:e54b87f5e2ecae92a6288fd0c25efff3bf3655c65cda710045bf02dd0226975d \
+    --hash=sha256:f001ec86321ee9e6a8f86ff03fbd76e0de2d1d0518e83f3901cb5b7111d9460c \
+    --hash=sha256:b513e7ba63b8d2a4832d3dc1d683bfbb28df1e34d79eabbbbaf08ba058fb9afb
 jinja2==3.1.6 --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
 markupsafe==3.0.4 \
     --hash=sha256:8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581 \
-    --hash=sha256:434139499bb20b502ed3baa1f169e618f924a97e7a777fea1a49446d80106cf6
+    --hash=sha256:434139499bb20b502ed3baa1f169e618f924a97e7a777fea1a49446d80106cf6 \
+    --hash=sha256:61631e08084be9e21a8967ec3139c7616ed7c5e9368e05c86d1b39562c8a57b6 \
+    --hash=sha256:0930db9bdc62d22944e10b066448bb65dc9abe9112880c7cab8da54db4284d5f \
+    --hash=sha256:2d1b7d9308288661f56672b1b157d75fc536714d3638487bbea17b6318a78248 \
+    --hash=sha256:73e77980c7207854f00fc4e71fb1626868d5740ab4012623d55c7a99ad122a72

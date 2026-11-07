@@ -108,8 +108,9 @@ Both tests end with `server.verify_mocks().await?` and `server.stop().await?`.
 ## Not covered
 
 - Any real client — in this file. See `real_client_test.rs` and `flexible_versions_test.rs`.
-- Compressed record batches (gzip/snappy/lz4/zstd). The decoder path uses `kafka-protocol`'s
-  built-in codecs and should work; it is untested here.
+- Compressed record batches from a real producer. The decoder path is NetGet's bounded
+  `inflate_bounded` for gzip, snappy, lz4 and zstd; `inflation_bound_test.rs` drives it with
+  `kafka-protocol`'s own encoder, not with a third-party producer.
 - `acks=0`, where the broker deliberately writes no response.
 - OffsetCommit v8+ from a third-party client: Java and franz-go both look up a coordinator
   first, and FindCoordinator is not implemented.
@@ -216,6 +217,13 @@ version the request names, decode → encode → decode asserted equal, and for 
 reaches the decompressors. Its corpus carries `produce_gzip_inflation_bomb`, a 64 KiB gzip batch
 of 64 MiB of zeros. Writing it is what showed that `kafka-protocol`'s gzip, zstd and lz4
 decompressors have no output bound, so the broker inflated that batch in full;
-`MAX_INFLATED_PRODUCE_BYTES` (16 MiB per request, MESSAGE_TOO_LARGE past it) is the fix, and
-`inflation_bound_test.rs` pins it for all four codecs. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
+`MAX_INFLATED_PRODUCE_BYTES` (16 MiB per request, MESSAGE_TOO_LARGE past it; the reasoning for
+the number is in `src/server/kafka/AGENTS.md`) is the fix, and `inflation_bound_test.rs` pins it
+for all four codecs: a bomb at four times the budget, one batch inflating to exactly the budget
+(taken, budget left at zero) and one byte more (refused), and the budget shared across a
+request's batches. The same file pins `MAX_PRODUCE_RECORDS` (100 000 records per request,
+MESSAGE_TOO_LARGE past it) uncompressed and gzip: exactly the bound taken, one record more
+refused at no cost to the budget, the bound shared across batches, and a header declaring
+`i32::MAX` records — more than its bytes can hold — refused as corrupt before the batch is
+decoded (its CRC is deliberately wrong, so only the screen's own error can pass). run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
 RSS 841 MB.

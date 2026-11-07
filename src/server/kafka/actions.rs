@@ -639,7 +639,7 @@ impl Protocol for KafkaProtocol {
                  oracle. UNPROVEN: consumer groups (the APIs do not exist here), compression, \
                  transactions, TLS/SASL, multi-broker metadata, any Fetch that must resolve an \
                  offset (ListOffsets is not implemented), and OffsetCommit v8+ from a \
-                 third-party client, which would need a coordinator first. FUZZ: fuzz/fuzz_targets/kafka_request.rs drives kafka-protocol's request decoders and decode_record_batches (CRC fixed up so the decompressors are reached), with a gzip inflation bomb that MAX_INFLATED_PRODUCE_BYTES refuses.",
+                 third-party client, which would need a coordinator first. FUZZ: fuzz/fuzz_targets/kafka_request.rs drives kafka-protocol's request decoders and decode_record_batches (CRC fixed up so the decompressors are reached), with a gzip inflation bomb that MAX_INFLATED_PRODUCE_BYTES refuses; MAX_PRODUCE_RECORDS (100 000 per request) bounds the records decoded, compressed or not.",
             )
             .notes(
                 "Supports exactly five API keys: ApiVersions (18) v0-3, Metadata (3) v0-12, \

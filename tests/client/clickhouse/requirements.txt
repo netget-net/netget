@@ -1,3 +1,11 @@
-clickhouse-driver==0.2.11 --hash=sha256:02a2ed14043f5f6e0d7dc46543a5e7a6b3f56cde0c2cf8a03900d026f3ed3734 --hash=sha256:01cf396d22154f668ccd9a8f2cae7d66ba6f0634d668cd2822f763089af50741
+# clickhouse-driver's CPython 3.12 and 3.13 wheels for manylinux x86_64 and for macOS
+# (x86_64 and arm64); its two dependencies are pure Python.
+clickhouse-driver==0.2.11 \
+    --hash=sha256:02a2ed14043f5f6e0d7dc46543a5e7a6b3f56cde0c2cf8a03900d026f3ed3734 \
+    --hash=sha256:01cf396d22154f668ccd9a8f2cae7d66ba6f0634d668cd2822f763089af50741 \
+    --hash=sha256:9efb601aad3af8cfbc452c057d3a6fce60b467ceb0784fb470174c06f2939614 \
+    --hash=sha256:da7bd9a548f956ade42468059086faa442867f19be43dfe0e1f4ad762bd188f9 \
+    --hash=sha256:837e9d98f5648342b3de60e2351117c5a1de299672611e97be56cbdeadeec7a0 \
+    --hash=sha256:4b8d99cfc4f80a4f59721d07fcce98c3093d9bf9a630a3b13165cd6aec86360b
 pytz==2026.5 --hash=sha256:e658af3757f9e26a9d25dd2aff38335acd92bc9104f890a894b2c1ba28311b03
 tzlocal==5.4.4 --hash=sha256:aae09f0126a8a86fa736be266eb4a471380d26a0de3bc14844e7821fee3e2a15

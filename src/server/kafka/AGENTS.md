@@ -259,16 +259,102 @@ Produce request carrying the 61-byte batch to a running broker and decodes each 
 beside a well-formed control. The reproduction is one `sed` away: removing the array bound
 makes the ratchet's decode test die with `memory allocation of 154618822584 bytes failed`.
 
-**Still open in the decoder:** gzip, lz4 and zstd inflate whatever the data inflates to (a
-compression bomb inside the 100 MiB request cap inflates in full), and legacy (magic 0/1)
+**Still open in the decoder:** legacy (magic 0/1)
 nested compressed messages recurse with no depth bound. See `README.netget.md`.
 
-## Compression
+## Compression and `MAX_INFLATED_PRODUCE_BYTES`
 
-`RecordBatchDecoder::decode_with_custom_compression(.., None)` selects `kafka-protocol`'s
-built-in codecs, and the crate's default features enable gzip, snappy, lz4 and zstd. An
-earlier note in this file claimed passing `None` made every compressed batch fail; that was
-wrong — `None` means "use the built-ins", not "no decompression".
+Produce batches are decoded with `RecordBatchDecoder::decode_with_custom_compression` and
+NetGet's own `inflate_bounded` (`mod.rs`), not the crate's built-in codecs: those copy the whole
+inflated stream into one buffer before decoding a record and have no output bound, so a 64 KiB
+gzip batch of zeros became 64 MiB here. Every batch of one Produce request draws on one budget,
+`MAX_INFLATED_PRODUCE_BYTES` = **16 MiB**; a partition whose batches would take the request past
+it is answered `MESSAGE_TOO_LARGE` (10) without consulting the model, logged
+`decision=refused_inflation_bound`. Gzip, lz4 and zstd are read through `take(left + 1)`; snappy's
+declared length is checked before anything is allocated. An uncompressed batch costs no budget —
+its bytes are already inside the `MAX_REQUEST_BYTES` frame.
+
+**Why this bound exists although Apache Kafka has none.** Read in Kafka 3.9.1's source:
+
+- The broker bounds the **compressed** batch only. `UnifiedLog.analyzeAndValidateRecords`
+  refuses a batch whose `sizeInBytes` exceeds `message.max.bytes` with `RecordTooLargeException`
+  — the wire's `MESSAGE_TOO_LARGE` — and the topic doc says it in as many words: "the largest
+  record batch size allowed by Kafka (after compression if compression is enabled)". The default
+  is `1024 * 1024 + Records.LOG_OVERHEAD` = 1 048 588 (`LogConfig.DEFAULT_MAX_MESSAGE_BYTES`); a
+  whole request is capped by `socket.request.max.bytes`, 100 MiB, which `MAX_REQUEST_BYTES`
+  copies. After validation `append()` checks the *recompressed* batch against the same limit.
+- Nothing bounds the decompressed size. `LogValidator.validateMessagesAndAssignOffsetsCompressed`
+  adds each record's size into `uncompressedSizeInBytes` for statistics and compares it with
+  nothing. What keeps the Java broker's memory small is that it never holds an inflated batch:
+  it walks records one at a time through `streamingIterator`, and when the producer's codec is
+  the topic's it uses `skipKeyValueIterator`, which skips keys and values without reading them
+  (`DefaultRecord.readPartiallyFrom`). A bomb costs a Java broker CPU, not memory.
+- `kafka-protocol` cannot stream: it inflates the batch, then decodes every record into a
+  `Vec<Record>`. So NetGet needs a bound the broker it imitates does not have, and
+  `MESSAGE_TOO_LARGE` is the answer a real broker gives a batch it will not take.
+
+**Why 16 MiB.** Real producers' requests are about a mebibyte compressed: Kafka's Java producer
+defaults to `max.request.size` 1 048 576 and `batch.size` 16 384, librdkafka (2.16.0
+`CONFIGURATION.md`) to `message.max.bytes` 1 000 000 per request and `batch.size` 1 000 000 per
+MessageSet, *before* compression. 16 MiB is sixteen times the request a default producer
+sends, so a full default request still decodes at a 16:1 compression ratio, and any librdkafka
+MessageSet within its default `batch.size` inflates to under a sixteenth of the budget. When a
+very compressible request does go past it, the Java producer recovers by itself: on
+`MESSAGE_TOO_LARGE` for a batch of more than one record it splits the batch and re-sends
+(`Sender.completeBatch` → `splitAndReenqueue`), so the refusal costs a retry, not data.
+librdkafka treats `MSG_SIZE_TOO_LARGE` as permanent for those messages.
+
+The model is not what sizes this. A `kafka_produce_request` event carries at most
+`MAX_EVENT_RECORDS` (20) records, each key and value cut to `MAX_EVENT_VALUE_BYTES` (1 KiB),
+plus `record_count`, so beyond ~40 KiB nothing inflated reaches the prompt; the bound is for
+memory and CPU, and a lower one would refuse real traffic without making any prompt better.
+
+**Why not a ratio or a per-record bound.** A ratio (inflated ÷ compressed) bounds nothing
+absolute: at the 100 MiB request cap even a 10:1 ratio admits 1 GiB, and it refuses exactly the
+legitimate case compression exists for — repetitive JSON and log lines compress far past 10:1. A
+per-record cap does not bound the total, since a request can carry millions of small records,
+and the broker has none to copy (`DefaultRecord.readFrom` takes a record's declared size as
+given); a default producer cannot send a record over `max.request.size` anyway. One absolute
+budget per request is the only one of the three that bounds what a request can cost.
+
+## Decoded records and `MAX_PRODUCE_RECORDS`
+
+The inflation budget bounds bytes, not what decoding them costs. Each decoded record is a
+`Record` struct (`kafka-protocol` 0.14.1; `size_of::<Record>()` is 176 bytes on aarch64,
+measured) and a v2 record with no key, value or headers encodes in 7 bytes (measured with the
+crate's own encoder), so the decoded `Vec<Record>` can be ~25× the bytes it came from — 16 MiB
+inflated is ~2.4 M records, ~420 MB, and a 100 MiB **uncompressed** request ~15 M records,
+~2.5 GiB. So one Produce request's batches, compressed or not, may decode to at most
+`MAX_PRODUCE_RECORDS` = **100 000** records between them (~17.6 MB of `Record`s), the same
+per-request budget shape as the inflation bound (`ProduceBudget` carries both). A partition past
+it is answered `MESSAGE_TOO_LARGE`, logged `decision=refused_record_bound`.
+
+- **Refused before anything is allocated.** `declared_records` walks the partition's batches
+  by their length fields and reads each v2 batch's `recordsCount` (header offset 57) before the
+  batch is copied, inflated or decoded; a v2 batch decodes to exactly that many records or
+  fails, so the declared count is the decoded count. A legacy (magic 0/1) message counts as one
+  there, because a compressed legacy wrapper does not say what it holds, and the records that
+  come out are counted again after decoding.
+- **A count the batch cannot hold is corrupt, not too large.** A v2 record takes at least 7
+  bytes, so an uncompressed batch holds at most its record bytes over 7, and a compressed one at
+  most what is left of the inflation budget over 7. A batch declaring more is answered
+  `CORRUPT_MESSAGE` (2) by the same screen, before the decoder — which reserves for the declared
+  count — is reached; `declared_array_length_test.rs` sends the 61-byte batch declaring
+  `i32::MAX` records to a running broker and expects exactly that.
+- **Why 100 000.** Kafka has no record-count limit to copy. Real producers stay far under it:
+  the Java producer's 16 KiB default `batch.size` holds a few thousand records at most, and
+  librdkafka caps a MessageSet at `batch.num.messages` 10 000. The model sees 20 records
+  either way. The coordinator set the number from these figures, the maintainer having left the
+  Kafka limits to them.
+- **Why `MESSAGE_TOO_LARGE`.** Kafka's four candidates (`Errors.java`, 3.9.1) mean different
+  things to a producer. `CORRUPT_MESSAGE` (2) says the batch is damaged, and its exception,
+  `CorruptRecordException`, extends `RetriableException`, so a producer would re-send the same
+  batch until its delivery timeout. `INVALID_RECORD` (87) says a record failed validation, which
+  these records did not. `RECORD_LIST_TOO_LARGE` (18) is the segment-size refusal and permanent.
+  `MESSAGE_TOO_LARGE` (10), "larger than the max message size the server will accept", is the
+  size refusal a broker gives a batch past `message.max.bytes`, and it is the one the Java
+  producer answers by splitting the batch and re-sending the halves (`Sender.completeBatch`),
+  which is the recovery a request with too many records needs.
 
 ## Testing
 

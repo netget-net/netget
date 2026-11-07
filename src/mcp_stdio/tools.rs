@@ -1646,7 +1646,7 @@ impl NetGetMcpService {
     }
 
     #[tool(
-        description = "Change the LLM model every server and client uses. Refused when the Ollama endpoint does not have the model installed (the error lists the installed ones); an OpenAI-compatible endpoint's list is advisory, so an unlisted name is accepted with a warning."
+        description = "Change the LLM model every server and client uses. Always accepted: when the endpoint lists its models and this one is not among them, the model is still set and the reply carries a warning naming the endpoint and listing the installed models (requests fail until the endpoint serves it)."
     )]
     async fn set_model(
         &self,
@@ -1663,15 +1663,17 @@ impl NetGetMcpService {
         let endpoint = crate::llm::model_selection::describe_endpoint(client);
         let warning = match check_model(client, &model).await {
             ModelAvailability::Installed | ModelAvailability::NotApplicable => None,
+            // Never refused: the operator may be about to pull the model, or the endpoint
+            // may serve a name it does not list. The warning says what a request will meet.
             ModelAvailability::NotInstalled { installed } if client.backend_type() == "ollama" => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Model not changed: '{}' is not installed at {}. Installed models: {}. \
-                     Install it with `ollama pull {}`, or choose one of those.",
+                Some(format!(
+                    "Warning: '{}' is not installed at {} (installed: {}). Requests using it \
+                     fail until it is installed (`ollama pull {}`) or another model is set.",
                     model,
                     endpoint,
                     summarize_models(&installed),
                     model
-                ))]));
+                ))
             }
             ModelAvailability::NotInstalled { installed } => Some(format!(
                 "Warning: {} does not list '{}' (it lists: {}); requests fail if it does not \

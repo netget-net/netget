@@ -752,7 +752,7 @@ impl Protocol for ProfinetProtocol {
             DevelopmentState, PrivilegeRequirement, ProtocolMetadataV2,
         };
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PacketCapture)
             .well_known_udp_port(34964)
             // Every refusal PROFINET defines is sent: a DCP Set the model did not approve is
@@ -791,13 +791,17 @@ impl Protocol for ProfinetProtocol {
                  PrmEnd, ApplicationReady, RT_CLASS_1 cyclic data, I&M0 read) and pnio_dcp \
                  (Codewerk's Python DCP library: identify, set name, set IP, blink) against the \
                  raw transport, with tshark's pn_dcp / pn_io / pn_rt dissectors reading a live \
-                 capture of both directions",
+                 capture of both directions. The real-peer test needs Linux and CAP_NET_RAW, \
+                 so it runs only in the `profinet` job of protocol-pairs.yml, never on macOS",
             )
             .notes(
-                "Experimental: one independent IO controller (profinet-py) and one independent \
-                 DCP implementation (pnio_dcp); no PLC (a Siemens or CODESYS controller) has \
-                 been pointed at it, its pair job had not run in CI when it landed, and the raw \
-                 transport needs CAP_NET_RAW so it runs only in that job. Not implemented: \
+                "Beta on CI-only evidence: profinet-py (an independent IO controller) and \
+                 pnio_dcp (an independent DCP implementation) pass real_peer_test.rs in the \
+                 `profinet` job of protocol-pairs.yml (job 116898932856, run 38878401785, \
+                 16 October 2026), with tshark's dissectors reading the capture. That test \
+                 needs Linux and CAP_NET_RAW, so it cannot run on a macOS machine and nobody \
+                 reviewing there has watched it pass. No PLC (a Siemens or CODESYS controller) \
+                 has been pointed at it. Not implemented: \
                  alarms (the AlarmCR is accepted, no alarm is ever sent and none is \
                  acknowledged), RT_CLASS_2/3 and RT over UDP, multicast CRs, MRP, LLDP/SNMP \
                  neighbourhood records, diagnosis records, shared devices beyond one IO AR plus \
