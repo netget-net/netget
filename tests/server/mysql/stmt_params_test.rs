@@ -593,7 +593,7 @@ async fn a_fragmented_execute_is_captured_whole() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// opensrv-mysql beneath the tap: one packet per read
+// opensrv-mysql beneath the tap: pipelined packets
 // ---------------------------------------------------------------------------------------------
 
 struct ProbeShim;
@@ -663,14 +663,14 @@ async fn probe_read<R: tokio::io::AsyncRead + Unpin>(r: &mut R) -> Option<(u8, V
 /// Drive a bare `opensrv-mysql` server over an in-memory pipe, the way the MySQL server does:
 /// with `CommandTapReader` directly beneath it.
 ///
-/// The client writes two `COM_STMT_SEND_LONG_DATA` chunks back to back, which lands them in
-/// one read for a reader that does not split them. `opensrv-mysql`'s `PacketReader` then
-/// parses the first from a buffer it has just freed (see `command_tap`'s module docs); here
-/// that came back as a stray OK packet for a command that has no reply, after which every
-/// reply was one behind. Through the tap no read crosses a packet boundary, so the chunks get
-/// no reply at all and the execute after them gets its own.
+/// The client writes two `COM_STMT_SEND_LONG_DATA` chunks and an execute in one write, which
+/// the tap passes up as one read. Upstream opensrv-mysql 0.7.0's `PacketReader` parses the
+/// first of two packets in one read from a buffer it has just freed (see `command_tap`'s
+/// module docs); that came back as a stray OK packet for a command that has no reply, after
+/// which every reply was one behind. NetGet's fork (`netget-opensrv-mysql`) reads them from
+/// live memory, so the chunks get no reply at all and the execute after them gets its own.
 #[tokio::test]
-async fn pipelined_commands_reach_opensrv_one_packet_per_read() {
+async fn pipelined_commands_through_the_tap_each_get_their_own_reply() {
     use tokio::io::AsyncWriteExt;
     let (client, server) = tokio::io::duplex(1 << 16);
     let (sr, sw) = tokio::io::split(server);
