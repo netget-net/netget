@@ -11,15 +11,39 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::LazyLock;
 
-/// Send a line, with the newline appended for you.
+/// The Telnet end of line, RFC 854's NVT newline. Every line this client sends ends in it.
+pub const LINE_ENDING: &str = "\r\n";
+
+/// The bytes `send_command` puts on the wire: the line, without any line ending the model
+/// wrote itself, then [`LINE_ENDING`]. A model that writes `"hello\r\n"` means one line, and
+/// sending it as `hello\r\n\r\n` would hand a line-based server an empty second line.
+pub fn line_bytes(line: &str) -> Vec<u8> {
+    let mut out = line.trim_end_matches(['\r', '\n']).as_bytes().to_vec();
+    out.extend_from_slice(LINE_ENDING.as_bytes());
+    out
+}
+
+/// Send a line, with the line ending appended for you. The usual answer.
+///
+/// The descriptions here and on `send_text` and `telnet_data_received` decide which of the two
+/// a model picks, and they were measured: llama3.1:8b, the quiz question of the restart-check
+/// measurement replayed over seeds (`src/client/telnet/AGENTS.md` has the table). Worded as "a
+/// text command" beside a `send_text` "for where the server is waiting mid-line", the model
+/// answered with `send_text` on 8 of 50 seeds, and on 22 of 30 once the restart check had told
+/// it `send_command {"command":"hello"}` was not to be sent again. Worded as below it did on
+/// none of either. Renaming the action, folding the two into one with a `line_ending` field,
+/// rewording the event alone or not offering `send_text` all left more answers empty.
 fn send_command_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_command".to_string(),
-        description: "Send a text command to the Telnet server (a newline is appended)".to_string(),
+        description: "Send one line to the Telnet server: an answer, a reply, a login name or a \
+                      command. The line ending (CRLF) is added for you. This is the normal way \
+                      to answer anything the server says."
+            .to_string(),
         parameters: vec![Parameter {
             name: "command".to_string(),
             type_hint: "string".to_string(),
-            description: "The command text to send (newline will be appended)".to_string(),
+            description: "The line to send, without a line ending".to_string(),
             required: true,
         }],
         example: json!({
@@ -30,22 +54,24 @@ fn send_command_action() -> ActionDefinition {
     }
 }
 
-/// Send exact bytes, for a prompt that does not want a line ending.
+/// Send exact text with no line ending, for a server that reads keys or waits on the same line.
 fn send_text_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_text".to_string(),
-        description: "Send raw text to the Telnet server, exactly as given and with no newline \
-                      added. Use it where the server is waiting mid-line."
+        description: "Send text with NO line ending. A line-based server does not see it until \
+                      a line ending follows, so do not use it to answer a question or a prompt; \
+                      use send_command. Only for a server that reads single keys or waits for \
+                      more on the same line."
             .to_string(),
         parameters: vec![Parameter {
             name: "text".to_string(),
             type_hint: "string".to_string(),
-            description: "The text to send".to_string(),
+            description: "The characters to send, with nothing added".to_string(),
             required: true,
         }],
         example: json!({
             "type": "send_text",
-            "text": "yes"
+            "text": "y"
         }),
         log_template: None,
     }
@@ -109,8 +135,8 @@ pub static TELNET_CLIENT_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::ne
     EventType::new(
         "telnet_data_received",
         "Data received from Telnet server, with option negotiation already stripped and \
-         answered. Reply with send_command or send_text, or wait_for_more if this looks like \
-         part of a prompt you have not finished reading.",
+         answered. Reply with send_command (one line, the usual answer), or wait_for_more if \
+         this looks like part of a prompt you have not finished reading.",
         // Rendered verbatim into the documentation the model reads, so it has to be an action
         // the executor accepts. This was `{"type": "placeholder"}`.
         json!({
@@ -324,9 +350,7 @@ impl Client for TelnetClientProtocol {
                     .and_then(|v| v.as_str())
                     .context("Missing 'command' field")?;
 
-                // Append newline for command
-                let data = format!("{}\r\n", command).into_bytes();
-                Ok(ClientActionResult::SendData(data))
+                Ok(ClientActionResult::SendData(line_bytes(command)))
             }
             "send_text" => {
                 let text = action

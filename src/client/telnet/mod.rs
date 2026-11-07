@@ -6,10 +6,10 @@ pub use actions::TelnetClientProtocol;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info, trace};
+use tracing::trace;
 
 use crate::client::llm_budget::call_llm_for_client;
 use crate::client::telnet::actions::{
@@ -17,6 +17,7 @@ use crate::client::telnet::actions::{
 };
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::logging::patterns;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
@@ -79,19 +80,18 @@ impl TelnetClient {
         let local_addr = stream.local_addr()?;
         let remote_sock_addr = stream.peer_addr()?;
 
-        info!(
+        Log::to(&status_tx).info(format!(
             "Telnet client {} {} {} (local: {})",
             client_id,
             patterns::TELNET_CLIENT_CONNECTED,
             remote_sock_addr,
             local_addr
-        );
+        ));
 
         // Update client state
         app_state
             .update_client_status(client_id, ClientStatus::Connected)
             .await;
-        let _ = status_tx.send(format!("[CLIENT] Telnet client {} connected", client_id));
         let _ = status_tx.send("__UPDATE_UI__".to_string());
 
         // Split stream
@@ -143,58 +143,33 @@ impl TelnetClient {
                         client_data.lock().await.memory = new_memory;
                     }
 
-                    // Execute actions from LLM response
+                    // The same executor as every later answer and every injected action, so
+                    // what an action puts on the wire is defined once, in `actions.rs`.
                     for action in result.actions {
-                        if let Some(action_type) = action["type"].as_str() {
-                            match action_type {
-                                "send_command" => {
-                                    if let Some(command) = action["command"].as_str() {
-                                        let command_line = format!("{}\r\n", command);
-                                        let mut write_guard = write_half_for_connected.lock().await;
-                                        if let Err(e) =
-                                            write_guard.write_all(command_line.as_bytes()).await
-                                        {
-                                            error!("Failed to send command after connect: {}", e);
-                                        } else if let Err(e) = write_guard.flush().await {
-                                            error!("Failed to flush after connect: {}", e);
-                                        } else {
-                                            info!(
-                                                "{} {}",
-                                                patterns::TELNET_CLIENT_SENT_COMMAND,
-                                                command
-                                            );
-                                        }
-                                    }
-                                }
-                                "send_text" => {
-                                    if let Some(text) = action["text"].as_str() {
-                                        let mut write_guard = write_half_for_connected.lock().await;
-                                        if let Err(e) = write_guard.write_all(text.as_bytes()).await
-                                        {
-                                            error!("Failed to send text after connect: {}", e);
-                                        } else if let Err(e) = write_guard.flush().await {
-                                            error!("Failed to flush after connect: {}", e);
-                                        } else {
-                                            info!("{} {}", patterns::TELNET_CLIENT_SENT_TEXT, text);
-                                        }
-                                    }
-                                }
-                                "disconnect" => {
-                                    info!("LLM requested disconnect after connect");
-                                    return Ok(local_addr);
-                                }
-                                "wait_for_more" => {
-                                    // Just wait for data
-                                }
-                                _ => {
-                                    trace!("Unknown action type after connect: {}", action_type);
-                                }
-                            }
+                        if let Applied::Disconnect = Self::apply_action(
+                            action,
+                            &write_half_for_connected,
+                            client_id,
+                            &status_tx,
+                        )
+                        .await
+                        {
+                            app_state
+                                .update_client_status(client_id, ClientStatus::Disconnected)
+                                .await;
+                            Log::to(&status_tx)
+                                .info(format!("Telnet client {} disconnected", client_id));
+                            let _ = status_tx.send("__UPDATE_UI__".to_string());
+                            app_state.remove_client_handle(client_id).await;
+                            return Ok(local_addr);
                         }
                     }
                 }
                 Err(e) => {
-                    error!("LLM error on telnet_connected event: {}", e);
+                    Log::to(&status_tx).error(format!(
+                        "Telnet client {} LLM error on telnet_connected: {}",
+                        client_id, e
+                    ));
                 }
             }
         }
@@ -247,8 +222,8 @@ impl TelnetClient {
                             app_state
                                 .update_client_status(client_id, ClientStatus::Disconnected)
                                 .await;
-                            let _ = status_tx.send(format!(
-                                "[CLIENT] Telnet client {} disconnected (injected action)",
+                            Log::to(&status_tx).info(format!(
+                                "Telnet client {} disconnected (injected action)",
                                 client_id
                             ));
                             let _ = status_tx.send("__UPDATE_UI__".to_string());
@@ -303,15 +278,14 @@ impl TelnetClient {
                                 .write_all(&response)
                                 .await
                             {
-                                Ok(()) => trace!(
+                                Ok(()) => Log::to(&status_tx).trace(format!(
                                     "Telnet client {} sent negotiation response: {:?}",
-                                    client_id,
-                                    response
-                                ),
-                                Err(e) => error!(
+                                    client_id, response
+                                )),
+                                Err(e) => Log::to(&status_tx).error(format!(
                                     "Telnet client {} could not answer negotiation: {}",
                                     client_id, e
-                                ),
+                                )),
                             }
                         }
                     }
@@ -361,59 +335,34 @@ impl TelnetClient {
                                 }
 
                                 for action in actions {
-                                    use crate::llm::actions::client_trait::Client;
-                                    use crate::llm::actions::client_trait::ClientActionResult;
-                                    match protocol.as_ref().execute_action(action) {
-                                        Ok(ClientActionResult::SendData(bytes)) => {
-                                            // A failed write was silently swallowed here, so
-                                            // the model's command vanished and the client went
-                                            // on waiting for a reply to something that never
-                                            // left the host.
-                                            let mut write_guard = write_half_arc.lock().await;
-                                            if let Err(e) = write_guard.write_all(&bytes).await {
-                                                error!(
-                                                    "Telnet client {} failed to send {} bytes: {}",
-                                                    client_id,
-                                                    bytes.len(),
-                                                    e
-                                                );
-                                            } else if let Err(e) = write_guard.flush().await {
-                                                error!(
-                                                    "Telnet client {} failed to flush: {}",
-                                                    client_id, e
-                                                );
-                                            } else {
-                                                trace!(
-                                                    "Telnet client {} sent {} bytes",
-                                                    client_id,
-                                                    bytes.len()
-                                                );
-                                            }
-                                        }
-                                        Ok(ClientActionResult::Disconnect) => {
-                                            // This used to `break` out of the loop over actions
-                                            // only, so the model's disconnect was ignored and
-                                            // the session went on.
-                                            info!("Telnet client {} disconnecting", client_id);
-                                            app_state
-                                                .update_client_status(
-                                                    client_id,
-                                                    ClientStatus::Disconnected,
-                                                )
-                                                .await;
-                                            let _ = status_tx.send(format!(
-                                                "[CLIENT] Telnet client {} disconnected",
-                                                client_id
-                                            ));
-                                            let _ = status_tx.send("__UPDATE_UI__".to_string());
-                                            break 'session;
-                                        }
-                                        _ => {}
+                                    // A disconnect ends the session, not just this loop over
+                                    // the model's actions.
+                                    if let Applied::Disconnect = Self::apply_action(
+                                        action,
+                                        &write_half_arc,
+                                        client_id,
+                                        &status_tx,
+                                    )
+                                    .await
+                                    {
+                                        app_state
+                                            .update_client_status(
+                                                client_id,
+                                                ClientStatus::Disconnected,
+                                            )
+                                            .await;
+                                        Log::to(&status_tx).info(format!(
+                                            "Telnet client {} disconnected",
+                                            client_id
+                                        ));
+                                        let _ = status_tx.send("__UPDATE_UI__".to_string());
+                                        break 'session;
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!("LLM error for Telnet client {}: {}", client_id, e);
+                                Log::to(&status_tx)
+                                    .error(format!("Telnet client {} LLM error: {}", client_id, e));
                             }
                         }
                     }
@@ -421,21 +370,20 @@ impl TelnetClient {
 
                 match ended {
                     Some(Inbound::Closed) => {
-                        info!(
+                        Log::to(&status_tx).info(format!(
                             "Telnet client {} {}",
                             client_id,
                             patterns::TELNET_CLIENT_DISCONNECTED
-                        );
+                        ));
                         app_state
                             .update_client_status(client_id, ClientStatus::Disconnected)
                             .await;
-                        let _ = status_tx
-                            .send(format!("[CLIENT] Telnet client {} disconnected", client_id));
                         let _ = status_tx.send("__UPDATE_UI__".to_string());
                         break;
                     }
                     Some(Inbound::Failed(e)) => {
-                        error!("Telnet client {} read error: {}", client_id, e);
+                        Log::to(&status_tx)
+                            .error(format!("Telnet client {} read error: {}", client_id, e));
                         app_state
                             .update_client_status(client_id, ClientStatus::Error(e))
                             .await;
@@ -455,6 +403,62 @@ impl TelnetClient {
             .await;
 
         Ok(local_addr)
+    }
+
+    /// Execute one of the model's actions on the session and put its bytes on the wire.
+    ///
+    /// The connect event and every later answer both come through here, and through
+    /// `TelnetClientProtocol::execute_action`, which is also what an injected action runs: the
+    /// bytes an action sends are decided in one place. The connect path used to carry its own
+    /// copy of the executor, which could drift from the one the model's later answers used.
+    async fn apply_action(
+        action: serde_json::Value,
+        write_half: &Arc<Mutex<WriteHalf<TcpStream>>>,
+        client_id: ClientId,
+        status_tx: &mpsc::UnboundedSender<String>,
+    ) -> Applied {
+        use crate::llm::actions::client_trait::{Client, ClientActionResult};
+        let log = Log::to(status_tx);
+        match TelnetClientProtocol.execute_action(action) {
+            Ok(ClientActionResult::SendData(bytes)) => {
+                // A failed write must be said out loud: otherwise the model's line vanishes
+                // and the client waits for a reply to something that never left the host.
+                let mut write_guard = write_half.lock().await;
+                if let Err(e) = write_guard.write_all(&bytes).await {
+                    log.error(format!(
+                        "Telnet client {} failed to send {} bytes: {}",
+                        client_id,
+                        bytes.len(),
+                        e
+                    ));
+                } else if let Err(e) = write_guard.flush().await {
+                    log.error(format!(
+                        "Telnet client {} failed to flush: {}",
+                        client_id, e
+                    ));
+                } else {
+                    // A count, not the text: a telnet line is as often a password as a command.
+                    log.trace(format!(
+                        "Telnet client {} sent {} bytes",
+                        client_id,
+                        bytes.len()
+                    ));
+                }
+                Applied::Continue
+            }
+            Ok(ClientActionResult::Disconnect) => {
+                log.info(format!("Telnet client {} disconnecting", client_id));
+                Applied::Disconnect
+            }
+            Ok(_) => Applied::Continue,
+            Err(e) => {
+                log.warn(format!(
+                    "Telnet client {} could not run the model's action: {}",
+                    client_id, e
+                ));
+                Applied::Continue
+            }
+        }
     }
 
     /// Parse Telnet data, separating actual data from Telnet commands
@@ -538,13 +542,8 @@ impl TelnetClient {
                 };
 
                 let option_name = Self::get_option_name(*option);
-                debug!(
-                    "Telnet client {} received {} {}",
-                    client_id, cmd_name, option_name
-                );
-
-                let _ = status_tx.send(format!(
-                    "[CLIENT] Telnet {} negotiation: {} {}",
+                Log::to(status_tx).info(format!(
+                    "Telnet client {} negotiation: received {} {}",
                     client_id, cmd_name, option_name
                 ));
 
@@ -562,11 +561,17 @@ impl TelnetClient {
                 }
             }
             TelnetCommand::Subnegotiation => {
-                debug!("Telnet client {} received subnegotiation", client_id);
+                Log::to(status_tx).debug(format!(
+                    "Telnet client {} received subnegotiation",
+                    client_id
+                ));
                 None
             }
             TelnetCommand::Other(code) => {
-                debug!("Telnet client {} received command code {}", client_id, code);
+                Log::to(status_tx).debug(format!(
+                    "Telnet client {} received command code {}",
+                    client_id, code
+                ));
                 None
             }
         }
@@ -589,6 +594,12 @@ impl TelnetClient {
             _ => "UNKNOWN",
         }
     }
+}
+
+/// What one of the model's actions did to the session.
+enum Applied {
+    Continue,
+    Disconnect,
 }
 
 /// Telnet command types
