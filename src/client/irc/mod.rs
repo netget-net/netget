@@ -13,6 +13,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::client::irc::actions::{IRC_CLIENT_CONNECTED_EVENT, IRC_CLIENT_MESSAGE_RECEIVED_EVENT};
 use crate::client::llm_budget::call_llm_for_client_batch;
+use crate::logging::emit::Log;
 use crate::server::irc::wire::{
     cap_line, read_irc_line, reject_line_breaks, reject_not_a_word, IrcLine, MAX_IRC_READ_LINE,
 };
@@ -442,9 +443,8 @@ impl IrcClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("IRC client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "IRC client {} injected action failed: {}",
                     client_id, e
                 ));
             }

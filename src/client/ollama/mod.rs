@@ -224,9 +224,8 @@ impl OllamaClientImpl {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("Ollama client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "Ollama client {} injected action failed: {}",
                     client_id, e
                 ));
             }

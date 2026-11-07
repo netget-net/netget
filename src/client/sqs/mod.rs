@@ -19,6 +19,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -405,9 +406,10 @@ impl SqsClient {
                             ),
                         },
                         Err(e) => {
-                            error!("SQS client {} operation {} failed: {}", client_id, name, e);
-                            let _ = status_tx
-                                .send(format!("[ERROR] SQS operation {} failed: {}", name, e));
+                            Log::to(&status_tx).error(format!(
+                                "SQS client {} operation {} failed: {}",
+                                client_id, name, e
+                            ));
                             // A failed operation is `Rejected`, not `Executed`: both used to
                             // be `Executed`, so a refusal and a completed send rendered the
                             // same way in the dashboard.

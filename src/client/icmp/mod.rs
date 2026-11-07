@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use pnet::packet::icmp::echo_reply::EchoReplyPacket;
 use pnet::packet::icmp::time_exceeded::TimeExceededPacket;
 // Note: pnet doesn't provide timestamp_reply packet types
+use crate::logging::emit::Log;
 use crate::utils::clock::Instant;
 use pnet::packet::icmp::{destination_unreachable::DestinationUnreachablePacket, IcmpPacket};
 use pnet::packet::icmp::{IcmpCode, IcmpTypes, MutableIcmpPacket};
@@ -570,9 +571,8 @@ impl IcmpClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("ICMP client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "ICMP client {} injected action failed: {}",
                     client_id, e
                 ));
             }

@@ -16,6 +16,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -295,9 +296,8 @@ async fn command_loop(
 
         let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
         if let Err(e) = &outcome {
-            error!("CouchDB client {} injected action failed: {}", client_id, e);
-            let _ = status_tx.send(format!(
-                "[WARN] Client {} injected action failed: {}",
+            Log::to(&status_tx).warn(format!(
+                "CouchDB client {} injected action failed: {}",
                 client_id, e
             ));
         }

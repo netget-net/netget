@@ -4,6 +4,7 @@ pub mod actions;
 pub use actions::SmbClientProtocol;
 
 use crate::llm::actions::client_trait::Client;
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -366,9 +367,8 @@ impl SmbClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("SMB client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "SMB client {} injected action failed: {}",
                     client_id, e
                 ));
             }

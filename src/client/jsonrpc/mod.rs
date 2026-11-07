@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::client::http_fetch::FetchClient;
 use crate::client::jsonrpc::actions::JSONRPC_CLIENT_RESPONSE_RECEIVED_EVENT;
@@ -15,6 +15,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -538,12 +539,8 @@ impl JsonRpcClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "JSON-RPC client {} injected action failed: {}",
-                    client_id, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     client_id, e
                 ));
             }
@@ -702,16 +699,12 @@ impl JsonRpcClient {
             return;
         }
         if depth >= MAX_FOLLOWUP_DEPTH {
-            warn!(
-                "JSON-RPC client {} reached the follow-up depth bound ({}); {} action(s) from \
-                 this response were not run",
+            Log::to(&status_tx).warn(format!(
+                "JSON-RPC client {} stopped chaining requests at the follow-up depth bound \
+                 ({}); {} action(s) from this response were not run",
                 client_id,
                 MAX_FOLLOWUP_DEPTH,
                 actions.len()
-            );
-            let _ = status_tx.send(format!(
-                "[WARN] Client {} stopped chaining JSON-RPC requests at depth {}",
-                client_id, MAX_FOLLOWUP_DEPTH
             ));
             return;
         }

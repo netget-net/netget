@@ -69,6 +69,7 @@ use crate::client::datalink::packet::{
 use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::{Event, StartupParams};
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -323,12 +324,8 @@ impl DataLinkClient {
                     cap
                 }
                 Err(e) => {
-                    error!(
+                    Log::to(&status_tx_thread).error(format!(
                         "DataLink client {} capture startup failed: {:#}",
-                        client_id, e
-                    );
-                    let _ = status_tx_thread.send(format!(
-                        "[ERROR] DataLink client {} capture startup failed: {:#}",
                         client_id, e
                     ));
                     let _ = ready_tx.send(Err(e));
@@ -339,9 +336,8 @@ impl DataLinkClient {
                 return;
             };
 
-            info!("DataLink client {} capture opened successfully", client_id);
-            let _ = status_tx_thread.send(format!(
-                "[INFO] DataLink client {} ready for frame injection",
+            Log::to(&status_tx_thread).info(format!(
+                "DataLink client {} capture opened, ready for frame injection",
                 client_id
             ));
 
@@ -358,13 +354,8 @@ impl DataLinkClient {
                     Ok(cmd) => {
                         let result = match cap.sendpacket(&cmd.frame[..]) {
                             Ok(_) => {
-                                trace!(
+                                Log::to(&status_tx_thread).trace(format!(
                                     "DataLink client {} injected frame ({} bytes)",
-                                    client_id,
-                                    cmd.frame.len()
-                                );
-                                let _ = status_tx_thread.send(format!(
-                                    "[TRACE] DataLink client {} injected frame ({} bytes)",
                                     client_id,
                                     cmd.frame.len()
                                 ));
@@ -383,30 +374,23 @@ impl DataLinkClient {
                                         Self::report_injection(s, frame, depth).await;
                                     });
                                 } else {
-                                    warn!(
-                                        "DataLink client {} decision=followup_depth_capped: \
-                                         {}-byte frame sent, model not asked again after {} \
+                                    Log::to(&status_tx_thread).warn(format!(
+                                        "DataLink client {} stopped an injection chain at \
+                                         depth {} decision=followup_depth_capped: {}-byte \
+                                         frame sent, model not asked again after {} \
                                          inject→report→inject hops",
                                         client_id,
+                                        MAX_INJECTION_FOLLOWUPS,
                                         cmd.frame.len(),
                                         MAX_INJECTION_FOLLOWUPS
-                                    );
-                                    let _ = status_tx_thread.send(format!(
-                                        "[WARN] DataLink client {} stopped an injection chain \
-                                         at depth {}",
-                                        client_id, MAX_INJECTION_FOLLOWUPS
                                     ));
                                 }
 
                                 Ok(cmd.frame.len())
                             }
                             Err(e) => {
-                                error!(
+                                Log::to(&status_tx_thread).error(format!(
                                     "DataLink client {} frame injection failed: {}",
-                                    client_id, e
-                                );
-                                let _ = status_tx_thread.send(format!(
-                                    "[ERROR] DataLink client {} frame injection failed: {}",
                                     client_id, e
                                 ));
                                 Err(e.to_string())
@@ -437,9 +421,8 @@ impl DataLinkClient {
                         }
                         Err(pcap::Error::TimeoutExpired) => {}
                         Err(e) => {
-                            error!("DataLink client {} capture error: {}", client_id, e);
-                            let _ = status_tx_thread.send(format!(
-                                "[ERROR] DataLink client {} capture error: {}",
+                            Log::to(&status_tx_thread).error(format!(
+                                "DataLink client {} capture error: {}",
                                 client_id, e
                             ));
                             break;
@@ -787,14 +770,10 @@ impl DataLinkClient {
                 } else {
                     "unavailable"
                 };
-                error!(
+                Log::to(&s.status_tx).error(format!(
                     "DataLink client {} {} decision=fail_closed_llm_error category={}, nothing \
                      injected: {}",
                     client_id, event_id, category, e
-                );
-                let _ = s.status_tx.send(format!(
-                    "[ERROR] DataLink client {} decision=fail_closed_llm_error category={}: {}",
-                    client_id, category, e
                 ));
             }
         }
@@ -1067,12 +1046,8 @@ impl DataLinkClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&s.status_tx).warn(format!(
                     "DataLink client {} injected action failed: {}",
-                    s.client_id, e
-                );
-                let _ = s.status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     s.client_id, e
                 ));
             }

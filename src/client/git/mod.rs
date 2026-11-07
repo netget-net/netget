@@ -6,6 +6,7 @@ pub mod sandbox;
 pub use actions::GitClientProtocol;
 pub use sandbox::{GitSandbox, ALLOWED_ROOT_PARAM, ALLOW_REMOTE_WRITES_PARAM};
 
+use crate::logging::emit::Log;
 use crate::protocol::StartupParams;
 use anyhow::{Context, Result};
 use git2::{BranchType, ObjectType, Repository, StatusOptions};
@@ -516,9 +517,8 @@ impl GitClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("Git client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "Git client {} injected action failed: {}",
                     client_id, e
                 ));
             }

@@ -8,6 +8,7 @@ pub mod resp;
 pub use actions::RedisClientProtocol;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -493,12 +494,8 @@ impl RedisClient {
                                         // tests passed at HEAD while sending `wait_for_more`,
                                         // which this client does not implement.
                                         Err(e) => {
-                                            error!(
+                                            Log::to(&status_tx).error(format!(
                                                 "Redis client {} could not execute action: {}",
-                                                client_id, e
-                                            );
-                                            let _ = status_tx.send(format!(
-                                                "[ERROR] Redis client {} action failed: {}",
                                                 client_id, e
                                             ));
                                         }
@@ -624,9 +621,8 @@ impl RedisClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("Redis client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "Redis client {} injected action failed: {}",
                     client_id, e
                 ));
             }
