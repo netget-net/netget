@@ -410,6 +410,11 @@ pub struct ConversationOverrides {
     /// Deliver events that arrive during a call together afterwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batching: Option<bool>,
+    /// Clients only (a server has no opening to restart): ask the model before re-sending the
+    /// client's opening actions in answer to an event. `None` keeps the default, on. See
+    /// [`crate::client::restart_check`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_check: Option<bool>,
 }
 
 impl ConversationOverrides {
@@ -444,7 +449,7 @@ impl ConversationOverrides {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.history.is_none() && self.batching.is_none()
+        self.history.is_none() && self.batching.is_none() && self.restart_check.is_none()
     }
 }
 

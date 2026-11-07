@@ -283,6 +283,10 @@ pub enum CommonAction {
         /// Batch events arriving during a call; omitted = protocol default
         #[serde(default)]
         batching: Option<bool>,
+        /// Ask before re-sending the opening actions in answer to an event; omitted = on
+        /// (`crate::client::restart_check`)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        restart_check: Option<bool>,
         /// Packet capture (`src/capture/`): `true`, `false`, or a file name in the capture
         /// directory. Read from `.netget` files; deliberately not offered to the model.
         #[serde(default, skip_serializing_if = "Option::is_none")]

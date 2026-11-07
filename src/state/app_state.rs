@@ -2930,6 +2930,8 @@ impl AppState {
     pub async fn set_instruction_for_client(&self, client_id: ClientId, instruction: String) {
         if let Some(client) = self.inner.write().await.clients.get_mut(&client_id) {
             client.instruction = instruction;
+            // A new instruction is a new plan: its first answer is the new opening.
+            client.restart_opening = None;
         }
     }
 
@@ -3835,6 +3837,46 @@ impl AppState {
                 .exchange_history
                 .record(event_type, request, response, limit);
         }
+    }
+
+    /// The opening a client's answers are checked against, or `None` when it has none yet or
+    /// has `restart_check` off. See [`crate::client::restart_check`].
+    pub async fn client_restart_opening(
+        &self,
+        client_id: ClientId,
+    ) -> Option<Vec<serde_json::Value>> {
+        let inner = self.inner.read().await;
+        let client = inner.clients.get(&client_id)?;
+        if client.restart_check {
+            client.restart_opening.clone()
+        } else {
+            None
+        }
+    }
+
+    /// Record `actions`, a model answer, as the client's opening if it has none yet and the
+    /// answer sends anything. Recorded with the check off too, so turning it on later checks
+    /// against the session's real opening.
+    pub async fn note_client_opening(&self, client_id: ClientId, actions: &[serde_json::Value]) {
+        let mut inner = self.inner.write().await;
+        if let Some(client) = inner.clients.get_mut(&client_id) {
+            if client.restart_opening.is_none() {
+                client.restart_opening = crate::client::restart_check::opening_of(actions);
+            }
+        }
+    }
+
+    /// Turn a client's `restart_check` on or off, in place.
+    pub async fn set_client_restart_check(&self, client_id: ClientId, on: bool) {
+        if let Some(client) = self.inner.write().await.clients.get_mut(&client_id) {
+            client.restart_check = on;
+        }
+    }
+
+    /// A client's `restart_check` setting, or `None` for an unknown client.
+    pub async fn client_restart_check(&self, client_id: ClientId) -> Option<bool> {
+        let inner = self.inner.read().await;
+        inner.clients.get(&client_id).map(|c| c.restart_check)
     }
 
     /// An instance's history and batching settings as `(history entries, batching)`.

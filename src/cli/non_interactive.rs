@@ -728,7 +728,11 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
-                        crate::protocol::metadata::ConversationOverrides { history, batching },
+                        crate::protocol::metadata::ConversationOverrides {
+                            history,
+                            batching,
+                            restart_check: None,
+                        },
                         crate::capture::CaptureRequest::action(capture),
                         status_tx.clone(),
                     )
@@ -769,6 +773,7 @@ pub async fn run_with_actions(
                     feedback_instructions,
                     history,
                     batching,
+                    restart_check,
                     capture,
                 } => {
                     // Execute open_client action
@@ -782,7 +787,11 @@ pub async fn run_with_actions(
                         event_handlers,
                         scheduled_tasks,
                         feedback_instructions,
-                        crate::protocol::metadata::ConversationOverrides { history, batching },
+                        crate::protocol::metadata::ConversationOverrides {
+                            history,
+                            batching,
+                            restart_check,
+                        },
                         crate::capture::CaptureRequest::action(capture),
                         llm.clone(),
                         None, // status_tx: headless, drain to tracing

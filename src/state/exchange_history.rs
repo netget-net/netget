@@ -143,7 +143,8 @@ impl ExchangeHistory {
     /// the header says all of it is done. That is the accurate wording, not a cure: llama3.1:8b
     /// re-sends the script on replies with or without it (6 of 8 seeded runs before, 6 of 8
     /// after, 31 October 2026), with both commands listed as already sent directly above the
-    /// reply it was answering.
+    /// reply it was answering. What stops the restart is structural and lives elsewhere:
+    /// [`crate::client::restart_check`] asks before an answer that repeats the opening is sent.
     pub fn render_for_client(&self, limit: u16) -> Option<String> {
         self.render_with(limit, Perspective::Client)
     }

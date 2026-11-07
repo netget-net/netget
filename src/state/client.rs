@@ -196,6 +196,12 @@ pub struct ClientInstance {
     /// Memoisation of the model's answers: off unless the client turns it on. See
     /// [`crate::llm::answer_reuse`].
     pub memo: crate::llm::answer_reuse::Memo,
+    /// Whether a model answer that starts the instruction over is asked about before it is
+    /// sent. On unless the client turns it off. See [`crate::client::restart_check`].
+    pub restart_check: bool,
+    /// The wire actions of the session's first model answer that sent anything; cleared when
+    /// the instruction changes. See [`crate::client::restart_check`].
+    pub restart_opening: Option<Vec<serde_json::Value>>,
 }
 
 impl ClientInstance {
@@ -242,6 +248,8 @@ impl ClientInstance {
             batching: false,
             exchange_history: Default::default(),
             memo: Default::default(),
+            restart_check: true,
+            restart_opening: None,
         }
     }
 

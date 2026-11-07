@@ -400,7 +400,7 @@ async fn call_llm_for_client_inner(
         }
     }
 
-    let result = crate::llm::action_helper::call_llm_for_client_with_earlier(
+    let mut result = crate::llm::action_helper::call_llm_for_client_with_earlier(
         llm_client,
         state,
         client_id.clone(),
@@ -412,6 +412,27 @@ async fn call_llm_for_client_inner(
         status_tx,
     )
     .await?;
+
+    // An answer to an event that starts the instruction over is asked about before it is
+    // sent; the first answer that sends anything is the opening it is compared with. Before
+    // the access log, so history records what was actually done.
+    if let Some(cid) = ClientId::from_string(&client_id) {
+        if let Some(ev) = event {
+            result.actions = crate::client::restart_check::check_answer(
+                llm_client,
+                state,
+                cid,
+                protocol.protocol_name(),
+                instruction,
+                ev,
+                std::mem::take(&mut result.actions),
+                private_payloads,
+                status_tx,
+            )
+            .await;
+        }
+        state.note_client_opening(cid, &result.actions).await;
+    }
 
     // Record the event and the actions the model produced, mirroring the
     // server-side access log. Client entries record *produced* actions —

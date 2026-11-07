@@ -507,6 +507,7 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
         crate::protocol::metadata::ConversationOverrides {
             history: args.history,
             batching: args.batching,
+            restart_check: None,
         },
         // `--capture <dir>` is applied by the start itself.
         crate::capture::CaptureRequest::default(),
@@ -707,6 +708,7 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
         crate::protocol::metadata::ConversationOverrides {
             history: args.history,
             batching: args.batching,
+            restart_check: None,
         },
         // `--capture <dir>` is applied by the start itself.
         crate::capture::CaptureRequest::default(),
