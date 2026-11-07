@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::events::ActionExecutionError;
 use crate::llm::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::metadata::DevelopmentState;
 use crate::state::app_state::AppState;
 use crate::state::ServerId;
@@ -74,7 +75,7 @@ pub async fn start_server_by_id(
         Some(Ok(current)) => current,
         Some(Err(error)) => return Err(ActionExecutionError::Fatal(error.into())),
         None => {
-            let _ = status_tx.send(format!("[ERROR] Server #{} not found", server_id.as_u32()));
+            Log::to(status_tx).error(format!("Server #{} not found", server_id.as_u32()));
             return Ok(());
         }
     };
@@ -107,7 +108,7 @@ pub async fn start_server_by_id(
             state
                 .update_server_status(server_id, ServerStatus::Error(full_error.clone()))
                 .await;
-            let _ = status_tx.send(format!("[ERROR] {}", full_error));
+            Log::to(status_tx).error(&full_error);
             let _ = status_tx.send("__UPDATE_UI__".to_string());
             return Err(ActionExecutionError::Fatal(anyhow::anyhow!(full_error)));
         }
@@ -173,7 +174,7 @@ pub async fn start_server_by_id(
         state
             .update_server_status(server_id, ServerStatus::Error(full_error.clone()))
             .await;
-        let _ = status_tx.send(format!("[ERROR] {}", full_error));
+        Log::to(status_tx).error(&full_error);
         let _ = status_tx.send("__UPDATE_UI__".to_string());
         return Err(ActionExecutionError::PrivilegeDenied {
             requirement: privilege_requirement.description(),
@@ -212,7 +213,7 @@ pub async fn start_server_by_id(
         state
             .update_server_status(server_id, ServerStatus::Error(full_error.clone()))
             .await;
-        let _ = status_tx.send(format!("[ERROR] {}", full_error));
+        Log::to(status_tx).error(&full_error);
         let _ = status_tx.send("__UPDATE_UI__".to_string());
         return Err(ActionExecutionError::PrivilegeDenied {
             requirement: dep.name(),
@@ -235,7 +236,7 @@ pub async fn start_server_by_id(
                 state
                     .update_server_status(server_id, ServerStatus::Error(msg.clone()))
                     .await;
-                let _ = status_tx.send(format!("[ERROR] {}", msg));
+                Log::to(status_tx).error(&msg);
                 let _ = status_tx.send("__UPDATE_UI__".to_string());
                 return Err(ActionExecutionError::Fatal(anyhow::anyhow!(msg)));
             }
@@ -311,10 +312,9 @@ pub async fn start_server_by_id(
             // Check if error is due to port already in use
             if is_addr_in_use_error(&e) {
                 // Return retryable error with context for LLM
-                let _ = status_tx.send(format!(
-                    "[INFO] Port {} is already in use for {} server, will retry with LLM suggestion",
-                    server.port,
-                    protocol_name
+                Log::to(status_tx).info(format!(
+                    "Port {} is already in use for {} server, will retry with LLM suggestion",
+                    server.port, protocol_name
                 ));
                 return Err(ActionExecutionError::PortConflict {
                     port: server.port,
@@ -327,8 +327,8 @@ pub async fn start_server_by_id(
             state
                 .update_server_status(server_id, ServerStatus::Error(e.to_string()))
                 .await;
-            let _ = status_tx.send(format!(
-                "[ERROR] Failed to start {} server #{}: {}",
+            Log::to(status_tx).error(format!(
+                "Failed to start {} server #{}: {}",
                 protocol_name,
                 server_id.as_u32(),
                 e
@@ -398,7 +398,7 @@ pub async fn start_server_from_action(
     let (history_entries, batching) = conversation
         .resolve(&protocol_impl.metadata(), protocol)
         .inspect_err(|e| {
-            let _ = status_tx.send(format!("[ERROR] {}", e));
+            Log::to(&status_tx).error(&e);
         })?;
 
     // === --min-stability gate ===
@@ -408,7 +408,7 @@ pub async fn start_server_from_action(
         let actual = protocol_impl.metadata().state;
         if actual < min {
             let msg = min_stability_refusal("server", protocol, actual, min);
-            let _ = status_tx.send(format!("[ERROR] {}", msg));
+            Log::to(&status_tx).error(&msg);
             return Err(anyhow::anyhow!(msg));
         }
     }
@@ -431,8 +431,8 @@ pub async fn start_server_from_action(
                 &caps,
             ) {
                 Some(default) => {
-                    let _ = status_tx.send(format!(
-                        "[INFO] {} server: no port given; {}",
+                    Log::to(&status_tx).info(format!(
+                        "{} server: no port given; {}",
                         protocol,
                         default.describe()
                     ));
@@ -476,14 +476,11 @@ pub async fn start_server_from_action(
         }
     } else {
         if send_first && !declares_send_first {
-            let _ = status_tx.send(format!(
-                "[WARN] Protocol '{}' does not support send_first; ignoring it",
+            Log::to(&status_tx).warn(format!(
+                "Protocol '{}' does not support send_first (it declares no send_first \
+                 startup parameter); ignoring it",
                 protocol
             ));
-            tracing::warn!(
-                "send_first requested for protocol '{}', which declares no send_first startup parameter - ignoring",
-                protocol
-            );
         }
         startup_params
     };
@@ -644,7 +641,7 @@ pub async fn start_server_from_action(
             dep.description(),
             dep.installation_hint()
         );
-        let _ = status_tx.send(format!("[ERROR] {}", msg));
+        Log::to(&status_tx).error(&msg);
         return Err(anyhow::anyhow!(msg));
     }
 
@@ -703,10 +700,10 @@ pub async fn start_server_from_action(
         )
         .await
         .inspect_err(|e| {
-            let _ = status_tx.send(format!("[ERROR] {e}"));
+            Log::to(&status_tx).error(&e);
         })?
     {
-        let _ = status_tx.send(format!("[INFO] Capturing to {}", path.display()));
+        Log::to(&status_tx).info(format!("Capturing to {}", path.display()));
     }
 
     // Set initial memory if provided
@@ -720,7 +717,7 @@ pub async fn start_server_from_action(
                 server.event_handler_config = Some(config)
             })
             .await;
-        let _ = status_tx.send("[INFO] Event handler configuration applied".to_string());
+        Log::to(&status_tx).info("Event handler configuration applied");
     }
 
     // Definitions were prepared before the owner was registered.
@@ -857,8 +854,8 @@ pub async fn start_server_from_action(
                 .await;
             state.remove_server(server_id).await;
             startup_guard.disarm();
-            let _ = status_tx.send(format!(
-                "[ERROR] Server #{} ({}) failed to start: {}",
+            Log::to(&status_tx).error(format!(
+                "Server #{} ({}) failed to start: {}",
                 server_id.as_u32(),
                 protocol,
                 e

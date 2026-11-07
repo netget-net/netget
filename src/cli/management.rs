@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 use crate::llm::actions::common::ServerTaskDefinition;
 use crate::llm::actions::ParameterDefinition;
 use crate::llm::OllamaClient;
+use crate::logging::emit::Log;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ServerId};
 
@@ -398,10 +399,10 @@ async fn apply_capture_update(
 ) -> Result<()> {
     match state.capture.apply(owner, protocol, spec, false).await? {
         Some(path) => {
-            let _ = status_tx.send(format!("[INFO] Capturing to {}", path.display()));
+            Log::to(status_tx).info(format!("Capturing to {}", path.display()));
         }
         None => {
-            let _ = status_tx.send("[INFO] Capture stopped".to_string());
+            Log::to(status_tx).info("Capture stopped");
         }
     }
     Ok(())
