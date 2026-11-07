@@ -13,6 +13,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -356,9 +357,8 @@ impl RssClient {
 
         let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
         if let Err(e) = &outcome {
-            error!("RSS client {} injected action failed: {}", client_id, e);
-            let _ = ctx.status_tx.send(format!(
-                "[WARN] Client {} injected action failed: {}",
+            Log::to(&ctx.status_tx).warn(format!(
+                "RSS client {} injected action failed: {}",
                 client_id, e
             ));
         }

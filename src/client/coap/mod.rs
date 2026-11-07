@@ -39,6 +39,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::coap::codec::{
     code_class, code_to_string, content_format_name, szx_size, uint_option, BlockValue,
@@ -1045,10 +1046,8 @@ async fn run_turns(
                         Ok(Applied::Disconnect) => return,
                         Ok(_) => {}
                         Err(e) => {
-                            error!("CoAP client {client_id} action failed: {e}");
-                            let _ = status_tx.send(format!(
-                                "[ERROR] CoAP client {client_id} action failed: {e}"
-                            ));
+                            Log::to(&status_tx)
+                                .error(format!("CoAP client {client_id} action failed: {e}"));
                         }
                     }
                 }

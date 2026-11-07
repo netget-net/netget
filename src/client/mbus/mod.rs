@@ -24,6 +24,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::mbus::frame::{self, addr, c, ci, Frame, Parsed};
 use crate::server::mbus::records;
@@ -782,14 +783,11 @@ async fn run_turns(
     while let Some(turn) = turn_rx.recv().await {
         let id = turn.event.event_type.id.clone();
         if turn.depth >= MAX_FOLLOWUP_DEPTH {
-            warn!(
-                "M-Bus client {client_id} {id} not sent to the model: {} turns deep \
+            Log::to(&status_tx).warn(format!(
+                "M-Bus client {client_id}: {id} not sent to the model, the chain of \
+                 follow-ups reached {MAX_FOLLOWUP_DEPTH} ({} turns deep) \
                  decision=followup_depth",
                 turn.depth
-            );
-            let _ = status_tx.send(format!(
-                "[WARN] M-Bus client {client_id}: {id} not sent to the model, the chain of \
-                 follow-ups reached {MAX_FOLLOWUP_DEPTH}"
             ));
             continue;
         }
@@ -832,10 +830,8 @@ async fn run_turns(
                         Ok(Applied::Disconnect) => return,
                         Ok(Applied::Queued) => {}
                         Err(e) => {
-                            error!("M-Bus client {client_id} action refused: {e:#}");
-                            let _ = status_tx.send(format!(
-                                "[ERROR] M-Bus client {client_id} action refused: {e:#}"
-                            ));
+                            Log::to(&status_tx)
+                                .error(format!("M-Bus client {client_id} action refused: {e:#}"));
                         }
                     }
                 }

@@ -108,10 +108,10 @@ with `send_first`) are fixed and live in the [Fixed](#fixed) table, not here.
    beside the unchanged plain ones and documented; nothing has run them yet. Confirm on the
    next tagged release.
 
-6. **Logging long tail.** Server dual logging goes through the `Log` facade
+6. **Logging long tail.** Server and client dual logging goes through the `Log` facade
     (`src/logging/emit.rs`, `Log::to(&status_tx).info(…)`), and
     `tests/hand_rolled_dual_logging_ratchet_test.rs` allows no hand-rolled `[LEVEL]` send under
-    `src/server/`. Outside it the hand-rolled form remains: about 107 sites in `src/client/`, 70
+    `src/server/` or `src/client/`. Outside them the hand-rolled form remains: about 70 sites
     in `src/events/`, 31 in `src/cli/`, 22 in `src/llm/` and 11 in `src/protocol/` (counted
     6 November 2026 with the ratchet's own scan); the ratchet does not cover them yet.
 

@@ -5,6 +5,7 @@ pub use actions::S3ClientProtocol;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
+use crate::logging::emit::Log;
 use anyhow::{Context, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -439,8 +440,10 @@ impl S3Client {
                         ),
                     },
                     Err(e) => {
-                        error!("S3 client {} operation {} failed: {}", client_id, name, e);
-                        let _ = status_tx.send(format!("[ERROR] S3 operation failed: {}", e));
+                        Log::to(&status_tx).error(format!(
+                            "S3 client {} operation {} failed: {}",
+                            client_id, name, e
+                        ));
                         // A failed operation is `Rejected`, not `Executed`: both used to be
                         // `Executed`, so a refusal and a completed write rendered the same
                         // way in the dashboard.

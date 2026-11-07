@@ -268,12 +268,8 @@ impl BitcoinClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "Bitcoin RPC client {} injected action failed: {}",
-                    client_id, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     client_id, e
                 ));
             }

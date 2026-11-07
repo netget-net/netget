@@ -60,6 +60,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -473,12 +474,8 @@ impl Session {
             }
             Err(e) => {
                 // Stay usable: the operator can still drive this client from the dashboard.
-                error!(
-                    "LLM error opening Gopher browse for client {}: {}",
-                    self.client_id, e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[WARN] Gopher client {} could not ask the model what to fetch: {} \
+                Log::to(&self.status_tx).warn(format!(
+                    "Gopher client {} could not ask the model what to fetch: {} \
                      (a request can still be injected)",
                     self.client_id, e
                 ));
@@ -509,9 +506,8 @@ impl Session {
                 let result = match session.protocol.execute_action(action.clone()) {
                     Ok(result) => result,
                     Err(e) => {
-                        error!("Gopher client {} rejected action: {}", session.client_id, e);
-                        let _ = session.status_tx.send(format!(
-                            "[WARN] Gopher client {} rejected an action: {}",
+                        Log::to(&session.status_tx).warn(format!(
+                            "Gopher client {} rejected an action: {}",
                             session.client_id, e
                         ));
                         continue;
@@ -608,13 +604,9 @@ impl Session {
         let outcome = match self.perform_fetch(&request).await {
             Ok(outcome) => outcome,
             Err(e) => {
-                error!(
-                    "Gopher client {} fetch of {:?} from {}:{} failed: {}",
+                Log::to(&self.status_tx).warn(format!(
+                    "Gopher client {} could not fetch {:?} from {}:{}: {}",
                     self.client_id, request.selector, request.host, request.port, e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[WARN] Gopher client {} could not fetch {:?}: {}",
-                    self.client_id, request.selector, e
                 ));
                 let _ = self.status_tx.send("__UPDATE_UI__".to_string());
                 return;
@@ -777,13 +769,9 @@ impl Session {
         ));
 
         if depth + 1 > MAX_FOLLOWUP_DEPTH {
-            warn!(
-                "Gopher client {} stopped following links at depth {}: the chain cap is {}",
-                self.client_id, depth, MAX_FOLLOWUP_DEPTH
-            );
-            let _ = self.status_tx.send(format!(
-                "[WARN] Gopher client {} stopped browsing after {} follow-ups",
-                self.client_id, MAX_FOLLOWUP_DEPTH
+            Log::to(&self.status_tx).warn(format!(
+                "Gopher client {} stopped browsing after {} follow-ups (depth {})",
+                self.client_id, MAX_FOLLOWUP_DEPTH, depth
             ));
             return;
         }
@@ -825,14 +813,8 @@ impl Session {
                 Self::run_actions(self.clone(), actions, depth + 1).await;
             }
             Err(e) => {
-                error!(
-                    "LLM error for Gopher client {} on {}: {}",
-                    self.client_id,
-                    event.id(),
-                    e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[WARN] Gopher client {} could not act on {}: {}",
+                Log::to(&self.status_tx).warn(format!(
+                    "Gopher client {} could not act on {}: {}",
                     self.client_id,
                     event.id(),
                     e
@@ -931,12 +913,8 @@ impl Session {
                 .await;
 
             if let Err(e) = &outcome {
-                error!(
+                Log::to(&self.status_tx).warn(format!(
                     "Gopher client {} injected action failed: {}",
-                    self.client_id, e
-                );
-                let _ = self.status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
                     self.client_id, e
                 ));
             }

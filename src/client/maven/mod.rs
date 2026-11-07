@@ -379,15 +379,11 @@ impl MavenClient {
         status_tx: mpsc::UnboundedSender<String>,
     ) {
         if depth > MAX_FOLLOWUP_DEPTH {
-            warn!(
-                "Maven client {} cut a follow-up chain at depth {} (limit {}): the model \
+            Log::to(&status_tx).warn(format!(
+                "Maven client {} follow-up chain cut at depth {} (limit {}): the model \
                  kept answering each response event with another repository operation. \
                  The chain is stopped, not the client.",
                 client_id, depth, MAX_FOLLOWUP_DEPTH
-            );
-            let _ = status_tx.send(format!(
-                "[WARN] Maven client {} follow-up chain cut at depth {}",
-                client_id, MAX_FOLLOWUP_DEPTH
             ));
             return;
         }
@@ -558,9 +554,8 @@ impl MavenClient {
 
             let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
             if let Err(e) = &outcome {
-                error!("Maven client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "Maven client {} injected action failed: {}",
                     client_id, e
                 ));
             }

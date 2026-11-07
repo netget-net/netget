@@ -18,6 +18,7 @@ use crate::client::smtp::actions::SMTP_CLIENT_CONNECTED_EVENT;
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::{Event, StartupParams};
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
@@ -314,9 +315,8 @@ impl SmtpClient {
                 .await;
 
             if let Err(e) = &outcome {
-                error!("SMTP client {} injected action failed: {}", client_id, e);
-                let _ = status_tx.send(format!(
-                    "[WARN] Client {} injected action failed: {}",
+                Log::to(&status_tx).warn(format!(
+                    "SMTP client {} injected action failed: {}",
                     client_id, e
                 ));
             }

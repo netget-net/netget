@@ -18,6 +18,7 @@ use crate::llm::actions::client_trait::{Client, ClientActionResult};
 use crate::llm::actions::protocol_trait::Protocol;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::client_handles::{ClientCommand, ClientSendOutcome};
@@ -727,13 +728,9 @@ impl ElasticsearchClient {
                 detail: format!("{} completed: HTTP {}", name, status_code),
             },
             Err(e) => {
-                error!(
+                Log::to(&status_tx).error(format!(
                     "Elasticsearch client {} operation {} failed: {}",
                     client_id, name, e
-                );
-                let _ = status_tx.send(format!(
-                    "[ERROR] Elasticsearch operation {} failed: {}",
-                    name, e
                 ));
                 ClientSendOutcome::Executed {
                     detail: format!("{} failed: {}", name, truncate_for_log(&e.to_string(), 200)),
