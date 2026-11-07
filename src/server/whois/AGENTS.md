@@ -28,7 +28,7 @@ no library.
 |---|---|
 | `send_whois_record` | formats `Domain Name:`, then only the fields given: `Registrar:`, one `Domain Status:` per `domain_status` entry, `Registrant Name:`, `Registrant Organization:` (`registrant_organization`, alias `registrant_org`), `Admin Name:`, one line per `extra_fields` entry (at most `MAX_EXTRA_FIELDS` = 32, refused past it), one `Name Server:` per entry; CRLF-terminated |
 | `send_whois_response` | free-form text; CRLF appended if missing |
-| `send_error` | `Error: <message>` |
+| `send_error` | `Error: <message>` — the answer for a query with no record (`No match for "x.invalid"`) |
 | `close_connection` | closes after the response |
 
 No async actions: WHOIS is purely reactive.
@@ -60,6 +60,19 @@ The same pass removed three fabrications: an omitted `registrar`, `registrant` o
 A WHOIS reader takes every line at its word, so an omitted field is now omitted.
 `tests/server/whois/record_fields_test.rs` pins the exact bytes, the omission, and the
 `extra_fields` bound (verified by removing it).
+
+### "No match" is `send_error`, and both descriptions say so
+
+The eval case `whois/no-match` ("Report that no match was found for any domain ending in
+.invalid") scored 2/5 at seeds 42–46. On three seeds the model answered `nothing.invalid` with a
+`send_whois_record` that printed only `Domain Name: nothing.invalid`, or a status of `noMatch`,
+which reads as a registered domain. When the captured prompt is replayed over seeds 1–46, the
+old one-line `send_error` description ("Send error message for domain not found") lost 5 of
+46. Three changes lost none: a description saying it is the answer for a query with no record,
+an example message `No match for "example.invalid"`, and `send_whois_record`'s description
+saying it is for a domain that has a record. An ordinary record for `example.com` stayed 46/46.
+Rewording `send_error` alone, with the old example, was worse in one way: on 3 of 20 seeds the
+model answered `example.com` with `No match for example.invalid`, copied from the description.
 
 ### Injection hygiene
 
