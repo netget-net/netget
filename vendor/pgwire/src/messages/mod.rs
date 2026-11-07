@@ -311,10 +311,12 @@ impl PgWireFrontendMessage {
                     decode_frontend::<extendedquery::Close>(buf, ctx).map(|v| v.map(Self::Close))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_DESCRIBE => {
-                    decode_frontend::<extendedquery::Describe>(buf, ctx).map(|v| v.map(Self::Describe))
+                    decode_frontend::<extendedquery::Describe>(buf, ctx)
+                        .map(|v| v.map(Self::Describe))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_EXECUTE => {
-                    decode_frontend::<extendedquery::Execute>(buf, ctx).map(|v| v.map(Self::Execute))
+                    decode_frontend::<extendedquery::Execute>(buf, ctx)
+                        .map(|v| v.map(Self::Execute))
                 }
                 extendedquery::MESSAGE_TYPE_BYTE_FLUSH => {
                     decode_frontend::<extendedquery::Flush>(buf, ctx).map(|v| v.map(Self::Flush))
@@ -324,7 +326,8 @@ impl PgWireFrontendMessage {
                 }
 
                 terminate::MESSAGE_TYPE_BYTE_TERMINATE => {
-                    decode_frontend::<terminate::Terminate>(buf, ctx).map(|v| v.map(Self::Terminate))
+                    decode_frontend::<terminate::Terminate>(buf, ctx)
+                        .map(|v| v.map(Self::Terminate))
                 }
 
                 copy::MESSAGE_TYPE_BYTE_COPY_DATA => {
