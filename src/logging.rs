@@ -249,14 +249,19 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingFileWriter {
 }
 
 /// Log at TRACE level to both file and TUI
+///
+/// The `console_*` macros are `Log::to(&status_tx)` at a fixed level, always routed to both
+/// sinks — DEBUG and TRACE included, which is what their callers ask for by choosing them over
+/// `Log`. A message starting with `__` is a control line (`__UPDATE_UI__`) and is passed
+/// through to the channel unprefixed.
 #[macro_export]
 macro_rules! console_trace {
     ($status_tx:expr, $($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        tracing::trace!("{}", msg);
         if !msg.starts_with("__") {
-            let _ = $status_tx.send(format!("[TRACE] {}", msg));
+            $crate::logging::emit::Log::to(&$status_tx).trace_to($crate::logging::emit::Sink::Both, msg);
         } else {
+            tracing::trace!("{}", msg);
             let _ = $status_tx.send(msg);
         }
     }};
@@ -267,10 +272,10 @@ macro_rules! console_trace {
 macro_rules! console_debug {
     ($status_tx:expr, $($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        tracing::debug!("{}", msg);
         if !msg.starts_with("__") {
-            let _ = $status_tx.send(format!("[DEBUG] {}", msg));
+            $crate::logging::emit::Log::to(&$status_tx).debug_to($crate::logging::emit::Sink::Both, msg);
         } else {
+            tracing::debug!("{}", msg);
             let _ = $status_tx.send(msg);
         }
     }};
@@ -281,10 +286,10 @@ macro_rules! console_debug {
 macro_rules! console_info {
     ($status_tx:expr, $($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        tracing::info!("{}", msg);
         if !msg.starts_with("__") {
-            let _ = $status_tx.send(format!("[INFO] {}", msg));
+            $crate::logging::emit::Log::to(&$status_tx).info(msg);
         } else {
+            tracing::info!("{}", msg);
             let _ = $status_tx.send(msg);
         }
     }};
@@ -295,10 +300,10 @@ macro_rules! console_info {
 macro_rules! console_warn {
     ($status_tx:expr, $($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        tracing::warn!("{}", msg);
         if !msg.starts_with("__") {
-            let _ = $status_tx.send(format!("[WARN] {}", msg));
+            $crate::logging::emit::Log::to(&$status_tx).warn(msg);
         } else {
+            tracing::warn!("{}", msg);
             let _ = $status_tx.send(msg);
         }
     }};
@@ -309,10 +314,10 @@ macro_rules! console_warn {
 macro_rules! console_error {
     ($status_tx:expr, $($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        tracing::error!("{}", msg);
         if !msg.starts_with("__") {
-            let _ = $status_tx.send(format!("[ERROR] {}", msg));
+            $crate::logging::emit::Log::to(&$status_tx).error(msg);
         } else {
+            tracing::error!("{}", msg);
             let _ = $status_tx.send(msg);
         }
     }};

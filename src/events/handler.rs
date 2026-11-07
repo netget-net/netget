@@ -8,11 +8,19 @@ use super::errors::ActionExecutionError;
 use super::types::{AppEvent, UserCommand};
 use crate::cli::server_startup;
 use crate::llm::actions::get_all_tool_actions;
-use crate::llm::format_indented_dimmed_lines;
 use crate::llm::OllamaClient;
 use crate::llm::{execute_actions, CommonAction, Server};
+use crate::logging::emit::Log;
 use crate::state::app_state::{AppState, Mode};
 use crate::ui::App;
+
+/// Each line of `text`, indented eight spaces under its summary heading.
+///
+/// Plain text: `Log` sanitises every line, so an ANSI dim sequence here would be stripped
+/// before it reached the file or the dashboard.
+fn indented_lines(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.lines().map(|line| format!("        {line}"))
+}
 
 /// Log detailed open_server action summary to the status channel
 fn log_open_server_summary(
@@ -30,38 +38,38 @@ fn log_open_server_summary(
     scheduled_tasks: &Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: &Option<String>,
 ) {
-    // Header
-    let _ = status_tx.send("[INFO] ═══ open_server ═══".to_string());
+    let log = Log::to(status_tx);
+    log.info("═══ open_server ═══");
 
     // Basic server configuration
-    let _ = status_tx.send(format!("[INFO]   Protocol: {}", protocol));
+    log.info(format!("  Protocol: {}", protocol));
     if let Some(p) = port {
-        let _ = status_tx.send(format!("[INFO]   Port: {}", p));
+        log.info(format!("  Port: {}", p));
     }
     if let Some(h) = host {
-        let _ = status_tx.send(format!("[INFO]   Host: {}", h));
+        log.info(format!("  Host: {}", h));
     }
     if let Some(i) = interface {
-        let _ = status_tx.send(format!("[INFO]   Interface: {}", i));
+        log.info(format!("  Interface: {}", i));
     }
     if let Some(m) = mac_address {
-        let _ = status_tx.send(format!("[INFO]   MAC Address: {}", m));
+        log.info(format!("  MAC Address: {}", m));
     }
     if send_first {
-        let _ = status_tx.send("[INFO]   Send First: yes".to_string());
+        log.info("  Send First: yes");
     }
 
     // Instruction (truncated if long)
     if !instruction.is_empty() {
         let truncated = crate::utils::truncate_for_log(instruction, 100);
-        let _ = status_tx.send(format!("[INFO]   Instruction: {}", truncated));
+        log.info(format!("  Instruction: {}", truncated));
     }
 
     // Initial memory (truncated if long)
     if let Some(mem) = initial_memory {
         if !mem.is_empty() {
             let truncated = crate::utils::truncate_for_log(mem, 100);
-            let _ = status_tx.send(format!("[INFO]   Initial Memory: {}", truncated));
+            log.info(format!("  Initial Memory: {}", truncated));
         }
     }
 
@@ -71,19 +79,16 @@ fn log_open_server_summary(
             let shown = crate::utils::redact::redact_sensitive(params);
             let params_str =
                 serde_json::to_string_pretty(&shown).unwrap_or_else(|_| shown.to_string());
-            let _ = status_tx.send("[INFO]   Startup Params:".to_string());
-            for line in format_indented_dimmed_lines(&params_str, 8) {
-                let _ = status_tx.send(format!("[INFO] {}", line));
+            log.info("  Startup Params:");
+            for line in indented_lines(&params_str) {
+                log.info(line);
             }
         }
     }
 
     // Event handlers summary
     if let Some(handlers) = event_handlers {
-        let _ = status_tx.send(format!(
-            "[INFO]   Event Handlers: {} configured",
-            handlers.len()
-        ));
+        log.info(format!("  Event Handlers: {} configured", handlers.len()));
         for handler in handlers {
             let event_pattern = handler
                 .get("event_pattern")
@@ -95,9 +100,9 @@ fn log_open_server_summary(
                 .and_then(|t| t.as_str())
                 .unwrap_or("unknown");
 
-            let _ = status_tx.send(format!("[INFO]     • {} → {}", event_pattern, handler_type));
+            log.info(format!("    • {} → {}", event_pattern, handler_type));
 
-            // For script handlers, show the script code (dimmed)
+            // For script handlers, show the script code (indented)
             if handler_type == "script" {
                 if let Some(code) = handler
                     .get("handler")
@@ -105,20 +110,20 @@ fn log_open_server_summary(
                     .and_then(|c| c.as_str())
                 {
                     let truncated = crate::utils::truncate_for_log(code, 200);
-                    for line in format_indented_dimmed_lines(&truncated, 8) {
-                        let _ = status_tx.send(format!("[INFO] {}", line));
+                    for line in indented_lines(&truncated) {
+                        log.info(line);
                     }
                 }
             }
 
-            // For static handlers, show the actions (dimmed)
+            // For static handlers, show the actions (indented)
             if handler_type == "static" {
                 if let Some(actions) = handler.get("handler").and_then(|h| h.get("actions")) {
                     let actions_str = serde_json::to_string_pretty(actions)
                         .unwrap_or_else(|_| actions.to_string());
                     let truncated = crate::utils::truncate_for_log(&actions_str, 300);
-                    for line in format_indented_dimmed_lines(&truncated, 8) {
-                        let _ = status_tx.send(format!("[INFO] {}", line));
+                    for line in indented_lines(&truncated) {
+                        log.info(line);
                     }
                 }
             }
@@ -127,10 +132,7 @@ fn log_open_server_summary(
 
     // Scheduled tasks summary
     if let Some(tasks) = scheduled_tasks {
-        let _ = status_tx.send(format!(
-            "[INFO]   Scheduled Tasks: {} configured",
-            tasks.len()
-        ));
+        log.info(format!("  Scheduled Tasks: {} configured", tasks.len()));
         for task in tasks {
             let timing = if task.recurring {
                 task.interval_secs
@@ -141,11 +143,11 @@ fn log_open_server_summary(
                     .map(|d| format!("after {}s", d))
                     .unwrap_or_else(|| "one-shot".to_string())
             };
-            let _ = status_tx.send(format!("[INFO]     • {} ({})", task.task_id, timing));
-            // Task instruction (dimmed)
+            log.info(format!("    • {} ({})", task.task_id, timing));
+            // Task instruction (indented)
             let truncated = crate::utils::truncate_for_log(&task.instruction, 100);
-            for line in format_indented_dimmed_lines(&truncated, 8) {
-                let _ = status_tx.send(format!("[INFO] {}", line));
+            for line in indented_lines(&truncated) {
+                log.info(line);
             }
         }
     }
@@ -153,10 +155,10 @@ fn log_open_server_summary(
     // Feedback instructions
     if let Some(fb) = feedback_instructions {
         let truncated = crate::utils::truncate_for_log(fb, 100);
-        let _ = status_tx.send(format!("[INFO]   Feedback Instructions: {}", truncated));
+        log.info(format!("  Feedback Instructions: {}", truncated));
     }
 
-    let _ = status_tx.send("[INFO] ══════════════════".to_string());
+    log.info("══════════════════");
 }
 
 /// Log detailed open_client action summary to the status channel
@@ -171,24 +173,24 @@ fn log_open_client_summary(
     scheduled_tasks: &Option<Vec<crate::llm::actions::common::ServerTaskDefinition>>,
     feedback_instructions: &Option<String>,
 ) {
-    // Header
-    let _ = status_tx.send("[INFO] ═══ open_client ═══".to_string());
+    let log = Log::to(status_tx);
+    log.info("═══ open_client ═══");
 
     // Basic client configuration
-    let _ = status_tx.send(format!("[INFO]   Protocol: {}", protocol));
-    let _ = status_tx.send(format!("[INFO]   Remote: {}", remote_addr));
+    log.info(format!("  Protocol: {}", protocol));
+    log.info(format!("  Remote: {}", remote_addr));
 
     // Instruction (truncated if long)
     if !instruction.is_empty() {
         let truncated = crate::utils::truncate_for_log(instruction, 100);
-        let _ = status_tx.send(format!("[INFO]   Instruction: {}", truncated));
+        log.info(format!("  Instruction: {}", truncated));
     }
 
     // Initial memory (truncated if long)
     if let Some(mem) = initial_memory {
         if !mem.is_empty() {
             let truncated = crate::utils::truncate_for_log(mem, 100);
-            let _ = status_tx.send(format!("[INFO]   Initial Memory: {}", truncated));
+            log.info(format!("  Initial Memory: {}", truncated));
         }
     }
 
@@ -198,19 +200,16 @@ fn log_open_client_summary(
             let shown = crate::utils::redact::redact_sensitive(params);
             let params_str =
                 serde_json::to_string_pretty(&shown).unwrap_or_else(|_| shown.to_string());
-            let _ = status_tx.send("[INFO]   Startup Params:".to_string());
-            for line in format_indented_dimmed_lines(&params_str, 8) {
-                let _ = status_tx.send(format!("[INFO] {}", line));
+            log.info("  Startup Params:");
+            for line in indented_lines(&params_str) {
+                log.info(line);
             }
         }
     }
 
     // Event handlers summary (same logic as server)
     if let Some(handlers) = event_handlers {
-        let _ = status_tx.send(format!(
-            "[INFO]   Event Handlers: {} configured",
-            handlers.len()
-        ));
+        log.info(format!("  Event Handlers: {} configured", handlers.len()));
         for handler in handlers {
             let event_pattern = handler
                 .get("event_pattern")
@@ -222,7 +221,7 @@ fn log_open_client_summary(
                 .and_then(|t| t.as_str())
                 .unwrap_or("unknown");
 
-            let _ = status_tx.send(format!("[INFO]     • {} → {}", event_pattern, handler_type));
+            log.info(format!("    • {} → {}", event_pattern, handler_type));
 
             if handler_type == "script" {
                 if let Some(code) = handler
@@ -231,8 +230,8 @@ fn log_open_client_summary(
                     .and_then(|c| c.as_str())
                 {
                     let truncated = crate::utils::truncate_for_log(code, 200);
-                    for line in format_indented_dimmed_lines(&truncated, 8) {
-                        let _ = status_tx.send(format!("[INFO] {}", line));
+                    for line in indented_lines(&truncated) {
+                        log.info(line);
                     }
                 }
             }
@@ -242,8 +241,8 @@ fn log_open_client_summary(
                     let actions_str = serde_json::to_string_pretty(actions)
                         .unwrap_or_else(|_| actions.to_string());
                     let truncated = crate::utils::truncate_for_log(&actions_str, 300);
-                    for line in format_indented_dimmed_lines(&truncated, 8) {
-                        let _ = status_tx.send(format!("[INFO] {}", line));
+                    for line in indented_lines(&truncated) {
+                        log.info(line);
                     }
                 }
             }
@@ -252,10 +251,7 @@ fn log_open_client_summary(
 
     // Scheduled tasks summary
     if let Some(tasks) = scheduled_tasks {
-        let _ = status_tx.send(format!(
-            "[INFO]   Scheduled Tasks: {} configured",
-            tasks.len()
-        ));
+        log.info(format!("  Scheduled Tasks: {} configured", tasks.len()));
         for task in tasks {
             let timing = if task.recurring {
                 task.interval_secs
@@ -266,10 +262,10 @@ fn log_open_client_summary(
                     .map(|d| format!("after {}s", d))
                     .unwrap_or_else(|| "one-shot".to_string())
             };
-            let _ = status_tx.send(format!("[INFO]     • {} ({})", task.task_id, timing));
+            log.info(format!("    • {} ({})", task.task_id, timing));
             let truncated = crate::utils::truncate_for_log(&task.instruction, 100);
-            for line in format_indented_dimmed_lines(&truncated, 8) {
-                let _ = status_tx.send(format!("[INFO] {}", line));
+            for line in indented_lines(&truncated) {
+                log.info(line);
             }
         }
     }
@@ -277,10 +273,10 @@ fn log_open_client_summary(
     // Feedback instructions
     if let Some(fb) = feedback_instructions {
         let truncated = crate::utils::truncate_for_log(fb, 100);
-        let _ = status_tx.send(format!("[INFO]   Feedback Instructions: {}", truncated));
+        log.info(format!("  Feedback Instructions: {}", truncated));
     }
 
-    let _ = status_tx.send("[INFO] ══════════════════".to_string());
+    log.info("══════════════════");
 }
 
 /// Event handler that coordinates all event processing
@@ -701,8 +697,8 @@ impl EventHandler {
                                 }
                                 Err(e) => {
                                     // Non-retryable error or max retries exceeded
-                                    let _ = status_tx
-                                        .send(format!("[ERROR] Error executing action: {e}"));
+                                    Log::to(&status_tx)
+                                        .error(format!("Error executing action: {e}"));
                                 }
                             }
                         }
@@ -711,8 +707,11 @@ impl EventHandler {
                     // Update conversation state if server state changed
                     if state_changed && !should_retry {
                         conversation.update_current_state(&self.state, None).await;
-                        let _ = status_tx.send(
-                            "[DEBUG] Updated conversation state after server changes".to_string(),
+                        // On the status channel too: the e2e harness reads this line from
+                        // stdout as the sign that startup finished (tests/helpers/netget.rs).
+                        Log::to(&status_tx).debug_to(
+                            crate::logging::emit::Sink::Both,
+                            "Updated conversation state after server changes",
                         );
                     }
 
@@ -720,8 +719,8 @@ impl EventHandler {
                     if should_retry {
                         if let Some(error) = retry_error {
                             execution_attempts += 1;
-                            let _ = status_tx.send(format!(
-                                "[INFO] Execution error (attempt {}/{}), retrying with LLM feedback...",
+                            Log::to(&status_tx).info(format!(
+                                "Execution error (attempt {}/{}), retrying with LLM feedback...",
                                 execution_attempts,
                                 MAX_EXECUTION_RETRIES + 1
                             ));
@@ -763,8 +762,7 @@ impl EventHandler {
                             }
                         }
                         Err(e) => {
-                            let _ =
-                                status_tx.send(format!("[ERROR] Failed to execute actions: {e}"));
+                            Log::to(&status_tx).error(format!("Failed to execute actions: {e}"));
                         }
                     }
 
@@ -772,7 +770,7 @@ impl EventHandler {
                     break;
                 }
                 Err(e) => {
-                    let _ = status_tx.send(format!("[ERROR] LLM error: {e}"));
+                    Log::to(&status_tx).error(format!("LLM error: {e}"));
                     // End conversation tracking since generate_with_tools_and_retry didn't complete
                     conversation.end_tracking().await;
                     break; // LLM errors don't retry at this level
@@ -868,8 +866,8 @@ impl EventHandler {
                 {
                     Ok(server_id) => {
                         // Server started successfully
-                        let _ = status_tx.send(format!(
-                            "[INFO] Server #{} started successfully",
+                        Log::to(status_tx).info(format!(
+                            "Server #{} started successfully",
                             server_id.as_u32()
                         ));
                     }
@@ -923,8 +921,8 @@ impl EventHandler {
                             });
                         } else {
                             // Fatal error - propagate as fatal
-                            let _ = status_tx
-                                .send(format!("[ERROR] Failed to start server: {}", error_msg));
+                            Log::to(status_tx)
+                                .error(format!("Failed to start server: {}", error_msg));
                             return Err(ActionExecutionError::Fatal(e));
                         }
                     }
@@ -1006,14 +1004,13 @@ impl EventHandler {
                     self.state
                         .set_instruction(server_id, instruction.clone())
                         .await;
-                    let _ = status_tx.send(format!(
-                        "[INFO] Server #{} instruction: {}",
+                    Log::to(status_tx).info(format!(
+                        "Server #{} instruction: {}",
                         server_id.as_u32(),
                         instruction
                     ));
                 } else {
-                    let _ =
-                        status_tx.send("[WARN] No server to update instruction for".to_string());
+                    Log::to(status_tx).warn("No server to update instruction for");
                 }
             }
             CommonAction::ChangeModel { model } => {
@@ -1043,11 +1040,10 @@ impl EventHandler {
             | CommonAction::AppendConnectionMemory { .. } => {
                 // Not offered here: an operator command arrives on no connection, and the
                 // only other place to write the note is a server's shared memory.
-                let _ = status_tx.send(
-                    "[ERROR] connection memory can only be written while answering a network \
+                Log::to(status_tx).error(
+                    "connection memory can only be written while answering a network \
                      event on a connection; use update_server's memory for a server's shared \
-                     memory"
-                        .to_string(),
+                     memory",
                 );
             }
             CommonAction::AppendToLog { .. } => {
@@ -1087,8 +1083,8 @@ impl EventHandler {
                 .filter_map(|(name, present)| present.then_some(name))
                 .collect();
                 if !script_fields.is_empty() {
-                    let _ = status_tx.send(format!(
-                        "[ERROR] schedule_task '{}' not scheduled: a scheduled task runs no \
+                    Log::to(status_tx).error(format!(
+                        "schedule_task '{}' not scheduled: a scheduled task runs no \
                          script, it calls the model with its instruction ({} not supported)",
                         task_id,
                         script_fields.join(", ")
@@ -1108,32 +1104,31 @@ impl EventHandler {
                                     if server.connections.contains_key(&cid) {
                                         TaskScope::Connection(server_id_obj, cid)
                                     } else {
-                                        let _ = status_tx.send(format!(
-                                            "[ERROR] Connection {} not found on server #{}",
+                                        Log::to(status_tx).error(format!(
+                                            "Connection {} not found on server #{}",
                                             conn_id_str, sid
                                         ));
                                         return Ok(());
                                     }
                                 } else {
-                                    let _ = status_tx.send(format!(
-                                        "[ERROR] Server #{} not found for connection-scoped task",
+                                    Log::to(status_tx).error(format!(
+                                        "Server #{} not found for connection-scoped task",
                                         sid
                                     ));
                                     return Ok(());
                                 }
                             }
                             None => {
-                                let _ = status_tx.send(format!(
-                                    "[ERROR] Invalid connection_id format: {}. Expected 'conn-123' or '123'",
+                                Log::to(status_tx).error(format!(
+                                    "Invalid connection_id format: {}. Expected 'conn-123' or '123'",
                                     conn_id_str
                                 ));
                                 return Ok(());
                             }
                         }
                     } else {
-                        let _ = status_tx.send(
-                            "[ERROR] connection_id requires server_id to be specified".to_string(),
-                        );
+                        Log::to(status_tx)
+                            .error("connection_id requires server_id to be specified");
                         return Ok(());
                     }
                 } else if let Some(sid) = server_id {
@@ -1142,10 +1137,8 @@ impl EventHandler {
                     let client_id_obj = crate::state::ClientId::new(cid);
                     // Validate client exists
                     if self.state.get_client(client_id_obj).await.is_none() {
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Client #{} not found for client-scoped task",
-                            cid
-                        ));
+                        Log::to(status_tx)
+                            .error(format!("Client #{} not found for client-scoped task", cid));
                         return Ok(());
                     }
                     TaskScope::Client(client_id_obj)
@@ -1209,7 +1202,7 @@ impl EventHandler {
                     self.state.remove_task(task.id).await;
                     let _ = status_tx.send(format!("[TASK] Cancelled task '{}'", task_id));
                 } else {
-                    let _ = status_tx.send(format!("[WARN] Task '{}' not found", task_id));
+                    Log::to(status_tx).warn(format!("Task '{}' not found", task_id));
                 }
             }
             CommonAction::OpenClient {
@@ -1282,8 +1275,8 @@ impl EventHandler {
                             let error_msg = e.to_string();
 
                             // Return error instead of just warning - invalid config should fail
-                            let _ = status_tx.send(format!(
-                                "[ERROR] Invalid event handler configuration: {}",
+                            Log::to(status_tx).error(format!(
+                                "Invalid event handler configuration: {}",
                                 error_msg
                             ));
                             return Err(ActionExecutionError::InvalidActionParameters {
@@ -1352,8 +1345,7 @@ impl EventHandler {
                     self.state
                         .set_client_event_handler_config(client_id, Some(config))
                         .await;
-                    let _ = status_tx
-                        .send("[INFO] Event handler configuration applied to client".to_string());
+                    Log::to(status_tx).info("Event handler configuration applied to client");
                 }
 
                 let _ = status_tx.send(format!(
@@ -1375,7 +1367,7 @@ impl EventHandler {
                     .await
                 {
                     self.state.remove_client(client_id).await;
-                    let _ = status_tx.send(format!("[ERROR] {e}"));
+                    Log::to(status_tx).error(&e);
                     return Err(ActionExecutionError::Fatal(e));
                 }
 
@@ -1415,8 +1407,8 @@ impl EventHandler {
                         self.state
                             .update_client_status(client_id, ClientStatus::Error(e.to_string()))
                             .await;
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Failed to connect {} client #{}: {}",
+                        Log::to(status_tx).error(format!(
+                            "Failed to connect {} client #{}: {}",
                             protocol,
                             client_id.as_u32(),
                             e
@@ -1493,8 +1485,8 @@ impl EventHandler {
                 }
 
                 if !found {
-                    let _ = status_tx.send(format!(
-                        "[ERROR] Connection {} not found on any running server",
+                    Log::to(status_tx).error(format!(
+                        "Connection {} not found on any running server",
                         conn_id
                     ));
                 }
@@ -1524,8 +1516,8 @@ impl EventHandler {
                             .send(format!("[CLIENT] Client #{} reconnected", cid.as_u32()));
                     }
                     Err(e) => {
-                        let _ = status_tx.send(format!(
-                            "[ERROR] Failed to reconnect client #{}: {}",
+                        Log::to(status_tx).error(format!(
+                            "Failed to reconnect client #{}: {}",
                             cid.as_u32(),
                             e
                         ));
@@ -1600,10 +1592,10 @@ impl EventHandler {
                 .await
                 {
                     Ok(outcome) => {
-                        let _ = status_tx.send(format!("[INFO] {}", outcome.summary));
+                        Log::to(status_tx).info(&outcome.summary);
                     }
                     Err(e) => {
-                        let _ = status_tx.send(format!("[ERROR] Failed to update server: {}", e));
+                        Log::to(status_tx).error(format!("Failed to update server: {}", e));
                         return Err(crate::events::ActionExecutionError::Fatal(e));
                     }
                 }
@@ -1649,10 +1641,10 @@ impl EventHandler {
                 .await
                 {
                     Ok(outcome) => {
-                        let _ = status_tx.send(format!("[INFO] {}", outcome.summary));
+                        Log::to(status_tx).info(&outcome.summary);
                     }
                     Err(e) => {
-                        let _ = status_tx.send(format!("[ERROR] Failed to update client: {}", e));
+                        Log::to(status_tx).error(format!("Failed to update client: {}", e));
                         return Err(crate::events::ActionExecutionError::Fatal(e));
                     }
                 }
@@ -1673,7 +1665,7 @@ impl EventHandler {
                 // Reject, never sanitise: a rewritten name would leave the model referring
                 // to a database that does not exist under that name.
                 if let Err(e) = crate::state::sqlite::validate_database_name(&name) {
-                    let _ = status_tx.send(format!("[ERROR] {}", e));
+                    Log::to(status_tx).error(&e);
                     return Ok(());
                 }
 
@@ -1684,7 +1676,7 @@ impl EventHandler {
                     match crate::state::sqlite::database_file_path(&name) {
                         Ok(p) => p,
                         Err(e) => {
-                            let _ = status_tx.send(format!("[ERROR] {}", e));
+                            Log::to(status_tx).error(&e);
                             return Ok(());
                         }
                     }
@@ -1698,21 +1690,20 @@ impl EventHandler {
                         if let Ok(id) = id_str.parse::<u32>() {
                             DatabaseOwner::Server(crate::state::ServerId::new(id))
                         } else {
-                            let _ = status_tx
-                                .send(format!("[ERROR] Invalid server ID in owner: {}", owner_str));
+                            Log::to(status_tx)
+                                .error(format!("Invalid server ID in owner: {}", owner_str));
                             return Ok(());
                         }
                     } else if let Some(id_str) = owner_str.strip_prefix("client-") {
                         if let Ok(id) = id_str.parse::<u32>() {
                             DatabaseOwner::Client(crate::state::ClientId::new(id))
                         } else {
-                            let _ = status_tx
-                                .send(format!("[ERROR] Invalid client ID in owner: {}", owner_str));
+                            Log::to(status_tx)
+                                .error(format!("Invalid client ID in owner: {}", owner_str));
                             return Ok(());
                         }
                     } else {
-                        let _ =
-                            status_tx.send(format!("[ERROR] Invalid owner format: {}", owner_str));
+                        Log::to(status_tx).error(format!("Invalid owner format: {}", owner_str));
                         return Ok(());
                     }
                 } else {
@@ -1752,7 +1743,7 @@ impl EventHandler {
                         }
                     }
                     Err(e) => {
-                        let _ = status_tx.send(format!("[ERROR] Failed to create database: {}", e));
+                        Log::to(status_tx).error(format!("Failed to create database: {}", e));
                     }
                 }
             }
@@ -1766,7 +1757,7 @@ impl EventHandler {
                         let _ = status_tx.send(format!("[DB] Deleted database {}", db_id));
                     }
                     Err(e) => {
-                        let _ = status_tx.send(format!("[ERROR] Failed to delete database: {}", e));
+                        Log::to(status_tx).error(format!("Failed to delete database: {}", e));
                     }
                 }
             }

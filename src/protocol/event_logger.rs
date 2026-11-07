@@ -6,8 +6,14 @@
 //! - Action execution logging
 //!
 //! Uses LogTemplate for protocol-specific log formatting.
+//!
+//! Every level a template renders reaches the status stream as well as the file
+//! (`Sink::Both` for DEBUG and TRACE): a protocol writes one template per level so that the
+//! dashboard's log-level filter can show the detail it asks for, and
+//! `tests/server/{openvpn,ipsec}/log_template_test.rs` read the DEBUG line off the channel.
 
 use crate::llm::actions::protocol_trait::ActionResult;
+use crate::logging::emit::{Log, Sink};
 use crate::protocol::log_template::{LogLevel, LogTemplate};
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
@@ -16,7 +22,6 @@ use crate::utils::clock::Instant;
 use serde_json::Value;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{debug, info, trace};
 
 /// Context for logging an event's lifecycle
 ///
@@ -121,10 +126,7 @@ impl<'a> EventLogContext<'a> {
 
         if let Some(ref template) = self.event.event_type.log_template {
             if let Some(msg) = template.render(LogLevel::Debug, &data) {
-                debug!("{}", msg);
-                if let Some(tx) = status_tx {
-                    let _ = tx.send(format!("[DEBUG] {}", msg));
-                }
+                Log::new(status_tx).debug_to(Sink::Both, &msg);
                 return;
             }
         }
@@ -138,10 +140,7 @@ impl<'a> EventLogContext<'a> {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| "unknown".to_string())
         );
-        debug!("{}", fallback_msg);
-        if let Some(tx) = status_tx {
-            let _ = tx.send(format!("[DEBUG] {}", fallback_msg));
-        }
+        Log::new(status_tx).debug_to(Sink::Both, &fallback_msg);
     }
 
     /// Log event completion (INFO/DEBUG/TRACE levels)
@@ -202,27 +201,18 @@ impl<'a> EventLogContext<'a> {
         if let Some(ref template) = self.event.event_type.log_template {
             // TRACE: Full details
             if let Some(msg) = template.render(LogLevel::Trace, &data) {
-                trace!("{}", msg);
-                if let Some(tx) = status_tx {
-                    let _ = tx.send(format!("[TRACE] {}", msg));
-                }
+                Log::new(status_tx).trace_to(Sink::Both, &msg);
             }
 
             // INFO: Access log style (one-liner)
             if let Some(msg) = template.render(LogLevel::Info, &data) {
-                info!("{}", msg);
-                if let Some(tx) = status_tx {
-                    let _ = tx.send(format!("[INFO] {}", msg));
-                }
+                Log::new(status_tx).info(&msg);
             }
 
             // DEBUG: With timing (always log at debug for event completion)
             if let Some(msg) = template.render(LogLevel::Debug, &data) {
                 let msg_with_timing = format!("{} ({}ms)", msg, duration.as_millis());
-                debug!("{}", msg_with_timing);
-                if let Some(tx) = status_tx {
-                    let _ = tx.send(format!("[DEBUG] {}", msg_with_timing));
-                }
+                Log::new(status_tx).debug_to(Sink::Both, &msg_with_timing);
             } else {
                 // Fallback debug with timing
                 let fallback_msg = format!(
@@ -235,10 +225,7 @@ impl<'a> EventLogContext<'a> {
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0)
                 );
-                debug!("{}", fallback_msg);
-                if let Some(tx) = status_tx {
-                    let _ = tx.send(format!("[DEBUG] {}", fallback_msg));
-                }
+                Log::new(status_tx).debug_to(Sink::Both, &fallback_msg);
             }
         } else {
             // No template: fallback logging
@@ -249,10 +236,7 @@ impl<'a> EventLogContext<'a> {
                 duration.as_millis(),
                 action_results.len()
             );
-            debug!("{}", fallback_msg);
-            if let Some(tx) = status_tx {
-                let _ = tx.send(format!("[DEBUG] {}", fallback_msg));
-            }
+            Log::new(status_tx).debug_to(Sink::Both, &fallback_msg);
         }
     }
 }
@@ -295,31 +279,19 @@ pub fn log_action_result(
     if let Some(template) = template {
         // Use template if available
         if let Some(msg) = template.render(LogLevel::Trace, &enriched_data) {
-            trace!("Action {}: {}", action_name, msg);
-            if let Some(tx) = status_tx {
-                let _ = tx.send(format!("[TRACE] Action {}: {}", action_name, msg));
-            }
+            Log::new(status_tx).trace_to(Sink::Both, format!("Action {}: {}", action_name, msg));
         }
 
         if let Some(msg) = template.render(LogLevel::Debug, &enriched_data) {
-            debug!("Action {}: {}", action_name, msg);
-            if let Some(tx) = status_tx {
-                let _ = tx.send(format!("[DEBUG] Action {}: {}", action_name, msg));
-            }
+            Log::new(status_tx).debug_to(Sink::Both, format!("Action {}: {}", action_name, msg));
         }
 
         if let Some(msg) = template.render(LogLevel::Info, &enriched_data) {
-            info!("Action {}: {}", action_name, msg);
-            if let Some(tx) = status_tx {
-                let _ = tx.send(format!("[INFO] Action {}: {}", action_name, msg));
-            }
+            Log::new(status_tx).info(format!("Action {}: {}", action_name, msg));
         }
     } else {
         // Fallback to summarize_action
         let summary = crate::llm::actions::summarize_action(action_data);
-        debug!("Action executed: {}", summary);
-        if let Some(tx) = status_tx {
-            let _ = tx.send(format!("[DEBUG] Action: {}", summary));
-        }
+        Log::new(status_tx).debug_to(Sink::Both, format!("Action executed: {}", summary));
     }
 }

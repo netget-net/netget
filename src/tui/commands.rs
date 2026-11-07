@@ -49,7 +49,7 @@ pub async fn submit(
                     .handle_interpret_with_actions(input, tx.clone(), None)
                     .await
                 {
-                    let _ = tx.send(format!("[ERROR] LLM request failed: {e}"));
+                    crate::logging::emit::Log::to(&tx).error(format!("LLM request failed: {e}"));
                 }
             });
         }
