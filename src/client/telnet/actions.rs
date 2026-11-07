@@ -25,14 +25,17 @@ pub fn line_bytes(line: &str) -> Vec<u8> {
 
 /// Send a line, with the line ending appended for you. The usual answer.
 ///
-/// The descriptions here and on `send_text` and `telnet_data_received` decide which of the two
-/// a model picks, and they were measured: llama3.1:8b, the quiz question of the restart-check
-/// measurement replayed over seeds (`src/client/telnet/AGENTS.md` has the table). Worded as "a
-/// text command" beside a `send_text` "for where the server is waiting mid-line", the model
-/// answered with `send_text` on 8 of 50 seeds, and on 22 of 30 once the restart check had told
-/// it `send_command {"command":"hello"}` was not to be sent again. Worded as below it did on
-/// none of either. Renaming the action, folding the two into one with a `line_ending` field,
-/// rewording the event alone or not offering `send_text` all left more answers empty.
+/// The descriptions here and on `send_text` decide which of the two a model picks, and they
+/// were measured: llama3.1:8b, the quiz questions of the restart-check measurement replayed
+/// over seeds (`src/client/telnet/AGENTS.md` has the tables). Worded as "a text command" beside
+/// a `send_text` "for where the server is waiting mid-line", the model answered a question with
+/// `send_text` on 8 of 50 seeds, and on 22 of 30 once the restart check had told it
+/// `send_command {"command":"hello"}` was not to be sent again. Worded as below it did on none
+/// of either. `telnet_data_received`'s own description is deliberately unchanged: naming
+/// `send_command` there as "the usual answer" did as well for the line, but the model then got
+/// "what is 2 plus 2?" wrong (mostly "2") on 37 seeds of 40, against 25 with the event as it is.
+/// Renaming the action, folding the two into one with a `line_ending` field, or not offering
+/// `send_text` left more answers empty.
 fn send_command_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_command".to_string(),
@@ -135,8 +138,8 @@ pub static TELNET_CLIENT_DATA_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::ne
     EventType::new(
         "telnet_data_received",
         "Data received from Telnet server, with option negotiation already stripped and \
-         answered. Reply with send_command (one line, the usual answer), or wait_for_more if \
-         this looks like part of a prompt you have not finished reading.",
+         answered. Reply with send_command or send_text, or wait_for_more if this looks like \
+         part of a prompt you have not finished reading.",
         // Rendered verbatim into the documentation the model reads, so it has to be an action
         // the executor accepts. This was `{"type": "placeholder"}`.
         json!({

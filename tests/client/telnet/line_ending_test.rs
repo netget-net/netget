@@ -12,7 +12,8 @@
 //! `send_command` is one line ending in exactly one CRLF — a line ending the model wrote itself
 //! is not doubled — and `send_text` is the text with nothing added. A local listener plays the
 //! server; the model is a mock. The prompt the model was shown for the question is checked too:
-//! it must name `send_command` as the usual answer, which is what steers a model to a line.
+//! it must describe `send_command` as the way to answer and `send_text` as not for answers,
+//! which is what steers a model to a line.
 
 use std::time::Duration;
 
@@ -170,10 +171,6 @@ async fn each_action_puts_exactly_its_bytes_on_the_wire() {
         })
         .expect("the question reached the model");
     let prompt = &question.context.prompt;
-    assert!(
-        prompt.contains("Reply with send_command (one line, the usual answer)"),
-        "the event must name send_command as the usual answer:\n{prompt}"
-    );
     assert!(
         prompt.contains("This is the normal way to answer anything the server says."),
         "send_command must be described as the way to answer:\n{prompt}"
