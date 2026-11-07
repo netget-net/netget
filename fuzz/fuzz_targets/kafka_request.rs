@@ -17,7 +17,8 @@
 //!    a decoder that reserves what it is told is the size-lie class this target exists for.
 //! 2. A request body that decodes re-encodes, and the re-encoding decodes to the same value.
 //! 3. Produce record batches never inflate past `MAX_INFLATED_PRODUCE_BYTES` per request —
-//!    `kafka-protocol`'s own gzip/zstd/lz4 decompressors have no output bound at all.
+//!    `kafka-protocol`'s own gzip/zstd/lz4 decompressors have no output bound at all — and
+//!    never decode to more than `MAX_PRODUCE_RECORDS` records.
 //!
 //! A record batch carries a CRC-32C over everything after it, which a mutating fuzzer
 //! essentially never gets right, so every batch also goes through a second time with its CRC
@@ -36,7 +37,8 @@ use netget::server::kafka::kafka_protocol::messages::{
 };
 use netget::server::kafka::kafka_protocol::protocol::{Decodable, Encodable};
 use netget::server::kafka::{
-    decode_record_batches, supported_versions, MAX_INFLATED_PRODUCE_BYTES,
+    decode_record_batches, supported_versions, ProduceBudget, MAX_INFLATED_PRODUCE_BYTES,
+    MAX_PRODUCE_RECORDS,
 };
 
 /// CRC-32C (Castagnoli), bitwise — what a v2 record batch carries.
@@ -72,10 +74,21 @@ fn with_fixed_crc(raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn batches(raw: &[u8]) {
-    let mut budget = MAX_INFLATED_PRODUCE_BYTES;
+    let mut budget = ProduceBudget::per_request();
     if let Ok(records) = decode_record_batches(raw, &mut budget) {
-        assert!(budget <= MAX_INFLATED_PRODUCE_BYTES, "the budget grew");
-        let _ = records.len();
+        assert!(
+            budget.inflated_bytes <= MAX_INFLATED_PRODUCE_BYTES,
+            "the inflation budget grew"
+        );
+        assert!(
+            records.len() <= MAX_PRODUCE_RECORDS,
+            "past the record bound"
+        );
+        assert_eq!(
+            budget.records,
+            MAX_PRODUCE_RECORDS - records.len(),
+            "the record budget must be charged exactly what was decoded"
+        );
     }
 }
 

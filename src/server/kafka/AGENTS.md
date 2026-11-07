@@ -317,15 +317,38 @@ and the broker has none to copy (`DefaultRecord.readFrom` takes a record's decla
 given); a default producer cannot send a record over `max.request.size` anyway. One absolute
 budget per request is the only one of the three that bounds what a request can cost.
 
-**What the budget does not bound: decoded records.** Each decoded record is a `Record` struct
-(`kafka-protocol` 0.14.1; `size_of::<Record>()` is 176 bytes on aarch64, measured) and a v2
-record with no key, value or headers encodes in 7 bytes (measured with the crate's own encoder),
-so the decoded `Vec<Record>` can be ~25× the bytes it was decoded from. That is true of
-an *uncompressed* batch just the same — a 100 MiB uncompressed Produce request of 7-byte records
-decodes to some 2.5 GiB — so it is a property of decoding everything at once, not of
-compression, and this budget cannot fix it. Bounding it means bounding the records decoded per
-request, which Kafka has no default for (librdkafka's `batch.num.messages` is 10 000 per
-MessageSet; the Java producer has no count limit), so the number is the maintainer's to choose.
+## Decoded records and `MAX_PRODUCE_RECORDS`
+
+The inflation budget bounds bytes, not what decoding them costs. Each decoded record is a
+`Record` struct (`kafka-protocol` 0.14.1; `size_of::<Record>()` is 176 bytes on aarch64,
+measured) and a v2 record with no key, value or headers encodes in 7 bytes (measured with the
+crate's own encoder), so the decoded `Vec<Record>` can be ~25× the bytes it came from — 16 MiB
+inflated is ~2.4 M records, ~420 MB, and a 100 MiB **uncompressed** request ~15 M records,
+~2.5 GiB. So one Produce request's batches, compressed or not, may decode to at most
+`MAX_PRODUCE_RECORDS` = **100 000** records between them (~17.6 MB of `Record`s), the same
+per-request budget shape as the inflation bound (`ProduceBudget` carries both). A partition past
+it is answered `MESSAGE_TOO_LARGE`, logged `decision=refused_record_bound`.
+
+- **Refused before anything is allocated.** `declared_records` walks the partition's batches
+  by their length fields and reads each v2 batch's `recordsCount` (header offset 57) before the
+  batch is copied, inflated or decoded; a v2 batch decodes to exactly that many records or
+  fails, so the declared count is the decoded count. A legacy (magic 0/1) message counts as one
+  there, because a compressed legacy wrapper does not say what it holds, and the records that
+  come out are counted again after decoding.
+- **Why 100 000.** Kafka has no record-count limit to copy. Real producers stay far under it:
+  the Java producer's 16 KiB default `batch.size` holds a few thousand records at most, and
+  librdkafka caps a MessageSet at `batch.num.messages` 10 000. The model sees 20 records
+  either way. The coordinator set the number from these figures, the maintainer having left the
+  Kafka limits to them.
+- **Why `MESSAGE_TOO_LARGE`.** Kafka's four candidates (`Errors.java`, 3.9.1) mean different
+  things to a producer. `CORRUPT_MESSAGE` (2) says the batch is damaged, and its exception,
+  `CorruptRecordException`, extends `RetriableException`, so a producer would re-send the same
+  batch until its delivery timeout. `INVALID_RECORD` (87) says a record failed validation, which
+  these records did not. `RECORD_LIST_TOO_LARGE` (18) is the segment-size refusal and permanent.
+  `MESSAGE_TOO_LARGE` (10), "larger than the max message size the server will accept", is the
+  size refusal a broker gives a batch past `message.max.bytes`, and it is the one the Java
+  producer answers by splitting the batch and re-sending the halves (`Sender.completeBatch`),
+  which is the recovery a request with too many records needs.
 
 ## Testing
 

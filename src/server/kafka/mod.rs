@@ -148,11 +148,53 @@ pub const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 /// `MAX_INFLATED_PRODUCE_BYTES`".
 pub const MAX_INFLATED_PRODUCE_BYTES: usize = 16 * 1024 * 1024;
 
+/// The most records one Produce request's batches may decode to, all batches together; past
+/// it the partition is answered MESSAGE_TOO_LARGE.
+///
+/// `kafka-protocol` decodes every record into a 176-byte `Record`, and a v2 record can be 7
+/// bytes, so decoding costs ~25× its input, compressed or not: 16 MiB inflated is ~2.4 M
+/// records (~420 MB), and a 100 MiB uncompressed request ~15 M (~2.5 GiB). 100 000 records is
+/// ~17.6 MB decoded, far above a real producer's request (the Java producer's 16 KiB
+/// `batch.size` holds a few thousand records; librdkafka's `batch.num.messages` is 10 000),
+/// and the model only sees `MAX_EVENT_RECORDS` of them. A v2 batch's count is read from its
+/// header before the batch is decoded, so nothing is allocated for a request past the bound.
+/// The reasoning, and why MESSAGE_TOO_LARGE, are in `src/server/kafka/AGENTS.md`.
+pub const MAX_PRODUCE_RECORDS: usize = 100_000;
+
+/// What one Produce request may still spend decoding its record batches; every partition of
+/// the request draws on the same budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProduceBudget {
+    /// Bytes compressed batches may still inflate to (see [`MAX_INFLATED_PRODUCE_BYTES`]).
+    pub inflated_bytes: usize,
+    /// Records the batches may still decode to (see [`MAX_PRODUCE_RECORDS`]).
+    pub records: usize,
+}
+
+impl ProduceBudget {
+    /// The budget of one Produce request.
+    pub fn per_request() -> Self {
+        Self {
+            inflated_bytes: MAX_INFLATED_PRODUCE_BYTES,
+            records: MAX_PRODUCE_RECORDS,
+        }
+    }
+}
+
+impl Default for ProduceBudget {
+    fn default() -> Self {
+        Self::per_request()
+    }
+}
+
 /// Why a Produce partition's record batches could not be decoded.
 #[derive(Debug)]
 pub enum BatchError {
     /// The compressed batches inflate past [`MAX_INFLATED_PRODUCE_BYTES`]: MESSAGE_TOO_LARGE.
     TooLarge,
+    /// The batches hold more records than the request has left of [`MAX_PRODUCE_RECORDS`]:
+    /// MESSAGE_TOO_LARGE.
+    TooManyRecords,
     /// Anything else the decoder refused: CORRUPT_MESSAGE.
     Corrupt(anyhow::Error),
 }
@@ -211,28 +253,72 @@ fn inflate_bounded(
     Ok(std::io::Cursor::new(out))
 }
 
+/// The records the batches in `raw` declare, read from each batch's header without decoding
+/// it: a v2 batch's `recordsCount` (offset 57), and one per legacy (magic 0/1) message, whose
+/// compressed wrappers say nothing about what they hold. Stops at the first batch whose header
+/// is cut short; the decoder refuses that batch itself.
+fn declared_records(raw: &[u8]) -> u64 {
+    // baseOffset (8) + batchLength (4) precede every batch; the magic byte is at offset 16 in
+    // both formats, and a v2 header is 61 bytes with recordsCount in its last four.
+    const LENGTH_END: usize = 12;
+    const MAGIC: usize = 16;
+    const COUNT: std::ops::Range<usize> = 57..61;
+    let mut declared = 0u64;
+    let mut at = 0usize;
+    while let Some(batch) = raw.get(at..) {
+        if batch.len() <= MAGIC {
+            break;
+        }
+        let length = i32::from_be_bytes([batch[8], batch[9], batch[10], batch[11]]);
+        match batch[MAGIC] {
+            2 => match batch.get(COUNT) {
+                Some(c) => declared += i32::from_be_bytes([c[0], c[1], c[2], c[3]]).max(0) as u64,
+                None => break,
+            },
+            _ => declared += 1,
+        }
+        if length < 0 {
+            break;
+        }
+        at = at.saturating_add(LENGTH_END + length as usize);
+    }
+    declared
+}
+
 /// Decode a Produce partition's record batches as this broker does, charging what compressed
-/// batches inflate to against `budget` (see [`MAX_INFLATED_PRODUCE_BYTES`]).
+/// batches inflate to and how many records they hold against the request's `budget` (see
+/// [`MAX_INFLATED_PRODUCE_BYTES`] and [`MAX_PRODUCE_RECORDS`]).
 ///
 /// `pub` for `fuzz/fuzz_targets/kafka_request.rs` and the decompression-bomb test.
 pub fn decode_record_batches(
     raw: &[u8],
-    budget: &mut usize,
+    budget: &mut ProduceBudget,
 ) -> std::result::Result<Vec<Record>, BatchError> {
-    let left = std::cell::Cell::new(*budget);
+    // Refused before anything is copied, inflated or reserved: a v2 batch decodes to exactly
+    // the records its header declares, or fails.
+    if declared_records(raw) > budget.records as u64 {
+        return Err(BatchError::TooManyRecords);
+    }
+    let left = std::cell::Cell::new(budget.inflated_bytes);
     let mut rc = std::io::Cursor::new(Bytes::copy_from_slice(raw));
     let result = RecordBatchDecoder::decode_with_custom_compression(
         &mut rc,
         Some(|b: &mut Bytes, c: Compression| inflate_bounded(b, c, &left)),
     );
-    *budget = left.get();
-    result.map_err(|e| {
+    budget.inflated_bytes = left.get();
+    let records = result.map_err(|e| {
         if e.downcast_ref::<InflationLimit>().is_some() {
             BatchError::TooLarge
         } else {
             BatchError::Corrupt(e)
         }
-    })
+    })?;
+    // A legacy compressed wrapper, counted as one above, can hold many: count what came out.
+    if records.len() > budget.records {
+        return Err(BatchError::TooManyRecords);
+    }
+    budget.records -= records.len();
+    Ok(records)
 }
 
 /// Cap on how much of a request is hex-dumped at TRACE level.
@@ -1371,7 +1457,7 @@ impl KafkaServer {
 
         let mut topic_responses = Vec::new();
         let mut units = 0usize;
-        let mut inflation_budget = MAX_INFLATED_PRODUCE_BYTES;
+        let mut decode_budget = ProduceBudget::per_request();
 
         for topic_data in &request.topic_data {
             let topic_name = topic_data.name.to_string();
@@ -1415,15 +1501,26 @@ impl KafkaServer {
                 // success, which told the producer its data was durable when it had been
                 // silently dropped.
                 let records = match &partition_data.records {
-                    Some(raw) => match decode_record_batches(raw.as_ref(), &mut inflation_budget) {
+                    Some(raw) => match decode_record_batches(raw.as_ref(), &mut decode_budget) {
                         Ok(r) => r,
-                        Err(BatchError::TooLarge) => {
+                        Err(refusal @ (BatchError::TooLarge | BatchError::TooManyRecords)) => {
+                            let why = if matches!(refusal, BatchError::TooLarge) {
+                                format!(
+                                    "record batches inflate past the request's {}-byte budget \
+                                     decision=refused_inflation_bound",
+                                    MAX_INFLATED_PRODUCE_BYTES
+                                )
+                            } else {
+                                format!(
+                                    "record batches hold more than the request's {} records \
+                                     decision=refused_record_bound",
+                                    MAX_PRODUCE_RECORDS
+                                )
+                            };
                             Log::new(Some(status_tx)).warn(format!(
-                                    "Kafka produce to '{}' partition {}: record batches inflate past \
-                                     the request's {}-byte budget decision=refused_inflation_bound; \
-                                     replying MESSAGE_TOO_LARGE",
-                                    topic_name, partition_idx, MAX_INFLATED_PRODUCE_BYTES
-                                ));
+                                "Kafka produce to '{}' partition {}: {}; replying MESSAGE_TOO_LARGE",
+                                topic_name, partition_idx, why
+                            ));
                             partition_responses.push(
                                 PartitionProduceResponse::default()
                                     .with_index(partition_idx)
