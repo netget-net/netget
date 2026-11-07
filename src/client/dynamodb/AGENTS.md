@@ -161,11 +161,13 @@ The LLM constructs typed attribute maps, and NetGet converts them to AWS SDK typ
 ### Dual Logging
 
 Operations log to `netget.log` through `tracing`, and **only failures** reach the status
-stream:
+stream, as one `Log` line that both sinks read:
 
 ```rust
-error!("DynamoDB client {} operation {} failed: {}", client_id, name, e);  // → netget.log
-status_tx.send(format!("[ERROR] DynamoDB operation {} failed: {}", name, e));  // → TUI
+Log::to(status_tx).error(format!(
+    "DynamoDB client {} operation {} failed: {}",
+    client_id, name, e
+)); // → netget.log and the TUI
 ```
 
 There is no per-operation success message on the status stream — a completed operation sends

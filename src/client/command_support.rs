@@ -38,9 +38,10 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::llm::actions::client_trait::{Client, ClientActionResult};
+use crate::logging::emit::Log;
 use crate::state::client_handles::{
     ClientCommand, ClientHandle, ClientSendOutcome, CLIENT_COMMAND_CAPACITY,
 };
@@ -114,9 +115,8 @@ where
         }
         Ok(_) => {}
         Err(e) => {
-            error!("Client {} injected action failed: {}", client_id, e);
-            let _ = status_tx.send(format!(
-                "[WARN] Client {} injected action failed: {}",
+            Log::to(&status_tx).warn(format!(
+                "Client {} injected action failed: {}",
                 client_id, e
             ));
         }

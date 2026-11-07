@@ -24,6 +24,7 @@ use crate::client::llm_budget::call_llm_for_client;
 use crate::llm::actions::client_trait::Client;
 use crate::llm::ollama_client::OllamaClient;
 use crate::llm::ClientLlmResult;
+use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
@@ -1729,12 +1730,8 @@ async fn execute_dc_actions(
                 return true;
             }
             Err(e) => {
-                error!(
+                Log::to(&status_tx).warn(format!(
                     "DC client {} action '{}' failed: {}",
-                    client_id, action_type, e
-                );
-                let _ = status_tx.send(format!(
-                    "[WARN] DC client {} action '{}' failed: {}",
                     client_id, action_type, e
                 ));
             }
@@ -1975,9 +1972,8 @@ async fn command_loop(
 
         let disconnect = matches!(outcome, Ok(ClientSendOutcome::Disconnected));
         if let Err(e) = &outcome {
-            error!("DC client {} injected action failed: {}", client_id, e);
-            let _ = status_tx.send(format!(
-                "[WARN] Client {} injected action failed: {}",
+            Log::to(&status_tx).warn(format!(
+                "DC client {} injected action failed: {}",
                 client_id, e
             ));
         }
