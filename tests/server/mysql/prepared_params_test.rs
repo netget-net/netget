@@ -454,3 +454,68 @@ async fn long_data_past_max_allowed_packet_is_refused_at_execute() -> E2EResult<
     );
     Ok(())
 }
+
+/// `COM_STMT_RESET` starts a statement's long data again, as it does in `mysqld`: chunks past
+/// the bound, then a reset, then one small chunk, and the execute after it binds the small
+/// chunk. Without the reset releasing the gate's count the small chunk is withheld, and without
+/// it clearing the refusal the execute is answered 1105.
+#[tokio::test]
+async fn reset_after_refused_long_data_lets_the_statement_start_again() -> E2EResult<()> {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let server = helpers::start_netget_server(recording_config(seen.clone())).await?;
+    helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
+
+    let mut sock = connect(server.port).await?;
+    let stmt = prepare(&mut sock, "INSERT INTO blobs (b) VALUES (?)").await?;
+
+    const CHUNK: usize = 16_000_000;
+    let mut chunk = vec![0x18];
+    chunk.extend_from_slice(&stmt.to_le_bytes());
+    chunk.extend_from_slice(&0u16.to_le_bytes());
+    chunk.resize(7 + CHUNK, b'z');
+    let chunk = packet(0, &chunk);
+    for _ in 0..5 {
+        sock.write_all(&chunk).await?;
+    }
+    assert!(
+        5 * CHUNK as u64 > netget::server::mysql::command_tap::LONG_DATA_PER_STATEMENT,
+        "the fifth chunk is past the bound"
+    );
+
+    let mut reset = vec![0x1A];
+    reset.extend_from_slice(&stmt.to_le_bytes());
+    sock.write_all(&packet(0, &reset)).await?;
+    let (_, ok) = read_packet(&mut sock).await?;
+    assert_eq!(
+        ok.get(..1),
+        Some(&[0x00u8][..]),
+        "COM_STMT_RESET OK, got {ok:?}"
+    );
+
+    let mut small = vec![0x18];
+    small.extend_from_slice(&stmt.to_le_bytes());
+    small.extend_from_slice(&0u16.to_le_bytes());
+    small.extend_from_slice(b"fresh");
+    sock.write_all(&packet(0, &small)).await?;
+
+    // The parameter's value is the long data, so the execute carries no value bytes.
+    let body = [0, 1, 0, 0, 0, 0x00, 0x01, 0xFD, 0];
+    let reply = execute(&mut sock, stmt, &body).await?;
+    assert_model_ok(&reply, "the execute after the reset");
+
+    drop(sock);
+    server.wait_for_mocks(10).await;
+    server.verify_mocks().await?;
+    let events = statements(&seen);
+    assert_eq!(
+        events.len(),
+        1,
+        "the execute after the reset reached the model"
+    );
+    assert_eq!(
+        events[0]["params"],
+        serde_json::json!([{"index": 1, "type": "VAR_STRING", "long_data": true, "value": "fresh"}]),
+        "the execute binds the chunk sent after the reset, and only it"
+    );
+    Ok(())
+}

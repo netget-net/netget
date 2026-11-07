@@ -625,15 +625,16 @@ impl<W: tokio::io::AsyncWrite + Send + Unpin> AsyncMysqlShim<W> for MysqlHandler
                             }
                         }
                     }
+                    // A reset discards the statement's long data in the crate and in the gate,
+                    // so a refusal for chunks sent before it no longer applies (see
+                    // `LongDataGate`).
                     command_tap::Captured::Reset { stmt_id: id } => {
                         if let Some(s) = stmts.get_mut(id) {
                             s.long_data.clear();
                             s.long_data_out_of_range = false;
+                            s.long_data_too_large = false;
                         }
                     }
-                    // Not cleared by a reset: the gate keeps counting this statement's long
-                    // data, and refusing its chunks, until it is executed or closed (see
-                    // `LongDataGate`).
                     command_tap::Captured::LongDataRefused { stmt_id: id } => {
                         if let Some(s) = stmts.get_mut(id) {
                             s.long_data_too_large = true;

@@ -302,14 +302,17 @@ Two pieces replace it:
   and discarded whole, so the crate never stores it. Long data has no reply, so
   dropping a chunk desynchronises nothing; the refusal is queued and answered
   1105 at the statement's next execute, where mysqld reports it. A statement's
-  count is released by its execute or `COM_STMT_CLOSE` (what makes the crate free
-  it), not by `COM_STMT_RESET`, which the crate does not parse. A chunk chained
+  count and its refusal are released by its execute, `COM_STMT_CLOSE` or
+  `COM_STMT_RESET` — the three commands on which the crate frees its long data —
+  so after a reset the statement starts again, as in mysqld. A chunk chained
   past 16 MiB is decided on its first fragment, so a bound can be overshot by one
   packet at most, which `packet_limit` bounds.
   `stmt_params_test.rs::long_data_past_its_bounds_never_reaches_the_crate` checks
   both bounds at small sizes, and
   `prepared_params_test.rs::long_data_past_max_allowed_packet_is_refused_at_execute`
-  sends 80 MB to reach the real one.
+  sends 80 MB to reach the real one;
+  `reset_after_refused_long_data_lets_the_statement_start_again` sends the same,
+  then a reset, a small chunk and an execute that binds it.
 - **`stmt_params.rs` — decoding them.** Every length is compared, as a `u64`,
   with the bytes remaining before it is used, so an 8-byte length-encoded size of
   2⁶⁴−1 is a refusal, not an overflow; values are borrowed from the packet, not

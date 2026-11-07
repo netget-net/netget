@@ -120,6 +120,11 @@ The bound parameter values, and the refusal of malformed `COM_STMT_EXECUTE` pack
 - `long_data_past_max_allowed_packet_is_refused_at_execute`: 1 startup + **1** execute. Five 16 MB
   chunks (80 MB on loopback — the cost of the real 64 MiB bound), then an execute answered ERR
   1105 with mysqld's text and no model call, then one that works.
+- `reset_after_refused_long_data_lets_the_statement_start_again`: 1 startup + **1** execute. The
+  same five chunks, then `COM_STMT_RESET` (answered OK), a five-byte chunk and an execute that
+  reaches the model bound to exactly that chunk. Verified by mutation: without the gate's release
+  on reset the small chunk is withheld, and without the shim clearing the refusal the execute is
+  answered 1105.
 
 The raw-socket test tells the model's OK from the crate's own by `affected_rows` (the mock answers
 1; the crate's OKs carry 0), because a stray OK from the crate is exactly the failure the

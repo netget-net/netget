@@ -402,12 +402,11 @@ enum GateStage {
 /// it too (ERR 1105, `Parameter of prepared statement which is set through
 /// mysql_send_long_data() is longer than 'max_allowed_packet' bytes`).
 ///
-/// The count for a statement is released when its execute or `COM_STMT_CLOSE` passes.
-/// `COM_STMT_RESET` releases nothing, although the crate discards the statement's long data on
-/// it too: the count, and a refusal already queued for the statement, stay until its next
-/// execute or close. That errs towards refusing — a client that resets and re-sends can be
-/// refused sooner than `mysqld` would refuse it — and never towards holding more than the
-/// bounds.
+/// The count for a statement, and its refusal, are released when its execute,
+/// `COM_STMT_CLOSE` or `COM_STMT_RESET` passes: the three commands after which the crate
+/// discards the statement's long data. After a reset the statement starts again, as in
+/// `mysqld`: chunks it sends next are admitted against an empty count, and the shim drops the
+/// refusal it was holding for the next execute.
 ///
 /// A chunk is decided by its first fragment. One that chains past 16 MiB is admitted on that
 /// fragment's length and counted as it passes, so the bound can be overshot by at most one
@@ -532,7 +531,9 @@ impl<R> LongDataGate<R> {
             Some(&COM_STMT_EXECUTE) if self.declared > MIN_EXECUTE_BODY && p.len() >= 5 => {
                 self.release(id(p));
             }
-            Some(&COM_STMT_CLOSE) if self.declared > MIN_RESET_BODY && p.len() >= 5 => {
+            Some(&COM_STMT_CLOSE | &COM_STMT_RESET)
+                if self.declared > MIN_RESET_BODY && p.len() >= 5 =>
+            {
                 self.release(id(p));
             }
             _ => {}
