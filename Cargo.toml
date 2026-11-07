@@ -245,11 +245,13 @@ matchit = { version = "0.8" }  # High-performance path router for OpenAPI
 
 # Kafka broker (wire protocol parsing and serialization)
 kafka-protocol = { package = "netget-kafka-protocol", version = "0.14.1" }  # Code-generated Kafka protocol support
-# The two codecs kafka-protocol already pulls in, named directly so the broker can inflate a
+# The codecs kafka-protocol already pulls in, named directly so the broker can inflate a
 # Produce batch with an output bound (MAX_INFLATED_PRODUCE_BYTES) instead of kafka-protocol's
-# unbounded decompressors.
+# unbounded decompressors. Snappy (pure Rust, also devp2p's message compression) is here rather
+# than in the native-only table because the kafka server builds for the browser too.
 lz4 = { version = "1.24" }
 zstd = { version = "0.13" }
+snap = { version = "1.1" }
 
 
 # BitTorrent protocols (bencode encoding/decoding)
@@ -361,10 +363,10 @@ secp256k1 = { version = "0.29", features = ["recovery"] }
 # Stratum V2: the Noise transport's AEAD (ChaCha20-Poly1305, IETF); its chacha20 and poly1305
 # are the versions already in the tree.
 chacha20poly1305 = { version = "0.10" }
-# devp2p: keccak-256 (block hashes, RLPx secrets and MACs) and Snappy (message compression
-# after Hello v5). Both are the versions already in the tree through other crates.
+# devp2p: keccak-256 (block hashes, RLPx secrets and MACs), the version already in the tree
+# through other crates. Its Snappy (message compression after Hello v5) is `snap`, listed in
+# [dependencies] beside the Kafka codecs.
 sha3 = { version = "0.10" }
-snap = { version = "1.1" }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }  # For WireGuard key generation
 # NGAP: SUCI concealment Profile B (TS 33.501 Annex C.3.4.2), ECDH on secp256r1. The 0.13 line is
 # already in the tree through other crates; only its `ecdh` feature is new.

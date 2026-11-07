@@ -17,6 +17,8 @@ use tokio::io::{
     WriteHalf,
 };
 use tokio::net::TcpStream;
+#[path = "helpers/child_guard.rs"]
+mod child_guard;
 
 struct Wire {
     reader: Lines<BufReader<ReadHalf<DuplexStream>>>,
@@ -646,6 +648,8 @@ async fn binary_accepts_modern_stdio_and_exits_with_an_open_stream_on_eof() {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
+    let pid = child.id().expect("spawned netget has a pid");
+    child_guard::tie_child(pid);
     let mut input = child.stdin.take().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
     let meta = json!({"io.modelcontextprotocol/protocolVersion":"2026-07-28",
@@ -688,9 +692,12 @@ async fn binary_accepts_modern_stdio_and_exits_with_an_open_stream_on_eof() {
     .await
     .unwrap();
     drop(input);
-    assert!(tokio::time::timeout(Duration::from_secs(5), child.wait())
-        .await
-        .unwrap()
-        .unwrap()
-        .success());
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    if status.is_err() {
+        let _ = child.kill().await;
+    }
+    // Released only after the child has exited or been killed, never before.
+    child_guard::untie_child(pid);
+    let status = status.expect("netget did not exit on stdin EOF").unwrap();
+    assert!(status.success());
 }
