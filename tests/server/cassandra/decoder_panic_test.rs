@@ -1,23 +1,28 @@
-//! Three CQL headers that panic `cassandra-protocol` 3.3.0's `Envelope::from_buffer`, sent to
-//! the running server over its real socket.
+//! Four CQL headers that panicked `cassandra-protocol` 3.3.0's `Envelope::from_buffer`, decoded
+//! directly by the version NetGet now links and sent to the running server over its real socket.
 //!
-//! Each is a header bit the peer chooses on its very first frame, before STARTUP:
+//! Each is a header field the peer chooses on its very first frame, before STARTUP:
 //!
-//! 1. **The tracing flag on a frame whose direction bit says "response".** `from_buffer` then
-//!    reads a 16-byte tracing id with `read_exact(..).unwrap()` (`frame.rs:187`); a zero-length
-//!    body panics.
-//! 2. **The warning flag with a negative `[string list]` count.** `Vec::with_capacity(len as
-//!    usize)` on an `i16` (`types.rs:267`) — `-1` is `usize::MAX` elements, a `capacity
-//!    overflow` panic.
-//! 3. **The warning flag with a string longer than the body.** `cursor_next_value_ref` slices
-//!    `[start..start + len]` before it checks the length (`types.rs:485`).
+//! 1. **The tracing flag on a frame whose direction bit says "response".** `from_buffer` reads a
+//!    16-byte tracing id from the body; 3.3.0 did it with `read_exact(..).unwrap()`, so a
+//!    zero-length body panicked.
+//! 2. **The warning flag with a negative `[string list]` count.** 3.3.0 called
+//!    `Vec::with_capacity(len as usize)` on the `i16`: `-1` is `usize::MAX` elements, a
+//!    `capacity overflow` panic.
+//! 3. **The warning flag with a string longer than the body.** 3.3.0's `cursor_next_value_ref`
+//!    sliced `[start..start + len]` before it checked the length.
+//! 4. **A declared body length with the high bit set.** 3.3.0 cast the negative `i32` to `usize`
+//!    and computed `9 + len`, which overflows.
 //!
-//! A panic there is inside the connection task, so `tokio::spawn` swallows it: the server stays
-//! `Running`, the peer's socket simply closes, and no reply ever says why. What the server must
-//! do instead is what it does for any other unparseable frame — answer PROTOCOL_ERROR (0x000A)
-//! on the frame's own stream id — and keep serving everyone else. The guard is
-//! `netget::server::cassandra::parse_request_frame`, which refuses both header bits on a
-//! request (neither means anything there) before the decoder runs.
+//! [`the_linked_decoder_refuses_every_shape_that_panicked`] holds the dependency to returning
+//! `Err` for all four, so a downgrade fails here rather than in production. The wire test holds
+//! the server to what a panic inside the connection task would have hidden: `tokio::spawn`
+//! swallows it, the server stays `Running`, and the peer's socket simply closes with no reply.
+//! What the server does instead is what it does for any other unparseable frame — answer
+//! PROTOCOL_ERROR (0x000A) on the frame's own stream id — and keep serving everyone else.
+//! `netget::server::cassandra::parse_request_frame` refuses a response-direction frame and the
+//! warning flag on a request (neither means anything there) before the decoder runs; the read
+//! loop refuses the negative length before a frame is assembled.
 //!
 //! Every exchange here is answered without the model: STARTUP by a static rule, and the refused
 //! frames by the protocol-error path, so the mock carries only the rule that starts the server.
@@ -134,6 +139,47 @@ async fn expect_protocol_error(
         "{case}: the reply leaked the log's wording: {message}"
     );
     Ok(())
+}
+
+/// The four headers, handed straight to the linked `Envelope::from_buffer`: each must be an
+/// `Err`, never a panic. 3.3.0 panicked on every one of them.
+#[test]
+fn the_linked_decoder_refuses_every_shape_that_panicked() {
+    use cassandra_protocol::compression::Compression;
+    use cassandra_protocol::frame::Envelope;
+
+    let mut negative_length = raw_frame(0x04, 0x00, 0x0074, 0x01, &[]);
+    negative_length[5..9].copy_from_slice(&(-1i32).to_be_bytes());
+
+    let cases: [(&str, Vec<u8>); 4] = [
+        (
+            "a response frame with the tracing flag and no tracing id",
+            raw_frame(0x84, 0x02, 0x0071, 0x07, &[]),
+        ),
+        (
+            "a warning list with a negative count",
+            raw_frame(0x04, 0x08, 0x0072, 0x01, &[0xFF, 0xFF]),
+        ),
+        (
+            "a warning string longer than the body",
+            raw_frame(
+                0x04,
+                0x08,
+                0x0073,
+                0x01,
+                &[0x00, 0x01, 0x00, 0x10, b'x', b'y'],
+            ),
+        ),
+        ("a negative declared body length", negative_length),
+    ];
+    for (case, frame) in cases {
+        let outcome = std::panic::catch_unwind(|| Envelope::from_buffer(&frame, Compression::None));
+        match outcome {
+            Err(_) => panic!("{case}: Envelope::from_buffer panicked"),
+            Ok(Ok(parsed)) => panic!("{case}: decoded as {:?}", parsed.envelope),
+            Ok(Err(_)) => {}
+        }
+    }
 }
 
 #[tokio::test]

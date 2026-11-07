@@ -539,6 +539,12 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   (`types.rs:485`). Fixed by `cassandra::parse_request_frame`, which refuses both header bits on
   a request (neither has meaning there) and answers PROTOCOL_ERROR. A negative body length
   (`frame.rs:157-171`) was already unreachable behind `MAX_FRAME_BODY_BYTES`.
+  **6 November 2026: upgraded to 5.0.0, which returns `Err` for all four shapes** (upstream
+  `608dc6a`, `c4c4f7d`; 4.1.0 has the same fixes). `parse_request_frame` keeps refusing both
+  bits, now for what they mean rather than for a panic: 5.0 decodes a well-formed
+  response-direction frame as an ordinary one, and on a request with the warning flag strips a
+  string list off the body. `decoder_panic_test.rs` also hands the four shapes to the linked
+  `Envelope::from_buffer` directly, so a downgrade fails there.
 - **`opensrv-mysql` 0.7.0 — two panics in the handshake.** `set_seq(seq + 1)` on a client
   sequence id of 255 (`lib.rs:389`, `:502`, `:563`; overflow checks, so debug/test builds only)
   and `packet()`'s fragment `assert_eq!`s on a misnumbered chain (`packet_reader.rs:252`, `:266`;
@@ -554,6 +560,12 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   (`ber/de.rs:202-208`) checks `chars().nth(len - 5)` and slices at *byte* `len - 5`, so the
   GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") panics on a char boundary. No SNMP type
   carries a GeneralizedTime.
+  **7 November 2026: `rasn`, `rasn-snmp` and `rasn-smi` upgraded to 0.30.0.** The GeneralizedTime
+  parser works on bytes and returns `Err` (fixed in 0.26), and the BER decoder counts its depth
+  and refuses past 128 levels, constructed OCTET STRINGs included. `check_ber_structure` stays in
+  front at 16. `tests/server/snmp/ber_time_test.rs` feeds the GeneralizedTime bytes to
+  `rasn::ber::decode` and to `parse_snmp_message` (it fails on 0.18 at `ber/de.rs:208`), and
+  `ber_depth_test.rs` hands the 30000-level bomb to `rasn` unscreened on a 2 MiB stack.
 
 Tests: `tests/server/dns/compression_chain_test.rs`, `tests/server/cassandra/decoder_panic_test.rs`,
 `tests/server/mysql/sequence_id_test.rs`. Fuzz: `dns_message` now runs the screen first and has a

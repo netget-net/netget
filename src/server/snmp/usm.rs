@@ -681,8 +681,10 @@ pub struct Received {
 /// contents before they are decoded in turn. The outer screen cannot cover the second: it reads
 /// msgSecurityParameters as one primitive OCTET STRING and skips its contents, while the
 /// UsmSecurityParameters inside are BER of their own whose OCTET STRINGs may be constructed —
-/// `24 80` repeated buys one level of `rasn`'s unbounded recursion per two bytes, enough in one
-/// datagram to overflow the stack and abort the process before any key is checked.
+/// `24 80` repeated buys one level of `rasn`'s recursion per two bytes. `rasn` 0.30 stops at 128
+/// levels; this screen stops at [`crate::server::snmp::MAX_BER_DEPTH`] before any key is checked,
+/// so the process does not rest on the decoder's bound alone (an unbounded decoder, as 0.18 was,
+/// overflowed the stack and aborted the process from one datagram).
 pub fn decode(data: &[u8]) -> Result<Received> {
     crate::server::snmp::check_ber_structure(data, crate::server::snmp::MAX_BER_DEPTH)
         .map_err(|e| anyhow::anyhow!("not an SNMPv3 message: {e}"))?;

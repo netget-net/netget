@@ -13,7 +13,9 @@ client-first, so it could never have been honoured.
 
 ## Libraries
 
-- **cassandra-protocol** 3.0 — `Envelope::from_buffer` / `encode_with` for frame headers only.
+- **cassandra-protocol** 5.0 — `Envelope::from_buffer` / `encode_with` for frame headers only.
+  Responses are built with `Envelope::new` (the struct has a private field since 5.0), through
+  `mod.rs`'s `response_envelope`.
 - Response **bodies are built by hand**: the crate does not offer server-side body builders for
   RESULT/SUPPORTED/PREPARED, so `mod.rs` writes the CQL wire encoding directly.
 
@@ -137,19 +139,20 @@ decimal. A handler that declares one of these gets varchar on the wire.
   a driver reads those trailing bytes unconditionally. scylla re-PREPAREs and retries on it, so
   the statement then succeeds instead of the session dying.
   `tests/server/cassandra/protocol_error_test.rs` covers both.
-- **Two header bits are refused before `cassandra-protocol` sees them**, because
-  `Envelope::from_buffer` (3.3.0) panics on both, pre-STARTUP: the *tracing* flag on a frame
-  whose direction bit says response (`read_exact(..).unwrap()` of a 16-byte tracing id,
-  `frame.rs:187`), and the *warning* flag (a `[string list]` whose negative `i16` count is a
-  `Vec::with_capacity` capacity-overflow panic, `types.rs:267`, and whose over-long string is
-  sliced before its length is checked, `types.rs:485`). A server never receives a response frame
-  and warnings ride only on responses, so `parse_request_frame` refuses both and the frame takes
-  the PROTOCOL_ERROR path above. A panic there would have been inside the connection task —
-  swallowed by `tokio::spawn`, the socket closed with no reply, the connection never closed in
-  the server's state. The third panic in `from_buffer` (a declared body length with the high
-  bit set: `9 + len` overflows in debug and slices `[9..8]` in release) cannot be reached,
-  because `MAX_FRAME_BODY_BYTES` refuses every such length first.
-  `tests/server/cassandra/decoder_panic_test.rs` sends all three from the wire;
+- **Two header bits are refused before `cassandra-protocol` sees them**: the *tracing* flag on a
+  frame whose direction bit says response, and the *warning* flag. A server never receives a
+  response frame (Apache Cassandra refuses one as "Wrong message direction") and warnings ride
+  only on responses, so `parse_request_frame` refuses both and the frame takes the
+  PROTOCOL_ERROR path above. `Envelope::from_buffer` does not refuse them itself: it decodes a
+  well-formed response-direction frame as an ordinary one, and on a request carrying the warning
+  flag strips a `[string list]` off the front of the body and hands on the rest. Its own handling
+  of malformed shapes of those fields is sound since 4.1 — it returns `Err` for a missing tracing
+  id, a negative list count and an over-long string, all three of which panicked in 3.3.0 (a
+  panic inside the connection task: swallowed by `tokio::spawn`, the socket closed with no
+  reply). A declared body length with the high bit set, 3.3.0's fourth panic, is refused by the
+  read loop's `MAX_FRAME_BODY_BYTES` before a frame is assembled, and by the decoder too.
+  `tests/server/cassandra/decoder_panic_test.rs` hands all four shapes to the linked decoder
+  directly (each must be `Err`) and sends the first three from the wire;
   `fuzz/fuzz_targets/cassandra_envelope.rs` runs the read loop's checks and the decoder as a pair.
 - **The accept loop breaks** on error rather than retrying immediately and spinning on a
   persistent EMFILE.

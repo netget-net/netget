@@ -92,9 +92,18 @@ Net-SNMP both ways, no mock model (a python handler answers):
 
 Four unit tests over `SnmpServer::parse_snmp_message`, no server and no mock model. They cover the
 input screen described in `src/server/snmp/AGENTS.md` §7: a 30000-level indefinite-length nesting
-(which aborted the whole test binary with `stack overflow` before the screen existed), the
-definite-length route to the same recursion, a length reaching past the end of the datagram, and a
-real net-snmp `GetRequest` that must still parse.
+(which aborted the whole test binary with `stack overflow` under rasn 0.18 before the screen
+existed), the definite-length route to the same recursion, a length reaching past the end of the
+datagram, and a real net-snmp `GetRequest` that must still parse. A fifth,
+`rasn_bounds_constructed_octet_string_nesting_itself`, hands the same 30000-level bomb to
+`rasn::ber::decode` unscreened on a 2 MiB thread and requires `Err`: rasn 0.30's own depth bound.
+
+### `ber_time_test.rs`
+
+The BER GeneralizedTime `18 06 c3 a9 2b 30 30 30` ("é+000") through `rasn::ber::decode` and through
+`parse_snmp_message`: an `Err` each, never a panic. rasn 0.18 sliced it inside the `é` and
+panicked (the test fails there at `ber/de.rs:208`); 0.26 and later return an error. No SNMP type
+carries a GeneralizedTime, so the datagram path refuses it as a malformed message.
 
 ## LLM Call Budget
 

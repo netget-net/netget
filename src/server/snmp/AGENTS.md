@@ -29,16 +29,17 @@ about SNMP.
 
 ### Core SNMP Implementation
 
-- **rasn-snmp v0.18** - Pure Rust SNMP protocol implementation
+- **rasn-snmp v0.30** - Pure Rust SNMP protocol implementation
     - BER (Basic Encoding Rules) encoding/decoding
     - SNMPv1 and SNMPv2c message parsing
     - PDU types: GetRequest, GetNextRequest, GetBulkRequest, SetRequest, Response, Trap
     - Variable binding support (OID + value pairs)
 
-- **rasn v0.18** - ASN.1 encoding library
+- **rasn v0.30** - ASN.1 encoding library
     - BER encoder/decoder (used by rasn-snmp)
     - OID type representation
-    - Integer, OctetString, and other ASN.1 types
+    - Integer, OctetString, and other ASN.1 types (`Integer` is opaque: built with
+      `Integer::from`, read with `i64::try_from(&integer)`)
 
 - **Manual BER encoding** - Custom BER encoder for responses
     - Needed because rasn-snmp doesn't provide easy response building
@@ -209,22 +210,24 @@ SNMP has built-in error responses:
 
 ### 7. Input Screening — the BER decoder is not safe to point at the network
 
-`rasn` 0.18 decodes a *constructed* OCTET STRING by calling `ber::de::parser::parse_encoded_value`
-on each of its segments, and a segment may itself be constructed — the function calls itself, with
-no depth counter anywhere on the path. Both `v1::Message` and `v2c::Message` carry `community` as
-an OCTET STRING, so the nesting a datagram *declares* is the recursion depth we get.
+BER lets a *constructed* OCTET STRING hold segments that are themselves constructed, and both
+`v1::Message` and `v2c::Message` carry `community` as an OCTET STRING, so the nesting a datagram
+*declares* is as deep as the peer likes. `24 80` — constructed OCTET STRING, indefinite length —
+costs two bytes and buys one level, and the end-of-contents markers can be left off entirely, so a
+64 KB UDP datagram declares ~32000 levels.
 
-`24 80` — constructed OCTET STRING, indefinite length — costs two bytes and buys one level, and the
-end-of-contents markers can be left off entirely: the decoder descends while input remains and only
-notices the missing EOC on the way back up. A 64 KB UDP datagram therefore reaches ~32000 frames.
-Measured: 30000 levels aborts with `fatal runtime error: stack overflow`, signal 6.
+`rasn` 0.18 decoded that nesting by calling `ber::de::parser::parse_encoded_value` on itself with no
+depth counter; 30000 levels aborted the process with `fatal runtime error: stack overflow`, signal 6.
+A Rust stack overflow is a guard-page SIGSEGV/SIGABRT, **not** a panic: `tokio::spawn` cannot
+isolate it and `catch_unwind` cannot see it, so it was an unauthenticated remote kill switch for
+every other server the NetGet process was running. `rasn` 0.30 counts its depth and refuses past
+128 levels (`ExceedsMaxParseDepth`); `ber_depth_test.rs`'s
+`rasn_bounds_constructed_octet_string_nesting_itself` hands it the 30000-level bomb unscreened on a
+2 MiB stack and requires an `Err`.
 
-A Rust stack overflow is a guard-page SIGSEGV/SIGABRT, **not** a panic. `tokio::spawn` cannot
-isolate it and `catch_unwind` cannot see it, so this was an unauthenticated remote kill switch for
-every other server the NetGet process was running.
-
-`check_ber_structure` (in `mod.rs`, `pub` so the client uses the same one) therefore walks the TLV
-structure **iteratively** — an explicit stack, no recursion of its own — before rasn sees anything:
+The screen stays in front of it anyway, so the process never rests on one bound.
+`check_ber_structure` (in `mod.rs`, `pub` so the client uses the same one) walks the TLV structure
+**iteratively** — an explicit stack, no recursion of its own — before rasn sees anything:
 
 - nesting capped at `MAX_BER_DEPTH` = 16; a real SNMP message is 4 deep
   (Message > PDU > VarBindList > VarBind)
@@ -241,7 +244,7 @@ agent to the reply.
 msgSecurityParameters is a primitive OCTET STRING whose contents are the encoded
 UsmSecurityParameters, which `usm::decode` hands to `rasn` in a second decode. The datagram screen
 skips a primitive's contents, so a userName or engineID written as `24 80` repeated sits behind a
-clean outer message and, unscreened, reaches the same unbounded recursion — pre-authentication on
+clean outer message and, unscreened, reaches the decoder's recursion — pre-authentication on
 the agent (`Agent::receive`) and on the manager (`Manager::learn`, `Manager::unwrap_reply`).
 `usm::decode` screens both the whole message and the msgSecurityParameters contents itself, so no
 caller can reach `rasn` unscreened, and a decrypted scoped PDU is screened before its decode in

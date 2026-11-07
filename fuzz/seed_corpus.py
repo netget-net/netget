@@ -1532,8 +1532,9 @@ write("mysql_stmt_execute", "ff_length",
       mysql_exec(1, mysql_exec_payload(1, [False], [0xFD, 0], b"\xff\x00")))
 write("mysql_stmt_execute", "bad_temporal_length",
       mysql_exec(1, mysql_exec_payload(1, [False], [0x0C, 0], b"\x05" + b"\x00" * 5)))
-# --- SNMP: the recursion rasn actually has --------------------------------
-# rasn 0.18 recurses on a *constructed OCTET STRING* (`24 80`), and `community` is one; the
+# --- SNMP: the recursion rasn has -----------------------------------------
+# rasn recurses on a *constructed OCTET STRING* (`24 80`; unbounded in 0.18, 128 levels since
+# 0.30), and `community` is one; the
 # `30 80` bomb above nests SEQUENCEs, which the guard refuses for the same reason but which
 # is not the path that overflowed. Indefinite outer SEQUENCE, version 1, then the bomb.
 write("snmp_ber", "octet_string_depth_bomb",
