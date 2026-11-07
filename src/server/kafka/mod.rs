@@ -135,14 +135,17 @@ const MIN_REQUEST_BYTES: i32 = 8;
 pub const MAX_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 
 /// The most one Produce request's compressed record batches may inflate to, all batches
-/// together.
+/// together; past it the partition is answered MESSAGE_TOO_LARGE.
 ///
-/// `kafka-protocol`'s own gzip, zstd and lz4 decompressors inflate to whatever the stream
-/// says, so a 1 MiB gzip batch of zeros became 1 GiB in this process, and a request at
-/// [`MAX_REQUEST_BYTES`] could ask for ~100 GiB. Sixteen times Kafka's default
-/// `message.max.bytes` (1 MiB, which bounds a *compressed* batch) is far above what a real
-/// producer's batch inflates to, and the decoded records of 16 MiB stay well under a gigabyte
-/// even at Kafka's 7-byte minimum record.
+/// `kafka-protocol` inflates a whole batch before decoding a record, so without a bound a
+/// 1 MiB gzip batch of zeros became 1 GiB here. Apache Kafka bounds only the *compressed* batch
+/// (`message.max.bytes`, 1 048 588) and has no decompressed bound because it streams records;
+/// real producers send requests of about 1 MiB (`max.request.size` 1 048 576, librdkafka
+/// `message.max.bytes` 1 000 000), so 16 MiB admits a full default request at 16:1, and the
+/// Java producer splits and re-sends a batch refused MESSAGE_TOO_LARGE. A ratio bound would
+/// bound nothing absolute and a per-record bound would not bound the total. The reasoning and
+/// the sources are in `src/server/kafka/AGENTS.md`, "Compression and
+/// `MAX_INFLATED_PRODUCE_BYTES`".
 pub const MAX_INFLATED_PRODUCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Why a Produce partition's record batches could not be decoded.

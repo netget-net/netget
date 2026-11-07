@@ -107,3 +107,55 @@ fn an_uncompressed_batch_costs_no_inflation_budget() {
     assert_eq!(records.len(), 1);
     assert_eq!(budget, MAX_INFLATED_PRODUCE_BYTES);
 }
+
+/// What one single-record batch of `value_len` bytes inflates to: the budget it consumes.
+fn inflated_len(value_len: usize, compression: Compression) -> usize {
+    let roomy = 1usize << 40;
+    let mut budget = roomy;
+    decode_record_batches(&batch(value_len, compression), &mut budget)
+        .expect("a probe batch decodes with a budget far above its size");
+    roomy - budget
+}
+
+#[test]
+fn a_batch_inflating_to_exactly_the_budget_is_taken_and_one_byte_more_is_refused() {
+    for compression in [
+        Compression::Gzip,
+        Compression::Zstd,
+        Compression::Lz4,
+        Compression::Snappy,
+    ] {
+        // A record's framing is a few varints; between 2^21 and 2^28 bytes of value their
+        // widths do not change, so the overhead measured at 4 MiB holds at the budget too.
+        let probe = 4 * 1024 * 1024;
+        let overhead = inflated_len(probe, compression) - probe;
+        let exact = MAX_INFLATED_PRODUCE_BYTES - overhead;
+
+        let mut budget = MAX_INFLATED_PRODUCE_BYTES;
+        let records = match decode_record_batches(&batch(exact, compression), &mut budget) {
+            Ok(records) => records,
+            Err(BatchError::TooLarge) => panic!(
+                "{compression:?}: a batch inflating to exactly {MAX_INFLATED_PRODUCE_BYTES} \
+                 bytes must be taken, not refused as too large"
+            ),
+            Err(BatchError::Corrupt(e)) => panic!("{compression:?}: exact fit corrupt: {e:#}"),
+        };
+        assert_eq!(records[0].value.as_ref().map(|v| v.len()), Some(exact));
+        assert_eq!(
+            budget, 0,
+            "{compression:?}: the exact fit uses the whole budget"
+        );
+
+        let mut budget = MAX_INFLATED_PRODUCE_BYTES;
+        match decode_record_batches(&batch(exact + 1, compression), &mut budget) {
+            Err(BatchError::TooLarge) => {}
+            Err(BatchError::Corrupt(e)) => {
+                panic!("{compression:?}: one byte over refused as corrupt: {e:#}")
+            }
+            Ok(_) => panic!(
+                "{compression:?}: one byte past the {MAX_INFLATED_PRODUCE_BYTES}-byte budget \
+                 must be MESSAGE_TOO_LARGE"
+            ),
+        }
+    }
+}
