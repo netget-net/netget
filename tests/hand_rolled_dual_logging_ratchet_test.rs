@@ -8,31 +8,26 @@
 //!
 //! # The rule
 //!
-//! Over every `.rs` file under `src/server/`, count the sends whose message starts with a
-//! level bracket — `.send(format!("[INFO] …"` or `.send("[WARN] …"`, across line breaks.
-//! Each file may hold at most the count in [`BASELINE`], and the count there may only go down.
-//!
-//! # What is left in the baseline
-//!
-//! Each remaining site is a pair whose two halves say *different* things on purpose — most often
-//! the file line carries the error detail and the TUI line carries only the decision tag, or the
-//! TUI shows a shortened key — or a TUI-only line with no file half. `Log` writes one text to
-//! both sinks, so converting those changes what one of the two readers sees; each is a decision
-//! for whoever next touches that protocol, not a mechanical edit. A converted pair is one line:
+//! No `.rs` file under `src/server/` may hold a send whose message starts with a level
+//! bracket — `.send(format!("[INFO] …"` or `.send("[WARN] …"`, across line breaks. There is no
+//! baseline: every server site goes through `Log`.
 //!
 //! ```ignore
 //! Log::to(&status_tx).info(format!("POP3 connection {} closed", connection_id));
 //! ```
 //!
-//! **The baseline may only shrink.** When you convert a site, lower its count; a count above
-//! what the file holds fails too, so the number stays the truth.
+//! Where the operator and the file need different amounts of detail, write one line both read —
+//! the subject, the `decision=` tag and whatever detail is safe on the dashboard — and put what
+//! only the file should hold (a full error chain, a payload, a statement that may carry a
+//! credential) in a second `Log` DEBUG or TRACE line, which stays in the file:
+//!
+//! ```ignore
+//! let log = Log::to(&status_tx);
+//! log.error(format!("POP3 {verb} on connection {id} decision={token}: {}", short(&e)));
+//! log.debug(format!("POP3 {verb} on connection {id} LLM error chain: {e:#}"));
+//! ```
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-/// Files that may still hand-roll a `[LEVEL]` send, with the number of sites allowed.
-const BASELINE: &[(&str, usize)] = &[
-];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("read src/server") {
@@ -72,8 +67,14 @@ fn server_dual_logging_goes_through_the_log_facade() {
     let mut files = Vec::new();
     rust_files(&root.join("src/server"), &mut files);
     files.sort();
+    // A scan of nothing passes; make sure it read the server tree.
+    assert!(
+        files.len() > 300,
+        "only {} .rs files found under src/server",
+        files.len()
+    );
 
-    let mut found = BTreeMap::new();
+    let mut problems = Vec::new();
     for file in &files {
         let source = std::fs::read_to_string(file).expect("read source");
         let n = hand_rolled_sends(&source);
@@ -83,36 +84,13 @@ fn server_dual_logging_goes_through_the_log_facade() {
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
-            found.insert(rel, n);
-        }
-    }
-
-    let baseline: BTreeMap<&str, usize> = BASELINE.iter().copied().collect();
-    let mut problems = Vec::new();
-    for (file, &n) in &found {
-        match baseline.get(file.as_str()) {
-            None => problems.push(format!(
-                "{file}: {n} hand-rolled `[LEVEL]` send(s); use `Log::to(&status_tx).<level>(…)` \
-                 (src/logging/emit.rs) instead of a tracing macro plus a status_tx send"
-            )),
-            Some(&allowed) if n > allowed => problems.push(format!(
-                "{file}: {n} hand-rolled `[LEVEL]` sends, baseline allows {allowed}; convert the \
-                 new one to `Log`"
-            )),
-            Some(&allowed) if n < allowed => problems.push(format!(
-                "{file}: {n} hand-rolled `[LEVEL]` sends, baseline still says {allowed}; lower it"
-            )),
-            _ => {}
-        }
-    }
-    for (file, allowed) in &baseline {
-        if !found.contains_key(*file) {
             problems.push(format!(
-                "{file}: no hand-rolled `[LEVEL]` sends left (baseline says {allowed}); remove \
-                 the entry"
+                "{rel}: {n} hand-rolled `[LEVEL]` send(s); use `Log::to(&status_tx).<level>(…)` \
+                 (src/logging/emit.rs) instead of a tracing macro plus a status_tx send"
             ));
         }
     }
+
     assert!(problems.is_empty(), "\n{}\n", problems.join("\n"));
 }
 
