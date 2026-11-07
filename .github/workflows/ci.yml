@@ -141,6 +141,20 @@ jobs:
         with:
           key: clippy-wide
 
+      # The default features add llama.cpp and the system-library protocols to a library that
+      # already peaks at ~12 GB to check. Without swap the runner is shut down mid-check and
+      # GitHub stores no log at all, which is how this job ended on 7 November.
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
+
       - name: Install the system libraries the default features link
         run: |
           sudo apt-get update
@@ -1227,13 +1241,28 @@ jobs:
     # Manual runs with extended=true only: too heavy for routine core validation.
     if: github.event_name == 'workflow_dispatch' && inputs.extended
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # The same budget as the test jobs: a cold cache is a full build of every protocol before
+    # the first SMB test runs.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: smb-evidence
+      # The library peaks at ~12 GB to compile (a runner has 16). Without swap the runner is
+      # shut down part-way through compiling it ("The runner has received a shutdown signal",
+      # exit 143, no test ever run), which is how this job died on 29 October and 7 November.
+      - name: make room (swap and disk)
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/netget-swap
+          sudo chmod 600 /mnt/netget-swap
+          sudo mkswap /mnt/netget-swap
+          sudo swapon /mnt/netget-swap
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          free -h
+          df -h / /mnt
       - name: Install both independent clients and the packet oracle
         run: |
           sudo apt-get update
@@ -1247,13 +1276,16 @@ jobs:
           smbclient --version
           tshark --version | head -1
       - name: Verify SMB framing, bounds, independent clients, and packet decoding
-        timeout-minutes: 30
+        timeout-minutes: 50
+        # `--test server` only: there are no tests under src/ (AGENTS.md's test location
+        # policy), so `--lib` would compile the whole library a second time, in test mode, to
+        # run nothing.
         run: |
           set -o pipefail
           python3 -c 'import smbprotocol, smbclient'
           mkdir -p evidence-results
           cargo test --locked --no-default-features \
-            --lib --test server -- smb:: --test-threads=32 --nocapture \
+            --test server -- smb:: --test-threads=32 --nocapture \
             2>&1 | tee evidence-results/smb.log
           grep -Eq '^test result: ok\. [1-9][0-9]* passed;' evidence-results/smb.log
       - name: Preserve SMB evidence
