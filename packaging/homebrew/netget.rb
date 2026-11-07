@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-# DRAFT Homebrew formula for NetGet. It is not published: no tap exists yet, and creating one
-# (e.g. netget-net/homebrew-tap, so users run `brew install netget-net/tap/netget`) is the
-# maintainer's call.
+# Homebrew formula for NetGet, published in the netget-net/homebrew-tap repository as
+# Formula/netget.rb (`brew install netget-net/tap/netget`). This file is the source of truth:
+# when a release is cut, update it here and copy it to the tap.
 #
 # It installs the prebuilt macOS (and plain glibc Linux) binary from the GitHub release rather than
 # building from source: a source build compiles ~540 protocol implementations and needs cmake,
