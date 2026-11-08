@@ -31,10 +31,13 @@ messages.
 - **One bit of state** - whether the session is inside `DATA` (a `354` has gone out and the
   terminating `.` has not arrived). Everything else about the transaction (MAIL FROM, RCPT TO)
   is the model's to track
-- **DATA is not accumulated** - after `send_smtp_start_data` every body line arrives as its own
-  `smtp_command` event, terminated by a line containing only `.`. That is one model call per
-  line of the message. Use a script or static event handler for anything that receives real
-  mail; the LLM path is only practical for short messages.
+- **A message is one event** - after `send_smtp_start_data` NetGet reads the message itself
+  (`read_message` in `mod.rs`) and raises one `smtp_command` event at its terminating `.`, with
+  `command: "."`, the header fields in `headers` (lower-case names, unfolded, first occurrence
+  of each), the text in `body` (dot-unstuffed, CRLF shown as `\n`, cut at
+  `MAX_EVENT_BODY_BYTES` with `body_truncated`), and `message_bytes`. That event gets the one
+  reply the client waits for; `wait_for_more` is not an answer to it (it is answered `451`,
+  `decision=model_silent`). See "Reading a message" below.
 - **Protocol-aware actions** - Dedicated actions for SMTP responses (greeting, OK, error, etc.)
 
 ### Error Handling
@@ -55,8 +58,7 @@ and a sending MTA that gets one requeues the message instead of bouncing it:
 loop straight back to the read, leaving the peer blocked until its own timeout — the same
 defect the 451 exists to remove, reached through the success path instead of the error path.
 SMTP is not one of the deliberately-silent protocols: every command owes a reply, and
-`wait_for_more` is already the way for the model to decline one (and is what `DATA` body lines
-use). So an empty answer gets the 451 and `wait_for_more` does not, and the log records
+`wait_for_more` is already the way for the model to decline one. So an empty answer gets the 451 and `wait_for_more` does not, and the log records
 `decision=model_silent` so the two are distinguishable afterwards.
 
 **A refused greeting is honoured.** `close_connection` is advertised on `smtp_command`, and
@@ -91,8 +93,7 @@ The LLM controls SMTP responses through these actions:
 - `send_smtp_error` - 4xx/5xx error responses
 - `send_smtp_quit` - 221 closing connection
 - `send_smtp_message` - Custom SMTP response
-- `wait_for_more` - Send nothing and read the next line (used during DATA, where SMTP expects
-  no per-line reply)
+- `wait_for_more` - Send nothing and read the next line (never an answer to a message)
 - `close_connection` - Terminate session
 
 ## What NetGet answers itself, and what the model is told
@@ -107,8 +108,9 @@ named was replaced by the action example's `mail.example.com ESMTP Service Ready
 The reply has exactly one correct form - the greeting's hostname and the extensions this
 server implements - and both are facts about NetGet, not decisions: `250-<host> greets
 <client>` then `250 8BITMIME` (`EHLO_EXTENSIONS`), or `250 <host> greets <client>` for
-`HELO`, or `501` when the argument is missing. `8BITMIME` is the only extension because it is
-the only one this server honours (the reader is 8-bit clean). An extension list the model
+`HELO`, or `501` when the argument is missing. The extensions are `SIZE 10485760`
+(`MAX_MESSAGE_BYTES`, enforced) and `8BITMIME` (the reader is 8-bit clean), because those are
+the two this server honours. An extension list the model
 chose could advertise `STARTTLS` or `AUTH` - the `send_smtp_ehlo` example this replaced listed
 `STARTTLS` - and a real MTA would then try it and fail. The weighed alternative was a per-request hint naming `send_smtp_ehlo`; it would still
 leave the model choosing the extension list, which is the one thing it must not choose, so the
@@ -119,10 +121,12 @@ answered it has been rewritten. Logged `decision=netget_answer`.
 **Every other command carries `answer_with`** (`smtp_command_event_data`): the action and reply
 code for that one line - `send_smtp_greeting` for `CONNECTION_ESTABLISHED`, `send_smtp_ok (250)`
 or `send_smtp_error with code 550` for `MAIL FROM`/`RCPT TO`, `send_smtp_start_data (354)` for
-`DATA`, `send_smtp_quit` then `close_connection` for `QUIT`, `wait_for_more` for a body line and
-`send_smtp_ok`/`send_smtp_error` for the terminating `.`. `MAIL FROM`/`RCPT TO` also carry the
+`DATA`, `send_smtp_quit` then `close_connection` for `QUIT`, and `send_smtp_ok`/`send_smtp_error`
+for the message. `MAIL FROM`/`RCPT TO` also carry the
 `address` and its `domain`, because "refuse any other domain" is a decision about the domain.
-A command whose verb says nothing (`VRFY`, an unknown verb) carries no hint.
+A command whose verb says nothing (`VRFY`, an unknown verb) carries no hint. Every command
+carries `verb`, its first word upper-cased: verbs are case-insensitive and clients differ
+(smtplib sends `noop`, curl `NOOP`), so a rule or script should key on `verb`, not `command`.
 
 **One command, one reply.** SMTP here has no pipelining, so a second reply is read by the
 client as the answer to its *next* command and every reply after it is one step late. One
@@ -150,8 +154,28 @@ the control (off: one call per command), the claim (on: one call, same replies, 
 and the fail-closed short answer.
 
 **Inside `DATA`** a line is message text whatever it looks like: `EHLO` in a body is not
-answered by NetGet, and its event says `wait_for_more`. The state flips on when a reply
-beginning `354` is written and off at the `.` line.
+answered by NetGet and reaches the model only inside the message. The state flips on when a
+reply beginning `354` is written and off at the terminating `.`.
+
+### Reading a message
+
+`read_message` reads from the 354 to the end of the message, and three rules decide what that
+is (RFC 5321 §4.1.1.4, §4.5.2):
+
+- **Only `<CRLF>.<CRLF>` ends it** (`ends_message`). A `.` line ended by a bare LF, or following
+  a line that was, is message text: taking `<LF>.<LF>` for the end is what SMTP smuggling
+  exploits, where two servers stop one message in different places and the rest is read as
+  commands. A line is compared as it crossed, never trimmed — a body line `" ."` used to be
+  trimmed into the terminator.
+- **A leading `.` is a transparency dot** and is removed (`unstuff_line`), so the model sees
+  `.leading dot` as the sender meant it, not as it went over the wire.
+- **The size is bounded** at `MAX_MESSAGE_BYTES` (10 MiB, advertised as `SIZE`). A `MAIL FROM`
+  declaring more (`SIZE=`, `declared_size`) is answered `552 5.3.4` by NetGet
+  (`decision=netget_answer`); a message that turns out larger is read to its end, kept nowhere,
+  and answered `552 5.3.4` without a model call (`decision=refused_message_too_big`).
+
+`tests/server/smtp/data_framing_test.rs` drives the first and third from a raw socket, and
+`real_client_test.rs` the lot through smtplib and curl.
 
 The greeting action's example is now `mx.example.invalid` / `ESMTP`: copied when the
 instruction names no banner it is a harmless default, and it no longer looks like a plausible
@@ -225,9 +249,9 @@ Use the `open_server` action with TLS options:
   preflights the bind against `SystemCapabilities` instead of failing with a bare EPERM
 - **No PIPELINING advertised** - pipelined commands are read in order and, with batching on,
   answered together (see "Batching" above)
-- **No size validation** - MESSAGE_SIZE limits not enforced. A *line* is bounded
-  (`MAX_LINE_BYTES`, 64 KiB) and an idle session is bounded (`READ_TIMEOUT`, 300s, RFC 5321
-  §4.5.3.2), but nothing caps the total size of a message across lines
+- **Bounds** - a line is bounded (`MAX_LINE_BYTES`, 64 KiB), a message (`MAX_MESSAGE_BYTES`,
+  10 MiB, see "Reading a message") and an idle session (`READ_TIMEOUT`, 300s, RFC 5321
+  §4.5.3.2)
 - **No relay control** - Accepts all MAIL FROM/RCPT TO
 
 ### Reading is bounded, and 8-bit clean
@@ -292,6 +316,17 @@ For DATA, respond with '354 Start mail input' then '250 Message accepted'.
   ]
 }
 ```
+
+## Maturity: Beta
+
+Two independent clients complete real sessions in `tests/server/smtp/real_client_test.rs`, and
+both tests fail rather than skip when the client is absent: python3's stdlib `smtplib` (EHLO
+with its feature table, NOOP, VRFY, MAIL with `SIZE=`, an accepted and a refused RCPT, DATA
+with a dot-stuffed, folded, UTF-8 message, RSET, a MAIL refused for its declared size, QUIT)
+and curl's libcurl SMTP (EHLO, MAIL with `SIZE=`, two RCPTs, an uploaded message, QUIT). The
+pcap oracle reads smtplib's session through a recording relay. Not driven by either: `HELO`
+(covered by `test.rs`), `EXPN`, `HELP`, and anything this server does not implement (STARTTLS,
+AUTH, PIPELINING, BDAT). What the clients found is in that file's header.
 
 ## References
 

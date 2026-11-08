@@ -88,14 +88,9 @@ impl SmtpProtocol {
             .and_then(|v| v.as_str())
             .context("Missing 'message' parameter")?;
 
-        // Ensure message ends with \r\n
-        let formatted = if message.ends_with("\r\n") {
-            message.to_string()
-        } else if message.ends_with('\n') {
-            format!("{}\r", message.trim_end_matches('\n'))
-        } else {
-            format!("{}\r\n", message)
-        };
+        // Exactly one CRLF at the end, whichever ending the model wrote. A bare "\n" used to
+        // become a lone "\r", so the client never saw the end of the reply line.
+        let formatted = format!("{}\r\n", message.trim_end_matches(['\r', '\n']));
 
         debug!("SMTP sending custom message: {}", formatted.trim());
         Ok(ActionResult::Output(formatted.as_bytes().to_vec()))
@@ -191,18 +186,28 @@ impl Protocol for SmtpProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .implementation(
                 "Manual line-based parsing with tokio, optional implicit TLS via rustls",
             )
             .llm_control("All SMTP commands + responses")
-            .e2e_testing("Raw TCP client driving the SMTP command sequence")
+            .e2e_testing(
+                "Two independent clients complete mail transactions in \
+                 tests/server/smtp/real_client_test.rs, failing rather than skipping when \
+                 absent: python3's stdlib smtplib (EHLO, NOOP, VRFY, MAIL with SIZE, accepted \
+                 and refused RCPT, a dot-stuffed folded UTF-8 message, RSET, a MAIL refused for \
+                 its size, QUIT) and curl's libcurl SMTP (EHLO, MAIL with SIZE, two RCPTs, an \
+                 uploaded message, QUIT). The pcap oracle reads smtplib's session; raw-socket \
+                 tests cover the end-of-data rule, SIZE, bounds and failure replies",
+            )
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(25))
             .well_known_port(25)
             .notes(
-                "Accepts mail but stores nothing - the model answers every command. No AUTH, no \
-                 STARTTLS, no PIPELINING. Every DATA body line costs one model call unless an \
-                 event handler is configured.",
+                "Accepts mail but stores nothing - the model answers every command, and a \
+                 message reaches it as one event (headers, body, size) at its terminating '.'. \
+                 EHLO is NetGet's own (SIZE 10485760, 8BITMIME). No AUTH, no STARTTLS, no \
+                 PIPELINING advertised; HELO, EXPN and HELP are answered by the model but \
+                 driven by neither real client.",
             )
             .max_inbound_bytes(crate::server::smtp::MAX_LINE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(
@@ -590,8 +595,10 @@ pub static SMTP_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
          'CONNECTION_ESTABLISHED' is delivered once when a client connects and is answered \
          with send_smtp_greeting; no later command is. EHLO and HELO are answered by NetGet \
          and never reach you. Each command gets exactly one reply, and answer_with names the \
-         action for this one. During DATA every line of the message body arrives as its own \
-         event, ending with a line containing only '.'",
+         action for this one. After DATA, NetGet reads the message itself and raises one event \
+         for all of it, with command '.', the header fields in headers and the text in body; \
+         that event gets the one reply the client waits for (send_smtp_ok to accept, \
+         send_smtp_error to refuse)",
         json!({"type": "send_smtp_ok", "message": "2.1.0 Sender OK"}),
     )
     .with_parameters(vec![
@@ -602,6 +609,14 @@ pub static SMTP_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
                           or 'CONNECTION_ESTABLISHED' on a new connection"
                 .to_string(),
             required: true,
+        },
+        Parameter {
+            name: "verb".to_string(),
+            type_hint: "string".to_string(),
+            description: "The command's verb upper-cased (MAIL, RCPT, NOOP, ...); clients send \
+                          either case"
+                .to_string(),
+            required: false,
         },
         Parameter {
             name: "answer_with".to_string(),
@@ -620,6 +635,34 @@ pub static SMTP_COMMAND_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             name: "domain".to_string(),
             type_hint: "string".to_string(),
             description: "MAIL FROM / RCPT TO only: the part of the address after '@'".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "headers".to_string(),
+            type_hint: "object".to_string(),
+            description: "The message ('.' only): its header fields by lower-case name \
+                          (subject, from, to, ...), each the first occurrence, unfolded"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "body".to_string(),
+            type_hint: "string".to_string(),
+            description: "The message ('.' only): the text after the header, dot-unstuffed; \
+                          cut at 16 KiB, when body_truncated is true"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "body_truncated".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The message ('.' only): present and true when body was cut".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "message_bytes".to_string(),
+            type_hint: "number".to_string(),
+            description: "The message ('.' only): its size in octets as received".to_string(),
             required: false,
         },
     ])

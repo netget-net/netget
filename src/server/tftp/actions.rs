@@ -45,19 +45,24 @@ pub static TFTP_READ_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "tftp_read_request",
         "A client asked to download a file (RRQ). You are the filesystem: nothing is read from \
-         disk. Answer with send_tftp_data carrying block 1 of the file you invent, or refuse \
-         with send_tftp_error (code 1 = file not found).",
+         disk. Answer with send_tftp_file carrying the whole file you invent (NetGet sends it \
+         in blocks and handles the acknowledgements), or refuse with send_tftp_error (code 1 = \
+         file not found). send_tftp_data sends block 1 only, and then you are asked for each \
+         next block.",
         json!({
-            "type": "send_tftp_data",
-            "block_number": 1,
-            "data_hex": "48656c6c6f20544654502100"
+            "type": "send_tftp_file",
+            "content": "default menu.c32\nprompt 0\n"
         }),
     )
     // Per-event narrowing: an RRQ is answered with data or an error, never with an ACK (the
     // client acknowledges, the server does not). `call_llm` builds the model's tool list from
     // the event type rather than from get_sync_actions(), so without these lists TFTP offered
     // the model nothing it could reply with.
-    .with_actions(vec![send_tftp_data_action(), send_tftp_error_action()])
+    .with_actions(vec![
+        send_tftp_file_action(),
+        send_tftp_data_action(),
+        send_tftp_error_action(),
+    ])
     .with_parameters(vec![
         Parameter {
             name: "filename".to_string(),
@@ -127,6 +132,12 @@ pub static TFTP_DATA_BLOCK_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             required: true,
         },
         Parameter {
+            name: "data".to_string(),
+            type_hint: "string".to_string(),
+            description: "Block data as text, present when the block is valid UTF-8".to_string(),
+            required: false,
+        },
+        Parameter {
             name: "data_hex".to_string(),
             type_hint: "string".to_string(),
             description: "Block data as hex string".to_string(),
@@ -157,7 +168,7 @@ pub static TFTP_ACK_RECEIVED_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         json!({
             "type": "send_tftp_data",
             "block_number": 2,
-            "data_hex": ""
+            "data": ""
         }),
     )
     .with_actions(vec![send_tftp_data_action(), send_tftp_error_action()])
@@ -186,6 +197,7 @@ impl Protocol for TftpProtocol {
 
     fn get_sync_actions(&self) -> Vec<ActionDefinition> {
         vec![
+            send_tftp_file_action(),
             send_tftp_data_action(),
             send_tftp_ack_action(),
             send_tftp_error_action(),
@@ -226,13 +238,25 @@ impl Protocol for TftpProtocol {
         // connection entry, its block counter and its close all targeted a record that was
         // already gone.
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(69))
             .well_known_udp_port(69)
             .implementation("Custom TFTP packet parsing and state machine")
             .llm_control("File read/write operations via memory (no disk storage)")
-            .e2e_testing("Mock-based tests with RRQ/WRQ flows")
-            .notes("LLM provides all file content from memory/instruction")
+            .e2e_testing(
+                "Two independent clients transfer files in \
+                 tests/server/tftp/real_client_test.rs, failing rather than skipping when \
+                 absent: curl's libcurl TFTP (a multi-block download, a block-by-block \
+                 model-driven download, a refused RRQ read as exit 68, an upload) and the \
+                 system tftp(1) (a netascii download, an octet download ending in an empty \
+                 block, an upload). Raw-socket tests cover the packet shapes with the pcap \
+                 oracle, and the failure replies",
+            )
+            .notes(
+                "LLM provides all file content from memory/instruction (send_tftp_file serves a \
+                 whole file; NetGet sends and retransmits the blocks). RFC 1350 only: no option \
+                 negotiation (OACK, blksize, tsize, timeout, windowsize) and no mail mode.",
+            )
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
@@ -254,14 +278,13 @@ impl Protocol for TftpProtocol {
         use crate::llm::actions::StartupExamples;
         use serde_json::json;
 
-        // Deterministic: serve a single-block virtual file ("Hello\n") for every
-        // read request, no LLM call. data_hex is the file bytes, hex-encoded.
+        // Deterministic: serve a virtual file ("Hello\n") for every read request, no LLM
+        // call. NetGet sends it in blocks and handles the ACKs.
         let script = r#"import json, sys
 data = json.load(sys.stdin)
 event = data["event"]
 if data["event_type_id"] == "tftp_read_request":
-    actions = [{"type": "send_tftp_data", "block_number": 1,
-                "data_hex": "48656c6c6f0a"}]
+    actions = [{"type": "send_tftp_file", "content": "Hello\n"}]
 else:
     actions = []
 print(json.dumps({"actions": actions}))"#;
@@ -337,6 +360,7 @@ impl Server for TftpProtocol {
             .context("Missing 'type' field in action")?;
 
         match action_type {
+            "send_tftp_file" => self.execute_send_tftp_file(action),
             "send_tftp_data" => self.execute_send_tftp_data(action),
             "send_tftp_ack" => self.execute_send_tftp_ack(action),
             "send_tftp_error" => self.execute_send_tftp_error(action),
@@ -345,17 +369,62 @@ impl Server for TftpProtocol {
     }
 }
 
+/// The largest file `send_tftp_file` sends: RFC 1350's block number is 16 bits, so 65535 full
+/// blocks less one byte (the last block must be short).
+pub const MAX_FILE_BYTES: usize = 65535 * crate::server::tftp::BLOCK_SIZE - 1;
+
+/// The bytes an action carries: `text_field` as UTF-8 text (or as hex with `"encoding":
+/// "hex"`), or the older `data_hex`. Models write text far more reliably than hex, so text is
+/// the default and hex is for binary content the sender knows is binary.
+fn action_bytes(
+    action: &serde_json::Value,
+    action_name: &str,
+    text_field: &str,
+) -> Result<Vec<u8>> {
+    if let Some(text) = action.get(text_field).and_then(|v| v.as_str()) {
+        return match action
+            .get("encoding")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text")
+        {
+            "text" | "utf8" | "utf-8" => Ok(text.as_bytes().to_vec()),
+            "hex" => hex::decode(text.trim()).with_context(|| {
+                format!("'{text_field}' in {action_name} is not valid hex (encoding is \"hex\")")
+            }),
+            other => Err(anyhow::anyhow!(
+                "Unknown encoding {other:?} in {action_name}: use \"text\" or \"hex\""
+            )),
+        };
+    }
+    if let Some(data_hex) = action.get("data_hex").and_then(|v| v.as_str()) {
+        return hex::decode(data_hex)
+            .with_context(|| format!("Failed to decode hex data in {action_name} action"));
+    }
+    Err(anyhow::anyhow!(
+        "Missing '{text_field}' in {action_name} action (text, or hex with \"encoding\": \"hex\")"
+    ))
+}
+
 impl TftpProtocol {
+    fn execute_send_tftp_file(&self, action: serde_json::Value) -> Result<ActionResult> {
+        let content = action_bytes(&action, "send_tftp_file", "content")?;
+        if content.len() > MAX_FILE_BYTES {
+            return Err(anyhow::anyhow!(
+                "TFTP file of {} bytes is over the {} a 16-bit block number can carry",
+                content.len(),
+                MAX_FILE_BYTES
+            ));
+        }
+        Ok(ActionResult::Custom {
+            name: crate::server::tftp::FILE_RESULT.to_string(),
+            data: json!({ "hex": hex::encode(content) }),
+        })
+    }
+
     fn execute_send_tftp_data(&self, action: serde_json::Value) -> Result<ActionResult> {
         let block_number = parse_block_number(&action, "send_tftp_data")?;
 
-        let data_hex = action
-            .get("data_hex")
-            .and_then(|v| v.as_str())
-            .context("Missing 'data_hex' in send_tftp_data action")?;
-
-        let data =
-            hex::decode(data_hex).context("Failed to decode hex data in send_tftp_data action")?;
+        let data = action_bytes(&action, "send_tftp_data", "data")?;
 
         if data.len() > 512 {
             return Err(anyhow::anyhow!(
@@ -449,25 +518,68 @@ fn send_tftp_data_action() -> ActionDefinition {
                 required: true,
             },
             Parameter {
-                name: "data_hex".to_string(),
+                name: "data".to_string(),
                 type_hint: "string".to_string(),
-                description: "Data as hex string, max 512 bytes. The length is what ends the \
-                    transfer: exactly 512 means more blocks follow, anything shorter (including \
-                    empty) is the final block, per RFC 1350. Send an empty final block when the \
-                    file is an exact multiple of 512 bytes."
+                description: "The block's bytes as text, max 512 bytes (or hex, with encoding \
+                    \"hex\"). The length is what ends the transfer: exactly 512 means more \
+                    blocks follow, anything shorter (including empty) is the final block, per \
+                    RFC 1350. Send an empty final block when the file is an exact multiple of \
+                    512 bytes."
                     .to_string(),
                 required: true,
+            },
+            Parameter {
+                name: "encoding".to_string(),
+                type_hint: "string".to_string(),
+                description: "\"text\" (default) or \"hex\" for binary data".to_string(),
+                required: false,
             },
         ],
         example: json!({
             "type": "send_tftp_data",
             "block_number": 1,
-            "data_hex": "48656c6c6f20544654502100"
+            "data": "Hello TFTP!\n"
         }),
         log_template: Some(
             LogTemplate::new()
                 .with_info("-> TFTP DATA #{block_number}")
-                .with_debug("TFTP send_tftp_data: block={block_number} bytes={data_hex}"),
+                .with_debug("TFTP send_tftp_data: block={block_number}"),
+        ),
+    }
+}
+
+fn send_tftp_file_action() -> ActionDefinition {
+    ActionDefinition {
+        name: "send_tftp_file".to_string(),
+        description: "Serve the whole file the client asked for. NetGet splits it into 512-byte \
+            blocks, sends each, waits for its ACK and retransmits a block the client did not \
+            acknowledge; in netascii mode it converts line endings. Use this rather than \
+            send_tftp_data unless each block needs a decision of its own."
+            .to_string(),
+        parameters: vec![
+            Parameter {
+                name: "content".to_string(),
+                type_hint: "string".to_string(),
+                description: "The file's contents as text (or hex, with encoding \"hex\"); \
+                    an empty string is an empty file"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "encoding".to_string(),
+                type_hint: "string".to_string(),
+                description: "\"text\" (default) or \"hex\" for a binary file".to_string(),
+                required: false,
+            },
+        ],
+        example: json!({
+            "type": "send_tftp_file",
+            "content": "default menu.c32\nprompt 0\n"
+        }),
+        log_template: Some(
+            LogTemplate::new()
+                .with_info("-> TFTP file")
+                .with_debug("TFTP send_tftp_file"),
         ),
     }
 }
