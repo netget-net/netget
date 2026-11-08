@@ -148,6 +148,10 @@ async fn test_smtp_ehlo() -> E2EResult<()> {
         read_reply_line(&mut reader).await,
         "250-mail.test greets client.test\r\n"
     );
+    assert_eq!(
+        read_reply_line(&mut reader).await,
+        "250-SIZE 10485760\r\n"
+    );
     assert_eq!(read_reply_line(&mut reader).await, "250 8BITMIME\r\n");
 
     // HELO is the single-line form, and neither advertises what this server cannot do.
@@ -279,12 +283,13 @@ async fn test_smtp_mail_transaction() -> E2EResult<()> {
     // Read greeting
     expect_reply(&mut reader, "greeting", "220").await?;
 
-    // Send EHLO. The reply is NetGet's own: the greeting's hostname and the one extension
-    // this server implements, as a two-line reply.
+    // Send EHLO. The reply is NetGet's own: the greeting's hostname and the two extensions
+    // this server implements, as a three-line reply.
     println!("Sending: EHLO client.test");
     write_half.write_all(b"EHLO client.test\r\n").await?;
     write_half.flush().await?;
     expect_reply(&mut reader, "EHLO", "250-mail.test greets client.test").await?;
+    expect_reply(&mut reader, "EHLO", "250-SIZE 10485760").await?;
     expect_reply(&mut reader, "EHLO", "250 8BITMIME").await?;
 
     // Send MAIL FROM

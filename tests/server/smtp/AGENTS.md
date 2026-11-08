@@ -40,7 +40,7 @@ the fix from the wire, with every rule matched on the event's `answer_with` / `a
   NetGet's EHLO reply - not the second banner;
 - `MAIL` is answered with two replies and the next `RCPT` must read its own `550`;
 - inside `DATA`, a body line reading `EHLO …` must not be answered by NetGet and reaches the
-  model told `wait_for_more`;
+  model inside the one event for the whole message (its `body`);
 - `decision=duplicate_response_dropped` is in the log.
 
 Verified by removing the drop (RCPT reads the stale `250`) and by answering `EHLO` inside
@@ -54,9 +54,25 @@ Verified by removing the drop (RCPT reads the stale `250`) and by answering `EHL
 - Script generation not beneficial for command/response patterns
 - LLM interprets each command dynamically
 
+## `real_client_test.rs` - two independent clients
+
+python3's stdlib `smtplib` (12 LLM calls) and curl's libcurl SMTP (8), each against its own
+server, each failing rather than skipping when its client is absent. One mock rule per verb, so
+`verify_mocks` counts what each client drove; the message rule records the event and answers
+with what it saw (`queued: <bytes> bytes, subject <subject>`), so the client's own output
+shows the model's view. The pcap oracle reads smtplib's session through
+`helpers::recording_relay`. The header lists the verbs each client drives and the three defects
+they found.
+
+## `data_framing_test.rs` - where a message ends, and how large it may be
+
+A raw socket sends `<LF>.<LF>` and `<LF>.<CRLF>` inside a message with a `MAIL FROM` behind
+them: the model must receive one message containing that line. Then a message one byte over
+`MAX_MESSAGE_BYTES` must get `552 5.3.4` from NetGet with no model call. 8 LLM calls.
+
 ## Client Library
 
-**Manual TCP Client** - No SMTP library used
+**Manual TCP Client** for every file except `real_client_test.rs`
 
 - `tokio::net::TcpStream` for connections
 - `BufReader::read_line()` for reading responses

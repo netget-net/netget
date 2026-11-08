@@ -96,6 +96,15 @@ enum LineRead {
     Timeout,
 }
 
+/// One bounded read, as the octets that crossed (line ending included).
+#[cfg(not(target_arch = "wasm32"))]
+enum RawLine {
+    Line(Vec<u8>),
+    Eof,
+    TooLong,
+    Timeout,
+}
+
 /// Read one `\n`-terminated line, bounded in both length and time.
 ///
 /// Two deliberate differences from `BufReader::read_line`:
@@ -114,30 +123,44 @@ async fn read_line_bounded<R>(reader: &mut tokio::io::BufReader<R>) -> Result<Li
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    Ok(match read_raw_line(reader).await? {
+        RawLine::Line(buf) => LineRead::Line(String::from_utf8_lossy(&buf).into_owned()),
+        RawLine::Eof => LineRead::Eof,
+        RawLine::TooLong => LineRead::TooLong,
+        RawLine::Timeout => LineRead::Timeout,
+    })
+}
+
+/// [`read_line_bounded`] without the decode: the line's octets, line ending included.
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_raw_line<R>(reader: &mut tokio::io::BufReader<R>) -> Result<RawLine>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncBufReadExt;
 
     let mut buf: Vec<u8> = Vec::new();
     loop {
         let chunk = match tokio::time::timeout(READ_TIMEOUT, reader.fill_buf()).await {
-            Err(_elapsed) => return Ok(LineRead::Timeout),
+            Err(_elapsed) => return Ok(RawLine::Timeout),
             Ok(result) => result?,
         };
         if chunk.is_empty() {
-            return Ok(LineRead::Eof);
+            return Ok(RawLine::Eof);
         }
         match chunk.iter().position(|&b| b == b'\n') {
             Some(idx) => {
                 if buf.len() + idx + 1 > MAX_LINE_BYTES {
-                    return Ok(LineRead::TooLong);
+                    return Ok(RawLine::TooLong);
                 }
                 buf.extend_from_slice(&chunk[..=idx]);
                 reader.consume(idx + 1);
-                return Ok(LineRead::Line(String::from_utf8_lossy(&buf).into_owned()));
+                return Ok(RawLine::Line(buf));
             }
             None => {
                 let taken = chunk.len();
                 if buf.len() + taken > MAX_LINE_BYTES {
-                    return Ok(LineRead::TooLong);
+                    return Ok(RawLine::TooLong);
                 }
                 buf.extend_from_slice(chunk);
                 reader.consume(taken);
@@ -146,13 +169,171 @@ where
     }
 }
 
+/// The largest message `DATA` accepts, in octets after dot-unstuffing (RFC 1870 `SIZE`).
+///
+/// Advertised in the EHLO reply, so a client that knows its message is larger gives up at
+/// `MAIL FROM:<...> SIZE=<n>` before sending a byte of it (NetGet answers that `552 5.3.4`
+/// itself), and enforced while the message is read: a larger one is read to its end,
+/// discarded, and answered `552 5.3.4` without a model call. 10 MiB is Postfix's
+/// `message_size_limit` default.
+pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// How much of a message's body the model is shown, in bytes. The rest is counted, not sent.
+pub const MAX_EVENT_BODY_BYTES: usize = 16 * 1024;
+
+/// Most header fields the event names. The rest still count toward `message_bytes`.
+pub const MAX_EVENT_HEADERS: usize = 64;
+
+/// What NetGet answers, without a model call, to a message over [`MAX_MESSAGE_BYTES`] and to
+/// a `MAIL FROM` declaring one (RFC 1870 §6).
+pub const MESSAGE_TOO_BIG_REPLY: &[u8] =
+    b"552 5.3.4 Message size exceeds fixed maximum message size\r\n";
+
+/// The outcome of reading one message after a 354.
+#[cfg(not(target_arch = "wasm32"))]
+enum MessageRead {
+    /// The terminating `.` arrived: the message, dot-unstuffed, line endings as received.
+    Complete(Vec<u8>),
+    /// The terminating `.` arrived after this many octets, more than [`MAX_MESSAGE_BYTES`].
+    TooBig(usize),
+    Eof,
+    TooLong,
+    Timeout,
+}
+
+/// Whether `line` (as read, line ending included) ends a message.
+///
+/// RFC 5321 §4.1.1.4: the end of mail data is `<CRLF>.<CRLF>`, and only that. A `.` ended by a
+/// bare LF, or following a line that was, is message text: taking `<LF>.<LF>` or `<LF>.<CRLF>`
+/// as the end is the disagreement SMTP smuggling (CVE-2023-51766 and its relatives) exploits,
+/// where two servers stop the same message in different places and the rest is read as
+/// commands. `prev_ended_crlf` is whether the previous line of the message ended in CRLF; the
+/// `DATA` command line counts as one, so the first line of a message starts with `true`.
+pub fn ends_message(line: &[u8], prev_ended_crlf: bool) -> bool {
+    prev_ended_crlf && line == b".\r\n"
+}
+
+/// One line of message text with its transparency dot removed (RFC 5321 §4.5.2): the sender
+/// doubles a leading `.`, and the receiver drops the first.
+pub fn unstuff_line(line: &[u8]) -> &[u8] {
+    line.strip_prefix(b".").unwrap_or(line)
+}
+
+/// Read one message to its terminating `.`, dot-unstuffed, bounded by [`MAX_MESSAGE_BYTES`].
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_message<R>(reader: &mut tokio::io::BufReader<R>) -> Result<(MessageRead, u64)>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut message: Vec<u8> = Vec::new();
+    let mut size = 0usize;
+    let mut wire = 0u64;
+    let mut prev_ended_crlf = true;
+    loop {
+        let line = match read_raw_line(reader).await? {
+            RawLine::Line(line) => line,
+            RawLine::Eof => return Ok((MessageRead::Eof, wire)),
+            RawLine::TooLong => return Ok((MessageRead::TooLong, wire)),
+            RawLine::Timeout => return Ok((MessageRead::Timeout, wire)),
+        };
+        wire += line.len() as u64;
+        if ends_message(&line, prev_ended_crlf) {
+            let read = if size > MAX_MESSAGE_BYTES {
+                MessageRead::TooBig(size)
+            } else {
+                MessageRead::Complete(message)
+            };
+            return Ok((read, wire));
+        }
+        prev_ended_crlf = line.ends_with(b"\r\n");
+        let text = unstuff_line(&line);
+        size += text.len();
+        if size > MAX_MESSAGE_BYTES {
+            // Read on to the end so the client stays in step, but keep nothing.
+            message = Vec::new();
+        } else {
+            message.extend_from_slice(text);
+        }
+    }
+}
+
+/// The event data for a whole message, raised once at its terminating `.`.
+///
+/// `headers` holds the header fields by lower-case name (unfolded; the first occurrence of
+/// each, at most [`MAX_EVENT_HEADERS`]), `body` the text after the blank line with CRLF shown
+/// as `\n`, cut at [`MAX_EVENT_BODY_BYTES`] (`body_truncated` then says so), and
+/// `message_bytes` the size of the whole message as received, after dot-unstuffing.
+pub fn smtp_message_event_data(message: &[u8]) -> serde_json::Value {
+    let mut data = smtp_command_event_data(".", true);
+    let text = String::from_utf8_lossy(message).replace("\r\n", "\n");
+    // The header is the run of header fields (and their folded continuations) at the start;
+    // it ends at the blank line, or at the first line that is not a field, which then begins
+    // the body. A message need not have a header at all.
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut body_start = text.len();
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let content = line.trim_end_matches('\n');
+        if content.is_empty() {
+            body_start = offset + line.len();
+            break;
+        }
+        if content.starts_with([' ', '\t']) && !fields.is_empty() {
+            if let Some((_, value)) = fields.last_mut() {
+                value.push(' ');
+                value.push_str(content.trim());
+            }
+        } else if let Some((name, value)) = content
+            .split_once(':')
+            .filter(|(name, _)| !name.is_empty() && name.bytes().all(|b| b.is_ascii_graphic()))
+        {
+            fields.push((name.to_ascii_lowercase(), value.trim().to_string()));
+        } else {
+            body_start = offset;
+            break;
+        }
+        offset += line.len();
+    }
+    let body = &text[body_start..];
+    let mut headers = serde_json::Map::new();
+    for (name, value) in fields {
+        if headers.len() >= MAX_EVENT_HEADERS {
+            break;
+        }
+        headers
+            .entry(name)
+            .or_insert_with(|| crate::utils::truncate_str(&value, 1000).into());
+    }
+    data["headers"] = headers.into();
+    let shown = crate::utils::truncate_str(body, MAX_EVENT_BODY_BYTES);
+    if shown.len() < body.len() {
+        data["body_truncated"] = true.into();
+    }
+    data["body"] = shown.into();
+    data["message_bytes"] = message.len().into();
+    data
+}
+
+/// The `SIZE=` a `MAIL FROM` declares (RFC 1870 §6), if any.
+pub fn declared_size(command: &str) -> Option<u64> {
+    let upper = command.to_ascii_uppercase();
+    let rest = upper.strip_prefix("MAIL FROM:")?;
+    let params = rest.split_once('>').map(|(_, p)| p).unwrap_or("");
+    params
+        .split_whitespace()
+        .find_map(|p| p.strip_prefix("SIZE="))
+        .and_then(|n| n.parse().ok())
+}
+
 /// The extensions NetGet's own EHLO reply advertises.
 ///
-/// Only what this server actually does. `8BITMIME` because the reader is 8-bit clean
+/// Only what this server actually does. `SIZE` because [`MAX_MESSAGE_BYTES`] is enforced, at
+/// `MAIL FROM` and while the message is read (the number is pinned to the constant by
+/// `tests/server/smtp/real_client_test.rs`). `8BITMIME` because the reader is 8-bit clean
 /// ([`read_line_bounded`] decodes lossily rather than failing). Nothing else: there is no
-/// STARTTLS, no AUTH, no PIPELINING, and no SIZE is enforced, and advertising any of them makes
-/// a real MTA try it and fail.
-pub const EHLO_EXTENSIONS: &[&str] = &["8BITMIME"];
+/// STARTTLS, no AUTH and no PIPELINING, and advertising any of them makes a real MTA try it and
+/// fail.
+pub const EHLO_EXTENSIONS: &[&str] = &["SIZE 10485760", "8BITMIME"];
 
 /// NetGet's answer to `EHLO`/`HELO`, or `None` for any other line.
 ///
@@ -257,13 +438,15 @@ pub fn smtp_batch_role(command: &str) -> Option<bool> {
 /// recipient the instruction said to refuse - and it follows a per-request hint far better
 /// than a general description. For `MAIL FROM`/`RCPT TO` the address and its domain are
 /// split out, because an instruction like "refuse any other domain" is a decision about the
-/// domain. `in_data` is whether a 354 has gone out and the terminating `.` has not arrived:
-/// then the line is message text, whatever it looks like.
+/// domain. `in_data` is whether a 354 has gone out: the only event raised then is the message
+/// itself, at its terminating `.` ([`smtp_message_event_data`] adds the message).
 pub fn smtp_command_event_data(command: &str, in_data: bool) -> serde_json::Value {
     let mut data = serde_json::json!({ "command": command });
     if in_data {
         data["answer_with"] = if command == "." {
-            "send_smtp_ok (250) to accept the message, or send_smtp_error to refuse it".into()
+            "send_smtp_ok (250) to accept the message, or send_smtp_error to refuse it. The \
+             whole message is in headers and body; it gets this one reply"
+                .into()
         } else {
             "wait_for_more: a line of the message body gets no reply".into()
         };
@@ -276,6 +459,11 @@ pub fn smtp_command_event_data(command: &str, in_data: bool) -> serde_json::Valu
         return data;
     }
     let upper = command.to_ascii_uppercase();
+    // Verbs are case-insensitive (RFC 5321 §2.4) and clients differ: smtplib sends `noop`,
+    // curl `NOOP`. A rule or script keyed on the verb should not have to know which.
+    if let Some(verb) = upper.split_whitespace().next() {
+        data["verb"] = verb.into();
+    }
     let address = |prefix: &str| -> Option<String> {
         let rest = command.get(prefix.len()..)?.trim();
         let inner = rest
@@ -298,7 +486,10 @@ pub fn smtp_command_event_data(command: &str, in_data: bool) -> serde_json::Valu
         )
     } else {
         let answer = match upper.split_whitespace().next().unwrap_or("") {
-            "DATA" => "send_smtp_start_data (354); the message then arrives one line per event",
+            "DATA" => {
+                "send_smtp_start_data (354); NetGet then reads the message and hands it to \
+                 you whole, in one event, at its terminating '.'"
+            }
             "QUIT" => "send_smtp_quit (221), then close_connection",
             "RSET" | "NOOP" => "send_smtp_ok (250)",
             _ => return data,
@@ -606,12 +797,59 @@ impl SmtpSession {
             return Ok(());
         };
 
-        // Between a 354 and the terminating ".", every line is message text: it is never
-        // a command, whatever it looks like, and it gets no reply of its own.
+        // After a 354, everything up to the terminating "." is message text: it is never a
+        // command, whatever it looks like, and it gets no reply of its own. NetGet reads it
+        // whole and raises one event for it.
         let mut in_data = false;
 
         loop {
-            let line = match read_line_bounded(&mut reader).await? {
+            let mut message: Option<Vec<u8>> = None;
+            let read = if in_data {
+                in_data = false;
+                let (read, wire) = read_message(&mut reader).await?;
+                if wire > 0 {
+                    app_state
+                        .update_connection_stats(
+                            server_id,
+                            connection_id,
+                            Some(wire),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+                }
+                match read {
+                    MessageRead::Complete(m) => {
+                        console_debug!(status_tx, "SMTP received a message of {} bytes", m.len());
+                        message = Some(m);
+                        LineRead::Line(".".to_string())
+                    }
+                    MessageRead::TooBig(size) => {
+                        Log::new(Some(status_tx)).warn(format!(
+                            "SMTP connection {} decision=refused_message_too_big: {} bytes, \
+                             over the {} SIZE limit; answered 552 by NetGet",
+                            connection_id, size, MAX_MESSAGE_BYTES
+                        ));
+                        Self::write_counted(
+                            write_half,
+                            MESSAGE_TOO_BIG_REPLY,
+                            connection_id,
+                            server_id,
+                            app_state,
+                            status_tx,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    MessageRead::Eof => LineRead::Eof,
+                    MessageRead::TooLong => LineRead::TooLong,
+                    MessageRead::Timeout => LineRead::Timeout,
+                }
+            } else {
+                read_line_bounded(&mut reader).await?
+            };
+            let line = match read {
                 LineRead::Line(line) => line,
                 LineRead::Eof => break,
                 LineRead::TooLong => {
@@ -653,22 +891,42 @@ impl SmtpSession {
                     break;
                 }
             };
-            let n = line.len();
-            app_state
-                .update_connection_stats(
-                    server_id,
-                    connection_id,
-                    Some(n as u64),
-                    None,
-                    Some(1),
-                    None,
-                )
-                .await;
+            if message.is_none() {
+                app_state
+                    .update_connection_stats(
+                        server_id,
+                        connection_id,
+                        Some(line.len() as u64),
+                        None,
+                        Some(1),
+                        None,
+                    )
+                    .await;
+            }
 
             let command = line.trim();
             console_debug!(status_tx, "SMTP received: {}", command);
 
-            if !in_data {
+            if message.is_none() {
+                if declared_size(command).is_some_and(|n| n > MAX_MESSAGE_BYTES as u64) {
+                    Log::new(Some(status_tx)).info(format!(
+                        "SMTP connection {} decision=netget_answer: {} declares a message over \
+                         the {} SIZE limit; answered 552",
+                        connection_id,
+                        crate::utils::truncate_for_log(command, 120),
+                        MAX_MESSAGE_BYTES
+                    ));
+                    Self::write_counted(
+                        write_half,
+                        MESSAGE_TOO_BIG_REPLY,
+                        connection_id,
+                        server_id,
+                        app_state,
+                        status_tx,
+                    )
+                    .await?;
+                    continue;
+                }
                 if let Some(reply) = ehlo_reply(command, &hostname) {
                     Log::new(Some(status_tx)).info(format!(
                         "SMTP connection {} decision=netget_answer: {} answered by NetGet \
@@ -755,16 +1013,13 @@ impl SmtpSession {
                 }
             }
 
-            let event = Event::new(
-                &SMTP_COMMAND_EVENT,
-                smtp_command_event_data(command, in_data),
-            );
-            let preferred = smtp_preferred_actions(command, in_data);
-            // The terminating "." ends the message whatever the answer to it is.
-            let ends_message = in_data && command == ".";
-            if ends_message {
-                in_data = false;
-            }
+            let event_data = match &message {
+                Some(message) => smtp_message_event_data(message),
+                None => smtp_command_event_data(command, false),
+            };
+            let event = Event::new(&SMTP_COMMAND_EVENT, event_data);
+            let ends_message = message.is_some();
+            let preferred = smtp_preferred_actions(command, ends_message);
 
             match call_llm(
                 llm_client,
@@ -845,8 +1100,9 @@ impl SmtpSession {
                     // one of the deliberately-silent protocols: every command owes a reply,
                     // and `wait_for_more` is already the way to decline one. So an empty
                     // answer is a failure and gets the same 451, and the log says which of
-                    // the two it was.
-                    if !wrote_reply && !silence_is_deliberate {
+                    // the two it was. A whole message is the exception to `wait_for_more`:
+                    // there is nothing more to read, and the client is waiting for its reply.
+                    if !wrote_reply && (!silence_is_deliberate || ends_message) {
                         Log::new(Some(status_tx)).error(format!(
                             "SMTP connection {} decision=model_silent for {:?}: the model \
                              produced no reply; answering 451",
