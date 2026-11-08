@@ -62,13 +62,9 @@ const MAX_CONNECTIONS: usize = 256;
 /// "refused" and "admitted then evicted" to be distinguishable.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Accepts the server's self-signed certificate.
-///
-/// A copy of the one `dot`'s suite keeps, rather than a reuse of it: the two live behind
-/// different feature gates, so a build with `doh` and without `dot` would not compile that
-/// module at all.
+/// Accepts the server's self-signed certificate. `bounds_test.rs` uses it too.
 #[derive(Debug)]
-struct NoCertificateVerification;
+pub(super) struct NoCertificateVerification;
 
 impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
     fn verify_server_cert(

@@ -107,7 +107,7 @@ async fn kdig_doh(port: u16, domain: &str, get: bool, keylog: &std::path::Path) 
 /// The query id is echoed from the event, which is not optional for a DNS-shaped protocol: a
 /// resolver discards any reply whose id does not match, and kdig is a resolver. Two rules on one
 /// event with nothing to tell them apart is the most common mocking mistake in this repo.
-fn doh_server() -> NetGetConfig {
+fn doh_server(queries: usize) -> NetGetConfig {
     NetGetConfig::new("Listen on port {AVAILABLE_PORT} via DoH. Answer A queries")
         .with_log_level("info")
         .with_mock(|mock| {
@@ -120,17 +120,19 @@ fn doh_server() -> NetGetConfig {
                         d if d.starts_with("get.example.com") => "93.184.216.52",
                         _ => "93.184.216.34",
                     };
-                    serde_json::json!([
-                        {
-                            "type": "send_dns_a_response",
-                            "query_id": event_data["query_id"],
-                            "domain": event_data["domain"],
-                            "ip": ip,
-                            "ttl": 300
-                        }
-                    ])
+                    typed_answer(event_data).unwrap_or_else(|| {
+                        serde_json::json!([
+                            {
+                                "type": "send_dns_a_response",
+                                "query_id": event_data["query_id"],
+                                "domain": event_data["domain"],
+                                "ip": ip,
+                                "ttl": 300
+                            }
+                        ])
+                    })
                 })
-                .expect_calls(2)
+                .expect_calls(queries)
                 .and()
                 .on_instruction_containing("via DoH")
                 .respond_with_actions(serde_json::json!([{
@@ -149,7 +151,7 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
     let version = require_kdig().await?;
     println!("kdig: {version}");
 
-    let server = crate::server::helpers::start_netget_server(doh_server()).await?;
+    let server = crate::server::helpers::start_netget_server(doh_server(2 + TYPED.len())).await?;
     crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
     // kdig reaches the server through a recording relay and logs its TLS secrets, so the pcap
     // oracle at the end decrypts both sessions and reads the HTTP/2 and DNS inside them.
@@ -207,6 +209,19 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
         get.stdout
     );
 
+    // --- every record type the actions write, over POST ---------------------
+    for (domain, rtype, expected) in TYPED {
+        let out = kdig_doh_typed(port, domain, rtype, &keylog).await;
+        assert_typed(
+            out.success,
+            &out.stdout,
+            &out.stderr,
+            domain,
+            rtype,
+            expected,
+        );
+    }
+
     // --- the pcap oracle, decrypted -----------------------------------------
     //
     // tshark decrypts each session with kdig's key log; ALPN `h2` hands the plaintext to its
@@ -236,4 +251,216 @@ async fn kdig_completes_both_rfc8484_encodings() -> E2EResult<()> {
     server.verify_mocks().await?;
     server.stop().await?;
     Ok(())
+}
+
+/// Fail — never skip — when dig is absent, for the reason [`require_kdig`] gives.
+async fn require_dig() -> E2EResult<String> {
+    match Command::new("dig").arg("-v").output().await {
+        // `dig -v` prints its version on stderr.
+        Ok(out) if out.status.success() => {
+            Ok(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+        Ok(out) => Err(format!("`dig -v` exited {}", out.status).into()),
+        Err(e) => Err(format!(
+            "dig is not available ({e}): this test is the second independent DoH client — ISC \
+             BIND's, beside Knot's kdig — and skipping it would leave the rating on one. BIND \
+             9.18 or later is needed for `+https` (`brew install bind`, `apt install \
+             bind9-dnsutils`)."
+        )
+        .into()),
+    }
+}
+
+/// One `dig +https` (POST) or `+https-get` query with dig's defaults otherwise: EDNS and its
+/// COOKIE option on, the way a person runs it. `+tries=1` keeps one query on the wire per call.
+async fn dig_doh(
+    port: u16,
+    domain: &str,
+    rtype: &str,
+    get: bool,
+    keylog: &std::path::Path,
+) -> KdigOutput {
+    let out = Command::new("dig")
+        .env("SSLKEYLOGFILE", keylog)
+        .arg(if get { "+https-get" } else { "+https" })
+        .arg("+tries=1")
+        .arg("+time=20")
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("@127.0.0.1")
+        .arg(domain)
+        .arg(rtype)
+        .output()
+        .await
+        .expect("failed to spawn dig");
+    KdigOutput {
+        success: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    }
+}
+
+/// The second independent DoH client: ISC BIND's `dig`, C over OpenSSL and nghttp2, sharing no
+/// code with Knot's kdig (GnuTLS, its own HTTP/2 via libnghttp2 too, but its own DNS stack), with
+/// hyper, h2, rustls or hickory. Both RFC 8484 encodings, EDNS on.
+#[tokio::test]
+async fn dig_completes_both_rfc8484_encodings_with_its_defaults() -> E2EResult<()> {
+    let version = require_dig().await?;
+    println!("dig: {version}");
+
+    let server = crate::server::helpers::start_netget_server(doh_server(2 + TYPED.len())).await?;
+    crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
+    // Direct, with no relay: BIND's dig writes no TLS key log (`SSLKEYLOGFILE` is honoured
+    // by `named`'s logging, not by dig), so tshark could not decrypt its sessions. The oracle
+    // runs over kdig's, which carry the same answers from the same server code.
+    let port = server.port;
+    let keys = tempfile::tempdir()?;
+    let keylog = keys.path().join("unused-sslkeylog.txt");
+
+    for (domain, get, ip, other) in [
+        ("post.example.com", false, "93.184.216.51", "93.184.216.52"),
+        ("get.example.com", true, "93.184.216.52", "93.184.216.51"),
+    ] {
+        let out = dig_doh(port, domain, "A", get, &keylog).await;
+        assert!(
+            out.success && out.stdout.contains("status: NOERROR"),
+            "dig could not complete a DoH {} query for {domain}.\nstdout: {}\nstderr: {}",
+            if get { "GET" } else { "POST" },
+            out.stdout,
+            out.stderr
+        );
+        assert!(
+            out.stdout.contains(ip) && !out.stdout.contains(other),
+            "dig rendered the wrong address for {domain}:\n{}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains("OPT PSEUDOSECTION"),
+            "dig offered EDNS and the reply carried no OPT record:\n{}",
+            out.stdout
+        );
+        assert!(
+            !out.stdout.contains("WARNING") && !out.stdout.contains("malformed"),
+            "dig reported a problem with the reply:\n{}",
+            out.stdout
+        );
+    }
+
+    for (domain, rtype, expected) in TYPED {
+        let out = dig_doh(port, domain, rtype, false, &keylog).await;
+        assert_typed(
+            out.success,
+            &out.stdout,
+            &out.stderr,
+            domain,
+            rtype,
+            expected,
+        );
+    }
+
+    server.wait_for_mocks(30).await;
+    server.verify_mocks().await?;
+    server.stop().await?;
+    Ok(())
+}
+
+/// `kdig +https` for one name and record type, POST.
+async fn kdig_doh_typed(
+    port: u16,
+    domain: &str,
+    rtype: &str,
+    keylog: &std::path::Path,
+) -> KdigOutput {
+    let out = Command::new("kdig")
+        .env("SSLKEYLOGFILE", keylog)
+        .arg("+https=/dns-query")
+        .arg("+timeout=20")
+        .arg("+retry=0")
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("@127.0.0.1")
+        .arg(domain)
+        .arg(rtype)
+        .output()
+        .await
+        .expect("failed to spawn kdig");
+    KdigOutput {
+        success: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    }
+}
+
+/// Every record type the query actions write, beyond A: a name, the type asked for, and what
+/// the resolver must print. The MX preference is 4660 (0x1234), so a byte-swap reads 13330
+/// rather than something plausible — the DNS server's own Stable evidence uses the same value.
+const TYPED: &[(&str, &str, &str)] = &[
+    ("aaaa.example.com", "AAAA", "2001:db8::41"),
+    ("mx.example.com", "MX", "4660 mail.example.com."),
+    ("txt.example.com", "TXT", "\"netget-typed-txt\""),
+    ("cname.example.com", "CNAME", "www.example.com."),
+    ("nx.example.com", "A", "NXDOMAIN"),
+];
+
+/// The answer for a [`TYPED`] name, or `None` for every other name.
+fn typed_answer(event: &serde_json::Value) -> Option<serde_json::Value> {
+    let domain = event["domain"].as_str().unwrap_or_default();
+    let base = |kind: &str| serde_json::json!({"type": kind, "query_id": event["query_id"], "domain": event["domain"], "ttl": 300});
+    let mut action = match domain.trim_end_matches('.') {
+        "aaaa.example.com" => {
+            let mut a = base("send_dns_aaaa_response");
+            a["ip"] = "2001:db8::41".into();
+            a
+        }
+        "mx.example.com" => {
+            let mut a = base("send_dns_mx_response");
+            a["exchange"] = "mail.example.com".into();
+            a["preference"] = 4660.into();
+            a
+        }
+        "txt.example.com" => {
+            let mut a = base("send_dns_txt_response");
+            a["text"] = "netget-typed-txt".into();
+            a
+        }
+        "cname.example.com" => {
+            let mut a = base("send_dns_cname_response");
+            a["target"] = "www.example.com".into();
+            a
+        }
+        "nx.example.com" => {
+            let mut a = base("send_dns_nxdomain");
+            a["query_type"] = "A".into();
+            a
+        }
+        _ => return None,
+    };
+    if action["type"] == "send_dns_nxdomain" {
+        action.as_object_mut().map(|o| o.remove("ttl"));
+    }
+    Some(serde_json::json!([action]))
+}
+
+fn assert_typed(
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+    domain: &str,
+    rtype: &str,
+    expected: &str,
+) {
+    assert!(
+        success,
+        "the resolver could not complete the {rtype} query for {domain}.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(expected),
+        "the {rtype} answer for {domain} did not render as {expected:?}:\n{stdout}"
+    );
+    if expected != "NXDOMAIN" {
+        assert!(
+            stdout.contains("NOERROR"),
+            "the {rtype} answer for {domain} carried a non-zero rcode:\n{stdout}"
+        );
+    }
 }

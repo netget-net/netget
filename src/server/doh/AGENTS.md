@@ -90,10 +90,11 @@ Connection flow:
 2. Perform TLS handshake using self-signed certificate
 3. Establish HTTP/2 connection over TLS
 4. Handle HTTP requests (GET or POST) to `/dns-query` endpoint
-5. Extract DNS query from request (URL param or body)
-6. Parse DNS query with hickory-proto
-7. Send to LLM for response
-8. Return DNS response as HTTP body with `application/dns-message` content-type
+5. Extract DNS query from request (URL param or body, the body capped at `MAX_DOH_BODY_BYTES`)
+6. Screen and parse it with `dns_screen::decode_dns_message`; one that does not decode is `400`
+7. Answer a query with no question FORMERR; send any other to `call_llm`
+8. Turn the answer into at most one message with `dns::StreamQuery` — the DNS server's own
+   rules, see "Failure behaviour" below — and return it as a `200 application/dns-message`
 
 ### 3. Two HTTP Methods Supported
 
@@ -158,7 +159,8 @@ Event parameters:
 
 ### Available Actions
 
-DoH reuses all DNS actions, and only those:
+DoH offers `DnsProtocol::query_actions()`, the DNS server's query vocabulary without the
+zone-transfer actions:
 
 - `send_dns_a_response` - Return IPv4 address (A record)
 - `send_dns_aaaa_response` - Return IPv6 address (AAAA record)
@@ -166,14 +168,13 @@ DoH reuses all DNS actions, and only those:
 - `send_dns_txt_response` - Return text record
 - `send_dns_cname_response` - Return canonical name alias
 - `send_dns_nxdomain` - Domain does not exist
+- `send_dns_records` - Any number of records in any section, any RCODE
+- `send_dns_refused` - REFUSED, echoing the question
 - `send_dns_response` - Hand-assembled response, hex-encoded (escape hatch)
 - `ignore_query` - Answered as HTTP 404 rather than by dropping the request,
   since HTTP requires a response
 
 See `src/server/dns/AGENTS.md` for detailed action documentation.
-
-`dns_response` was previously listed here; no such action exists - the real name
-is `send_dns_response`.
 
 As with plain DNS, a **static** event handler cannot serve DoH answers: it
 cannot echo the client's random transaction ID or the queried name. Use script
@@ -232,7 +233,8 @@ a caller that asked for port 0 would be told the port was 0. The accept loop's
 - DoH connections are stateless at application level (REST API)
 - HTTP/2 manages connection multiplexing
 - Each request is independent (no state between requests)
-- No connection state stored in ServerInstance
+- Each connection is a `ConnectionState` in `ServerInstance.connections` (see the lifecycle
+  above); no protocol-specific state is kept in it
 
 ## Known Limitations
 
@@ -265,10 +267,10 @@ not fixed), but it does mean the server cannot host anything else alongside DoH.
 
 All limitations from standard DNS protocol apply:
 
-- Single answer per action (use `send_dns_response` for multiple)
-- Limited record type support
-- No DNSSEC
+- No DNSSEC signing (the DNS server's `dnssec_zone` is not offered here)
+- No zone transfers
 - No recursive resolution
+- An EDNS query gets an OPT back; no option is acted on
 - See `src/server/dns/AGENTS.md` for full list
 
 ### 5. No Rate Limiting
@@ -307,25 +309,57 @@ so `stop_server` aborts them; unregistered, they outlived the server.
 
 **Future Enhancement**: Add cache-control headers based on DNS TTL.
 
-## Failure behaviour: SERVFAIL in a 200, not a 5xx
+## Bounds
 
-When `call_llm` returns `Err`, the query is answered with a **DNS SERVFAIL message**
-carried in a `200 application/dns-message` - the same answer plain DNS and DoT put on
-the wire, built by the same `dns::actions::build_servfail`, so the transaction id and
-question section are echoed and the client accepts it.
+Every number this server enforces, and the test that fails when it is removed
+(`tests/server/doh/bounds_test.rs` unless named):
 
-RFC 8484 §4.2.1 makes 200 the status for "this HTTP transaction carried a DNS
-message"; whether that message is an answer or a failure is DNS's business. This used
-to return `500 "LLM error"`, which tells a DoH client the *resolver endpoint* is
-broken and makes real clients mark the server down and fail over - a much heavier
-reaction than the transient backend hiccup that caused it.
+| bound | value | direction | test |
+|---|---|---|---|
+| `MAX_CONNECTIONS` | 256 | accept | `connection_bounds_test.rs`: the 257th's handshake never starts; a closed peer's slot comes back |
+| `TLS_HANDSHAKE_TIMEOUT` | 10 s | inbound | a silent peer and a half-sent ClientHello are open at 6 s and closed by 15 s |
+| `idle_timeout_secs` (`IDLE_BETWEEN_QUERIES_TIMEOUT`) | 300 s | inbound | `connection_bounds_test.rs`: no preface, and an answered connection gone quiet, closed at a 3 s bound; a query parked for a human keeps its connection past it |
+| `GOAWAY_DRAIN_TIMEOUT` | 5 s | **outbound** | a peer that floods PINGs and never reads is let go at the idle bound plus the drain |
+| `MAX_DOH_BODY_BYTES` | 65535 | inbound | a POST of exactly 65535 octets is answered; 65536 is `413` and raises no event |
+| `dns_screen` | per message | inbound | the DNS server's `compression_chain_test.rs`; here an undecodable body is `400` |
+| hickory's encoder | 65535 octets | **outbound** | a ~80 KB answer is SERVFAIL in a 200 |
+| one reply per query | | **outbound** | an answer with two A actions is answered with the first |
 
-The HTTP-level failure is reserved for the case where no DNS message can be built at
-all: `503` + `Retry-After` for `WireFailure::Overloaded`, `500` for `Unavailable`,
-carrying the category text and never the error itself. Which of the two applied is
-recorded in the log as `decision=fail_closed_llm_overload` /
-`decision=fail_closed_llm_error`, the way `src/server/radius/` does it, because
-SERVFAIL is the same bytes whatever went wrong.
+The GET `dns=` parameter rides in the request's `:path`, which hyper's HTTP/2 server bounds
+with its own header-list limit (16 KiB by default); NetGet declares no number of its own for it.
+
+## Failure behaviour: a DNS message in a 200, not a 5xx
+
+DoH answers through `dns::StreamQuery`, which is the DNS server's own `Reply::resolve` and
+`Reply::finish` with the TCP limits, so the outcomes and their `decision=` tags are the DNS
+server's (`src/server/dns/AGENTS.md`, "Failure behaviour"), logged with `DoH` in place of `DNS`:
+
+| outcome | HTTP | body | `decision=` |
+|---|---|---|---|
+| the first DNS message an action produced | 200 | that message, OPT echoed for an EDNS query | `model_answer` |
+| `ignore_query` | 404 | `Query ignored` | `model_silent` |
+| an answer with no sendable action | 200 | SERVFAIL | `fail_closed_no_action` |
+| `send_dns_response` bytes that are not a DNS message | 200 | SERVFAIL | `fail_closed_unparseable_answer` |
+| an answer too large to encode | 200 | SERVFAIL | `fail_closed_no_action` ("cannot encode") |
+| the backend failed / was overloaded | 200 | SERVFAIL | `fail_closed_llm_error` / `fail_closed_llm_overload` |
+| a query with no question | 200 | FORMERR, from the server | `spec_reply` |
+| a body that does not decode, a bad `dns=` encoding, a wrong media type | 400 | text | — |
+| a body over `MAX_DOH_BODY_BYTES` | 413 | text | — |
+
+RFC 8484 §4.2.1 makes 200 the status for "this HTTP transaction carried a DNS message";
+whether that message is an answer or a failure is DNS's business. A 5xx tells a DoH client the
+*resolver endpoint* is broken, and real clients mark the server down and fail over — a much
+heavier reaction than a transient backend hiccup. The HTTP-level failure is reserved for a
+backend failure where not even a SERVFAIL could be built: `503` + `Retry-After` for
+`WireFailure::Overloaded`, `500` for `Unavailable`, carrying the category text and never the
+error itself.
+
+**Until November 2026 three of those rows were different.** DoH had its own copy of the answer
+loop: an answer with no sendable action got `500 "No response generated"` — the 5xx the
+paragraph above argues against, for the case most likely to happen; `send_dns_response`'s bytes
+went out unparsed as `application/dns-message`; and a query with no question was `400 "No DNS
+queries"`, though it is a well-formed DNS message the DNS server answers FORMERR.
+`bounds_test.rs` drives every row.
 
 ## Example Prompts
 
