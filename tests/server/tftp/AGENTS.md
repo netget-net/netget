@@ -75,9 +75,18 @@ let mut server = start_netget_server(config).await?;
 server.verify_mocks().await?;
 ```
 
+## `real_client_test.rs` - two independent clients
+
+curl's libcurl TFTP (8 LLM calls: a `send_tftp_file` download of three blocks, a
+`send_tftp_data` download answered block by block, a refused RRQ curl reports as exit 68, and an
+upload of two blocks) and the system `tftp(1)` — BSD tftp on macOS, tftp-hpa on Linux — (6: a
+`netascii` download, an `octet` download of exactly 1024 bytes ending in an empty block, and an
+upload). Both fail rather than skip when the client is absent. Downloads are compared byte for
+byte with what the model served; uploads are reassembled from the `data` the model was shown.
+
 ## TFTP Client Implementation
 
-Tests use **manual packet construction** (no external TFTP library):
+The other files use **manual packet construction** (no external TFTP library):
 - Helper functions: `build_rrq_packet()`, `build_wrq_packet()`, `build_ack_packet()`, `build_data_packet()`
 - Parsers: `parse_data_packet()`, `parse_ack_packet()`, `parse_error_packet()`
 - UDP socket via `tokio::net::UdpSocket`
