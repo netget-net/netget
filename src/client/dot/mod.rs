@@ -5,7 +5,7 @@ pub use actions::DotClientProtocol;
 
 use anyhow::{Context, Result};
 use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query};
-use hickory_proto::rr::{Name, RecordType};
+use hickory_proto::rr::{Name, RData, RecordType};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -331,55 +331,55 @@ impl DotClient {
             };
 
             // Extract response information
-            let query_id = dns_message.id();
-            let response_code = format!("{:?}", dns_message.response_code());
+            let query_id = dns_message.id;
+            let response_code = format!("{:?}", dns_message.response_code);
 
             let answers: Vec<serde_json::Value> = dns_message
-                .answers()
+                .answers
                 .iter()
                 .map(|record| {
-                    let data_str = match record.data() {
-                        Some(data) => format!("{}", data),
-                        None => "NULL".to_string(),
+                    let data_str = match &record.data {
+                        RData::Update0(_) => "NULL".to_string(),
+                        data => format!("{}", data),
                     };
                     serde_json::json!({
-                        "name": record.name().to_utf8(),
+                        "name": record.name.to_utf8(),
                         "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl(),
+                        "ttl": record.ttl,
                         "data": data_str,
                     })
                 })
                 .collect();
 
             let authorities: Vec<serde_json::Value> = dns_message
-                .name_servers()
+                .authorities
                 .iter()
                 .map(|record| {
-                    let data_str = match record.data() {
-                        Some(data) => format!("{}", data),
-                        None => "NULL".to_string(),
+                    let data_str = match &record.data {
+                        RData::Update0(_) => "NULL".to_string(),
+                        data => format!("{}", data),
                     };
                     serde_json::json!({
-                        "name": record.name().to_utf8(),
+                        "name": record.name.to_utf8(),
                         "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl(),
+                        "ttl": record.ttl,
                         "data": data_str,
                     })
                 })
                 .collect();
 
             let additionals: Vec<serde_json::Value> = dns_message
-                .additionals()
+                .additionals
                 .iter()
                 .map(|record| {
-                    let data_str = match record.data() {
-                        Some(data) => format!("{}", data),
-                        None => "NULL".to_string(),
+                    let data_str = match &record.data {
+                        RData::Update0(_) => "NULL".to_string(),
+                        data => format!("{}", data),
                     };
                     serde_json::json!({
-                        "name": record.name().to_utf8(),
+                        "name": record.name.to_utf8(),
                         "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl(),
+                        "ttl": record.ttl,
                         "data": data_str,
                     })
                 })
@@ -640,11 +640,8 @@ impl DotClient {
         let name = Name::from_str(&domain).context(format!("Invalid domain name: {}", domain))?;
 
         // Create DNS query message
-        let mut message = DnsMessage::new();
-        message.set_id(rand::random());
-        message.set_message_type(MessageType::Query);
-        message.set_op_code(OpCode::Query);
-        message.set_recursion_desired(recursive);
+        let mut message = DnsMessage::new(rand::random(), MessageType::Query, OpCode::Query);
+        message.metadata.recursion_desired = recursive;
 
         let query = Query::query(name, record_type);
         message.add_query(query);

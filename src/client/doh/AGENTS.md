@@ -3,7 +3,8 @@
 ## Overview
 
 DNS-over-HTTPS client implementing RFC 8484 for secure DNS queries over HTTPS transport. The LLM controls DNS query
-decisions while hickory-client handles the DoH protocol, HTTPS transport, and TLS encryption.
+decisions; `hickory-proto` builds and decodes the DNS messages and `reqwest` (over rustls) carries them as
+`application/dns-message` HTTPS requests.
 
 **Status**: Experimental (Client Protocol)
 **RFC**: RFC 8484 (DNS Queries over HTTPS)
@@ -11,26 +12,18 @@ decisions while hickory-client handles the DoH protocol, HTTPS transport, and TL
 
 ## Library Choices
 
-### Primary: hickory-client
+### Primary: hickory-proto + reqwest
 
-- **Crate**: `hickory-client` (formerly trust-dns-client)
-- **Version**: 0.24+
-- **Features**: `dns-over-https-rustls`
-- **Purpose**: Complete DoH client implementation with async support
+- **`hickory-proto` 0.26**: the DNS query message (`Message`, `Query`, `Name`, `RecordType`) and the
+  decode of the answer, which goes through `utils::dns_screen::decode_dns_message`
+- **`reqwest`** with rustls: the HTTPS transport (RFC 8484 POST/GET of `application/dns-message`),
+  one cached client per endpoint and TLS setting
 
-**Rationale**: hickory-client provides mature, production-ready DNS-over-HTTPS support with:
-
-- Built-in HTTPS transport layer (HTTP/2 over TLS)
-- DNS message parsing and construction
-- Automatic connection management
-- Async/await support via Tokio
-- Support for all standard DNS record types
+No hickory networking crate is involved: hickory's own DoH client is not used.
 
 ### Supporting Libraries
 
-- **hickory-proto**: DNS protocol primitives (Name, RecordType, etc.)
 - **tokio**: Async runtime for DNS operations
-- **reqwest**: Used by hickory for HTTPS transport
 - **rustls**: TLS implementation for secure connections
 
 ## Architecture
@@ -190,7 +183,7 @@ Can connect to any RFC 8484 compliant DoH server, including NetGet's own DoH ser
 
 ### DNS Record Type Support
 
-All standard DNS record types supported by hickory-client:
+All standard DNS record types `hickory-proto` parses:
 
 - **A**: IPv4 address
 - **AAAA**: IPv6 address
@@ -222,7 +215,7 @@ All standard DNS record types supported by hickory-client:
 ### Connection Management
 
 - **Persistent Connection**: HTTP/2 connection reused for multiple queries
-- **Connection Pooling**: hickory-client manages connection lifecycle
+- **Connection Pooling**: reqwest manages connection lifecycle
 - **Timeout**: 30-second query timeout (configurable)
 - **Retries**: No automatic retries (LLM decides)
 
@@ -255,7 +248,7 @@ All standard DNS record types supported by hickory-client:
 - DNSSEC signatures not validated client-side
 - Trust relies on DoH server's validation
 
-**Future Enhancement**: Enable hickory-client's DNSSEC features.
+**Future Enhancement**: Validate with hickory's DNSSEC support.
 
 ### 4. Fixed Timeout
 
@@ -276,7 +269,7 @@ All standard DNS record types supported by hickory-client:
 - No support for DNS extensions (EDNS, etc.)
 - No custom DNS headers
 
-**Reason**: hickory-client handles protocol details internally.
+**Reason**: the query message is built with fixed defaults.
 
 ## Example Usage Patterns
 
@@ -390,7 +383,7 @@ LLM will:
 ## References
 
 - [RFC 8484: DNS Queries over HTTPS (DoH)](https://datatracker.ietf.org/doc/html/rfc8484)
-- [hickory-client Documentation](https://docs.rs/hickory-client/)
+- [hickory-proto Documentation](https://docs.rs/hickory-proto/)
 - [Google Public DNS DoH](https://developers.google.com/speed/public-dns/docs/doh)
 - [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/)
 

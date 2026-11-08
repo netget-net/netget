@@ -43,7 +43,7 @@ rather than reading it here. (Earlier still, this file claimed the four in
 `DocumentationRequired` retry, which was already stale when it was written.)
 
 **`dig_test.rs` and `kdig_test.rs` are what make the Stable rating mean something.**
-`test.rs` drives the server with hickory-client while the server encodes with
+`test.rs` drives the server with hickory-net's client while the server encodes with
 hickory-proto - the same project, the same codec - so on its own it proves the
 wire format self-consistent rather than correct. That is the circularity that
 kept `rss` at Experimental until `feed-rs` did its parsing. ISC BIND's `dig` and
@@ -136,23 +136,29 @@ Parsing flow:
 
 #### The compression-pointer screen
 
-`hickory-proto` 0.24.4 follows a name-compression pointer by recursing
-(`rr/domain/name.rs:1203`) with nothing counting; the only rule is that the target lies before
-the name being read. A chain of pointers each aiming two bytes back, hidden in a NULL record's
-RDATA and entered from one owner name, is one stack frame per two bytes: a debug build overflows
-a 2 MiB tokio worker at 1 702 hops, a 3 448-byte datagram inside the 4 096-byte receive buffer.
-That is a process abort, not a panic. (A release build, at ~155 bytes a frame, survives the
-longest chain the 14-bit offset allows — ~8 180 hops, ~1.3 MiB — on a 2 MiB worker, with only
-what is already on that stack as margin.) `src/utils/dns_screen.rs` computes the deepest chain any
-offset could start, in one linear pass, and refuses past `MAX_POINTER_HOPS` (127 — the most a
-255-octet name needs); it also refuses a header whose section counts cannot fit the bytes
-present, because `Message::read` reserves `Vec::with_capacity(count)` per section from the
+A name-compression pointer may aim at another pointer, so a chain of pointers each aiming two
+bytes back, hidden in a NULL record's RDATA, is followed in full by every name that enters it at
+its far end. `hickory-proto` 0.26.3, the version in `Cargo.lock`, follows pointers in a loop
+(`read_inner`, `name.rs:1239`), so a chain costs it no stack — the longest the 14-bit
+offset allows, ~8 180 hops, decodes on a 64 KiB thread in a debug build. The releases before it
+recurse once per hop (0.24.4 `name.rs:1203`, 0.25.2 `name.rs:1366`, upstream advisory
+GHSA-gpvg-fj8x-74vm), and against those a debug build overflowed a 2 MiB tokio worker at 1 702
+hops — a 3 448-byte datagram, a process abort rather than a panic.
+
+`src/utils/dns_screen.rs` stays in front of every decode as belt and braces for the stack, and
+it is still the bound on work: every name entering a chain walks all of it, so one 44 KB
+DNS-over-TCP message holding a 6 000-hop chain and 2 000 owner names that enter it costs 0.26.3
+2.7 s of a worker in a debug build and 29 ms in release. It computes the deepest chain any offset
+could start, in one linear pass, and refuses past `MAX_POINTER_HOPS` (127 — the most a 255-octet
+name needs); it also refuses a header whose section counts cannot fit the bytes present, because
+`Message::read` still reserves `Vec::with_capacity(count)` for the question section from the
 header. Every DNS decode site in NetGet — this server (UDP, TCP and the model's own
 `send_dns_response` bytes), DoT, DoH, DoQ, LLMNR and the DoT/DoH/LLMNR/DNS-transfer clients —
 goes through it. A refused query is dropped and logged (`Failed to parse DNS query: refused
 before decoding: …`), like any other unparseable one. The DNS *client*'s ordinary UDP lookups go
-through `hickory-client`'s `UdpClientStream`, which decodes inside the crate with no seam to
-screen; that path is still exposed to a spoofed answer. `tests/server/dns/compression_chain_test.rs`
+through `hickory-net`'s `UdpClientStream`, which decodes inside the crate with no seam to
+screen; there the bound is hickory's own loop and the reply's size, which the client's EDNS
+payload (1 232 bytes) caps at a few hundred hops. `tests/server/dns/compression_chain_test.rs`
 sends the bomb and then a legal query, which is answered only if the process survived.
 
 ### 4. Dual Logging
@@ -618,8 +624,8 @@ fails naming its package when the binary is absent:
 | `dig_test.rs` | `dig` | ISC BIND |
 | `kdig_test.rs` | `kdig` | Knot DNS, CZ.NIC |
 
-`test.rs` covers the same ground with hickory-client, which is useful and **circular on its
-own**: hickory-client decodes with the same codec hickory-proto encoded with, so it proves the
+`test.rs` covers the same ground with hickory-net's client, which is useful and **circular on its
+own**: it decodes with the same codec hickory-proto encoded with, so it proves the
 wire format is self-consistent rather than correct.
 
 `dig` already fixed that. The second resolver is here because **one client can agree with one

@@ -35,13 +35,10 @@ const OWNED_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 42);
 /// A DNS client would set `RD` here; in LLMNR that bit means "tentative" and setting it would
 /// be a different message.
 fn llmnr_query(id: u16, name: &str, record_type: RecordType) -> E2EResult<Vec<u8>> {
-    let mut message = DnsMessage::new();
-    message.set_id(id);
-    message.set_message_type(MessageType::Query);
-    message.set_op_code(OpCode::Query);
-    message.set_authoritative(false); // C = 0
-    message.set_recursion_desired(false); // T = 0
-    message.set_recursion_available(false); // part of LLMNR's Z field
+    let mut message = DnsMessage::new(id, MessageType::Query, OpCode::Query);
+    message.metadata.authoritative = false; // C = 0
+    message.metadata.recursion_desired = false; // T = 0
+    message.metadata.recursion_available = false; // part of LLMNR's Z field
 
     let mut question = Query::query(Name::from_str(name)?, record_type);
     question.set_query_class(DNSClass::IN);
@@ -183,24 +180,24 @@ async fn test_llmnr_answers_only_for_names_it_owns() -> E2EResult<()> {
     assert_eq!(buf[3] & 0x0F, 0, "RCODE must be 0 on a real answer");
 
     let response = DnsMessage::from_vec(&buf[..n])?;
-    assert_eq!(response.id(), OWNED_ID);
-    assert_eq!(response.message_type(), MessageType::Response);
-    assert_eq!(response.response_code(), ResponseCode::NoError);
+    assert_eq!(response.id, OWNED_ID);
+    assert_eq!(response.message_type, MessageType::Response);
+    assert_eq!(response.response_code, ResponseCode::NoError);
 
     // The question must be echoed or the querier discards the packet, which is silence with
     // extra steps.
-    let questions = response.queries();
+    let questions = &response.queries;
     assert_eq!(questions.len(), 1, "question section must be echoed");
     assert_eq!(questions[0].name(), &Name::from_str(OWNED_NAME)?);
     assert_eq!(questions[0].query_type(), RecordType::A);
     assert_eq!(questions[0].query_class(), DNSClass::IN);
 
-    let answers = response.answers();
+    let answers = &response.answers;
     assert_eq!(answers.len(), 1, "expected exactly one answer record");
-    assert_eq!(answers[0].name(), &Name::from_str(OWNED_NAME)?);
-    assert_eq!(answers[0].ttl(), 30);
-    match answers[0].data() {
-        Some(RData::A(a)) => assert_eq!(a.0, OWNED_ADDRESS),
+    assert_eq!(answers[0].name, Name::from_str(OWNED_NAME)?);
+    assert_eq!(answers[0].ttl, 30);
+    match &answers[0].data {
+        RData::A(a) => assert_eq!(a.0, OWNED_ADDRESS),
         other => panic!("expected an A record, got {other:?}"),
     }
 
@@ -247,15 +244,15 @@ async fn test_llmnr_answers_only_for_names_it_owns() -> E2EResult<()> {
 
     assert_eq!(tcp_response[3] & 0x0F, 5, "RCODE must be 5 (REFUSED)");
     let tcp_message = DnsMessage::from_vec(&tcp_response)?;
-    assert_eq!(tcp_message.id(), TCP_ID, "transaction ID must be echoed");
-    assert_eq!(tcp_message.response_code(), ResponseCode::Refused);
+    assert_eq!(tcp_message.id, TCP_ID, "transaction ID must be echoed");
+    assert_eq!(tcp_message.response_code, ResponseCode::Refused);
     assert_eq!(
-        tcp_message.answers().len(),
+        tcp_message.answers.len(),
         0,
         "a refusal must not carry answers"
     );
     assert_eq!(
-        tcp_message.queries().len(),
+        tcp_message.queries.len(),
         1,
         "question section must be echoed on a refusal too"
     );

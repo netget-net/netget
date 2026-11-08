@@ -390,7 +390,7 @@ impl DotServer {
             };
 
             // Extract query information
-            let queries = dns_message.queries();
+            let queries = &dns_message.queries;
             if queries.is_empty() {
                 Log::new(Some(&status_tx)).warn("DoT DNS message has no queries");
                 continue;
@@ -403,7 +403,7 @@ impl DotServer {
             // `RecordType::from_str`. Debug and Display agree for the common types and
             // do not for all of them, so `{:?}` was a round-trip waiting to break.
             let query_type = query.query_type().to_string();
-            let query_id = dns_message.id();
+            let query_id = dns_message.id;
 
             Log::new(Some(&status_tx)).info(format!(
                 "DoT query: {} {} (ID: {})",

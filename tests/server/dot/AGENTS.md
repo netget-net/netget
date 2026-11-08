@@ -77,7 +77,7 @@ responses over TLS.
     - `TlsConnector` - Initiates TLS connections
     - `ClientConfig` - TLS configuration
     - Custom `ServerCertVerifier` to accept self-signed certificates
-- **hickory-proto v0.24** - DNS message handling
+- **hickory-proto v0.26** - DNS message handling
     - `Message::new()` - Constructs DNS queries
     - `Message::from_vec()` - Parses DNS responses
     - `Query::query()` - Creates DNS query records

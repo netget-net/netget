@@ -22,7 +22,7 @@ pub const EXCESSIVE_LOAD: quinn::VarInt = quinn::VarInt::from_u32(4);
 pub const UNSPECIFIED_ERROR: quinn::VarInt = quinn::VarInt::from_u32(5);
 
 pub fn encode(message: &Message) -> Result<Vec<u8>> {
-    ensure!(message.id() == 0, "DoQ DNS message ID must be zero");
+    ensure!(message.id == 0, "DoQ DNS message ID must be zero");
     let bytes = message.to_vec()?;
     let length = u16::try_from(bytes.len()).context("DoQ DNS message exceeds 65535 bytes")?;
     let mut frame = Vec::with_capacity(bytes.len() + 2);
@@ -46,15 +46,15 @@ pub fn decode(frame: &[u8], expected: MessageType) -> Result<Message> {
     let mut decoder = BinDecoder::new(&frame[2..]);
     let message = Message::read(&mut decoder).context("Invalid DoQ DNS message")?;
     ensure!(decoder.is_empty(), "Trailing bytes after DoQ DNS message");
-    ensure!(message.id() == 0, "DoQ DNS message ID must be zero");
+    ensure!(message.id == 0, "DoQ DNS message ID must be zero");
     ensure!(
-        message.message_type() == expected,
+        message.message_type == expected,
         "Unexpected DNS message direction"
     );
     // EDNS TCP keepalive is a connection-level error on a QUIC transport (RFC 9250 4.3.3).
     ensure!(
         message
-            .extensions()
+            .edns
             .as_ref()
             .is_none_or(|edns| edns.options().get(EdnsCode::Keepalive).is_none()),
         "EDNS TCP keepalive is forbidden on DoQ"

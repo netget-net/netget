@@ -8,7 +8,7 @@ use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
 use crate::state::app_state::AppState;
 use anyhow::{Context, Result};
-use hickory_proto::op::{Header, Message as DnsMessage, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{rdata, Name, RData, Record, RecordType};
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -192,8 +192,8 @@ impl Protocol for DnsProtocol {
                  false and the corrections are in them. (6) No #[ignore] and no skip gate \
                  anywhere in tests/server/dns/. \
                  \
-                 tests/server/dns/test.rs covers the same ground with hickory-client -- useful, \
-                 but circular on its own, since hickory-client decodes with the same codec \
+                 tests/server/dns/test.rs covers the same ground with hickory-net's client -- \
+                 useful, but circular on its own, since it decodes with the same codec \
                  hickory-proto encoded with. It is not part of the evidence above. \
                  \
                  TCP, EDNS0, ZONE TRANSFERS AND DNSSEC, added October 2026, carry the six \
@@ -452,14 +452,9 @@ fn new_response(
     let name =
         Name::from_str(domain).with_context(|| format!("Invalid domain name: '{domain}'"))?;
 
-    let mut message = DnsMessage::new();
-    let mut header = Header::new();
-    header.set_id(query_id);
-    header.set_message_type(MessageType::Response);
-    header.set_op_code(OpCode::Query);
-    header.set_authoritative(true);
-    header.set_response_code(response_code);
-    message.set_header(header);
+    let mut message = DnsMessage::new(query_id, MessageType::Response, OpCode::Query);
+    message.metadata.authoritative = true;
+    message.metadata.response_code = response_code;
 
     // Echo the question section (counts are recomputed by hickory at encode time).
     message.add_query(Query::query(name.clone(), query_type));
@@ -484,16 +479,11 @@ fn new_response(
 /// `AA` is deliberately *not* set: we are not answering authoritatively, we are
 /// failing.
 pub fn build_servfail(query: &DnsMessage) -> Result<Vec<u8>> {
-    let mut message = DnsMessage::new();
-    let mut header = Header::new();
-    header.set_id(query.id());
-    header.set_message_type(MessageType::Response);
-    header.set_op_code(query.op_code());
-    header.set_recursion_desired(query.recursion_desired());
-    header.set_response_code(ResponseCode::ServFail);
-    message.set_header(header);
+    let mut message = DnsMessage::new(query.id, MessageType::Response, query.op_code);
+    message.metadata.recursion_desired = query.recursion_desired;
+    message.metadata.response_code = ResponseCode::ServFail;
 
-    for question in query.queries() {
+    for question in &query.queries {
         message.add_query(question.clone());
     }
 
@@ -538,8 +528,7 @@ impl DnsProtocol {
         let (mut message, name) =
             new_response(query_id, domain, RecordType::A, ResponseCode::NoError)?;
 
-        let mut record = Record::with(name, RecordType::A, ttl);
-        record.set_data(Some(RData::A(rdata::A(ipv4))));
+        let record = Record::from_rdata(name, ttl, RData::A(rdata::A(ipv4)));
         message.add_answer(record);
 
         finish_response(message)
@@ -557,8 +546,7 @@ impl DnsProtocol {
         let (mut message, name) =
             new_response(query_id, domain, RecordType::AAAA, ResponseCode::NoError)?;
 
-        let mut record = Record::with(name, RecordType::AAAA, ttl);
-        record.set_data(Some(RData::AAAA(rdata::AAAA(ipv6))));
+        let record = Record::from_rdata(name, ttl, RData::AAAA(rdata::AAAA(ipv6)));
         message.add_answer(record);
 
         finish_response(message)
@@ -583,8 +571,7 @@ impl DnsProtocol {
         let (mut message, name) =
             new_response(query_id, domain, query_type, ResponseCode::NoError)?;
 
-        let mut record = Record::with(name, RecordType::CNAME, ttl);
-        record.set_data(Some(RData::CNAME(rdata::CNAME(target_name))));
+        let record = Record::from_rdata(name, ttl, RData::CNAME(rdata::CNAME(target_name)));
         message.add_answer(record);
 
         finish_response(message)
@@ -610,8 +597,11 @@ impl DnsProtocol {
         let (mut message, name) =
             new_response(query_id, domain, RecordType::MX, ResponseCode::NoError)?;
 
-        let mut record = Record::with(name, RecordType::MX, ttl);
-        record.set_data(Some(RData::MX(rdata::MX::new(preference, exchange_name))));
+        let record = Record::from_rdata(
+            name,
+            ttl,
+            RData::MX(rdata::MX::new(preference, exchange_name)),
+        );
         message.add_answer(record);
 
         finish_response(message)
@@ -638,8 +628,11 @@ impl DnsProtocol {
         let (mut message, name) =
             new_response(query_id, domain, RecordType::TXT, ResponseCode::NoError)?;
 
-        let mut record = Record::with(name, RecordType::TXT, ttl);
-        record.set_data(Some(RData::TXT(rdata::TXT::new(vec![text.to_string()]))));
+        let record = Record::from_rdata(
+            name,
+            ttl,
+            RData::TXT(rdata::TXT::new(vec![text.to_string()])),
+        );
         message.add_answer(record);
 
         finish_response(message)
@@ -728,7 +721,7 @@ fn execute_send_dns_records(action: &serde_json::Value) -> Result<ActionResult> 
         for r in records {
             match section {
                 0 => message.add_answer(r),
-                1 => message.add_name_server(r),
+                1 => message.add_authority(r),
                 _ => message.add_additional(r),
             };
         }

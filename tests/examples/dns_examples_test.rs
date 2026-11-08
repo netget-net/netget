@@ -10,9 +10,10 @@
 //! Tests use `respond_with_actions_from_event()` to dynamically extract the query_id.
 
 use crate::helpers::{start_netget_server, E2EResult, NetGetConfig};
-use hickory_client::client::{AsyncClient, ClientHandle};
-use hickory_client::rr::{DNSClass, Name, RecordType};
-use hickory_client::udp::UdpClientStream;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
+use hickory_proto::rr::{DNSClass, Name, RecordType};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -71,10 +72,12 @@ async fn example_test_dns_query_a_record() -> E2EResult<()> {
     // Wait for server to be ready
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Query using hickory-client
+    // Query using hickory-net
     let address: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     // Query for example.com A record
@@ -82,7 +85,7 @@ async fn example_test_dns_query_a_record() -> E2EResult<()> {
     let response = client.query(name, DNSClass::IN, RecordType::A).await?;
 
     println!("DNS response received:");
-    let answers = response.answers();
+    let answers = &response.answers;
     assert!(
         !answers.is_empty(),
         "Expected at least one A record in response"
@@ -150,17 +153,19 @@ async fn example_test_dns_query_txt_record() -> E2EResult<()> {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Query using hickory-client
+    // Query using hickory-net
     let address: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     let name = Name::from_str("example.com.")?;
     let response = client.query(name, DNSClass::IN, RecordType::TXT).await?;
 
     println!("DNS TXT response received:");
-    let answers = response.answers();
+    let answers = &response.answers;
     assert!(!answers.is_empty(), "Expected TXT record in response");
 
     for record in answers {
@@ -219,13 +224,15 @@ async fn example_test_dns_startup_llm_mode() -> E2EResult<()> {
 
     // Verify by making a query
     let address: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     let name = Name::from_str("test.example.com.")?;
     let response = client.query(name, DNSClass::IN, RecordType::A).await?;
-    assert!(!response.answers().is_empty(), "Should get DNS response");
+    assert!(!response.answers.is_empty(), "Should get DNS response");
 
     println!("✓ DNS query succeeded");
 
@@ -298,8 +305,10 @@ async fn example_test_dns_multiple_query_types() -> E2EResult<()> {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let address: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     // Test A record
@@ -307,17 +316,19 @@ async fn example_test_dns_multiple_query_types() -> E2EResult<()> {
     let response = client
         .query(name.clone(), DNSClass::IN, RecordType::A)
         .await?;
-    assert!(!response.answers().is_empty(), "Expected A record response");
+    assert!(!response.answers.is_empty(), "Expected A record response");
     println!("✓ A record query succeeded");
 
-    // Test TXT record (need new connection for hickory-client)
-    let stream2 = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client2, bg2) = AsyncClient::connect(stream2).await?;
+    // Test TXT record (need new connection for hickory-net)
+    let stream2 = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client2, bg2) = Client::<TokioRuntimeProvider>::from_sender(stream2);
     tokio::spawn(bg2);
 
     let response2 = client2.query(name, DNSClass::IN, RecordType::TXT).await?;
     assert!(
-        !response2.answers().is_empty(),
+        !response2.answers.is_empty(),
         "Expected TXT record response"
     );
     println!("✓ TXT record query succeeded");

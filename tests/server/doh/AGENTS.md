@@ -44,7 +44,7 @@ random by the client and must be echoed, and a static handler has no access to t
     - `.get()` / `.post()` - HTTP methods
     - `.query()` - URL query parameters for GET
     - `.header()` / `.body()` - Request headers/body for POST
-- **hickory-proto v0.24** - DNS message handling
+- **hickory-proto v0.26** - DNS message handling
     - `Message::new()` - Constructs DNS queries
     - `Message::from_vec()` - Parses DNS responses
     - `Query::query()` - Creates DNS query records

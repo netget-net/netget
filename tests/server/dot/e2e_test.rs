@@ -48,10 +48,13 @@ async fn query_dot(port: u16, domain: &str, record_type: RecordType) -> E2EResul
     // echoes the id looks healthy here while failing against every real client (item 47).
     let name = Name::from_str(domain)?;
     let query_id: u16 = rand::random();
-    let mut query_msg = DnsMessage::new();
-    query_msg.set_id(query_id);
+    let mut query_msg = DnsMessage::new(
+        query_id,
+        hickory_proto::op::MessageType::Query,
+        hickory_proto::op::OpCode::Query,
+    );
+    query_msg.metadata.recursion_desired = true;
     query_msg.add_query(Query::query(name.clone(), record_type));
-    query_msg.set_recursion_desired(true);
 
     // Serialize to wire format
     let query_bytes = query_msg.to_vec()?;
@@ -75,22 +78,21 @@ async fn query_dot(port: u16, domain: &str, record_type: RecordType) -> E2EResul
     // RFC 1035 §4.1.1: the reply's ID must equal the request's. Enforcing it here is the
     // whole point of the dynamic mocks above.
     assert_eq!(
-        dns_response.id(),
-        query_id,
+        dns_response.id, query_id,
         "DoT reply for {domain} carried transaction id {} but the query used {query_id}; \
          a real resolver would discard this reply",
-        dns_response.id()
+        dns_response.id
     );
 
     // The reply must also echo the question, which is how a resolver confirms it is
     // looking at an answer to the query it asked.
     assert_eq!(
-        dns_response.queries().len(),
+        dns_response.queries.len(),
         1,
         "reply must echo exactly one question"
     );
     assert_eq!(
-        dns_response.queries()[0].name(),
+        dns_response.queries[0].name(),
         &name,
         "reply must echo the queried name"
     );
@@ -103,12 +105,12 @@ async fn query_dot(port: u16, domain: &str, record_type: RecordType) -> E2EResul
 /// Returns `None` if the answer section is empty or holds something other than one A
 /// record — both of which must fail the test rather than pass quietly.
 fn answer_a(response: &DnsMessage) -> Option<std::net::Ipv4Addr> {
-    let answers = response.answers();
+    let answers = &response.answers;
     if answers.len() != 1 {
         return None;
     }
-    match answers[0].data() {
-        Some(hickory_proto::rr::RData::A(addr)) => Some(addr.0),
+    match &answers[0].data {
+        hickory_proto::rr::RData::A(addr) => Some(addr.0),
         _ => None,
     }
 }

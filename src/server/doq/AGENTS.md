@@ -3,7 +3,7 @@
 Feature `doq` registers a distinct server and client, default UDP/853. UDP/53 is
 refused as required by RFC 9250. Stack: ETH > IP > UDP > QUIC > DNS.
 
-The server uses existing quinn 0.11, rustls 0.23 and hickory-proto 0.24 dependencies.
+The server uses existing quinn 0.11, rustls 0.23 and hickory-proto 0.26 dependencies.
 There is no HTTP/3 or raw-QUIC compatibility alias. ALPN is exactly `doq`.
 
 ## Implemented scope

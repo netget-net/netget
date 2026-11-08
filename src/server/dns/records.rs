@@ -17,7 +17,7 @@
 
 use anyhow::{bail, Context, Result};
 use hickory_proto::rr::rdata::{self, SOA, SRV};
-use hickory_proto::rr::{Name, RData, Record, RecordType};
+use hickory_proto::rr::{Name, RData, Record};
 use serde_json::Value;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -106,32 +106,26 @@ pub fn record_from_json(
     let ttl = u32_field(v, "ttl", &rtype, Some(DEFAULT_TTL))?;
     let target = |key: &str| -> Result<Name> { parse_name(str_field(v, key, &rtype)?, origin) };
 
-    let (record_type, data) = match rtype.as_str() {
+    let data = match rtype.as_str() {
         "A" => {
             let ip = str_field(v, "ip", "A")?;
             let ip =
                 Ipv4Addr::from_str(ip).with_context(|| format!("invalid IPv4 address {ip:?}"))?;
-            (RecordType::A, RData::A(rdata::A(ip)))
+            RData::A(rdata::A(ip))
         }
         "AAAA" => {
             let ip = str_field(v, "ip", "AAAA")?;
             let ip =
                 Ipv6Addr::from_str(ip).with_context(|| format!("invalid IPv6 address {ip:?}"))?;
-            (RecordType::AAAA, RData::AAAA(rdata::AAAA(ip)))
+            RData::AAAA(rdata::AAAA(ip))
         }
-        "CNAME" => (
-            RecordType::CNAME,
-            RData::CNAME(rdata::CNAME(target("target")?)),
-        ),
-        "NS" => (RecordType::NS, RData::NS(rdata::NS(target("target")?))),
-        "PTR" => (RecordType::PTR, RData::PTR(rdata::PTR(target("target")?))),
-        "MX" => (
-            RecordType::MX,
-            RData::MX(rdata::MX::new(
-                u16_field(v, "preference", "MX", Some(10))?,
-                target("exchange")?,
-            )),
-        ),
+        "CNAME" => RData::CNAME(rdata::CNAME(target("target")?)),
+        "NS" => RData::NS(rdata::NS(target("target")?)),
+        "PTR" => RData::PTR(rdata::PTR(target("target")?)),
+        "MX" => RData::MX(rdata::MX::new(
+            u16_field(v, "preference", "MX", Some(10))?,
+            target("exchange")?,
+        )),
         "TXT" => {
             let strings: Vec<String> = match v.get("text") {
                 Some(Value::String(s)) => vec![s.clone()],
@@ -153,37 +147,29 @@ pub fn record_from_json(
                     long.len()
                 );
             }
-            (RecordType::TXT, RData::TXT(rdata::TXT::new(strings)))
+            RData::TXT(rdata::TXT::new(strings))
         }
-        "SRV" => (
-            RecordType::SRV,
-            RData::SRV(SRV::new(
-                u16_field(v, "priority", "SRV", Some(0))?,
-                u16_field(v, "weight", "SRV", Some(0))?,
-                u16_field(v, "port", "SRV", None)?,
-                target("target")?,
-            )),
-        ),
-        "SOA" => (
-            RecordType::SOA,
-            RData::SOA(SOA::new(
-                target("mname")?,
-                target("rname")?,
-                u32_field(v, "serial", "SOA", None)?,
-                u32_field(v, "refresh", "SOA", Some(3600))? as i32,
-                u32_field(v, "retry", "SOA", Some(600))? as i32,
-                u32_field(v, "expire", "SOA", Some(604_800))? as i32,
-                u32_field(v, "minimum", "SOA", Some(DEFAULT_TTL))?,
-            )),
-        ),
+        "SRV" => RData::SRV(SRV::new(
+            u16_field(v, "priority", "SRV", Some(0))?,
+            u16_field(v, "weight", "SRV", Some(0))?,
+            u16_field(v, "port", "SRV", None)?,
+            target("target")?,
+        )),
+        "SOA" => RData::SOA(SOA::new(
+            target("mname")?,
+            target("rname")?,
+            u32_field(v, "serial", "SOA", None)?,
+            u32_field(v, "refresh", "SOA", Some(3600))? as i32,
+            u32_field(v, "retry", "SOA", Some(600))? as i32,
+            u32_field(v, "expire", "SOA", Some(604_800))? as i32,
+            u32_field(v, "minimum", "SOA", Some(DEFAULT_TTL))?,
+        )),
         other => bail!(
             "record type {other:?} is not one this server writes; use one of {}",
             SUPPORTED_TYPES.join(", ")
         ),
     };
-    let mut record = Record::with(name, record_type, ttl);
-    record.set_data(Some(data));
-    Ok(record)
+    Ok(Record::from_rdata(name, ttl, data))
 }
 
 /// A list of records, at most `max` of them.

@@ -12,7 +12,7 @@ use crate::protocol::log_template::LogTemplate;
 use crate::protocol::EventType;
 use crate::state::app_state::AppState;
 use anyhow::{Context, Result};
-use hickory_proto::op::{Header, Message as DnsMessage, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{rdata, DNSClass, Name, RData, Record, RecordType};
 use serde_json::json;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -66,7 +66,7 @@ const DEFAULT_TTL: u32 = 30;
 /// Set in a query when the sender has already received multiple responses to it — i.e. the
 /// querier is reporting a name collision on the link, which is worth showing the model.
 pub fn conflict_bit(message: &DnsMessage) -> bool {
-    message.authoritative()
+    message.authoritative
 }
 
 /// Read the LLMNR `T` (Tentative) bit out of a parsed message.
@@ -75,7 +75,7 @@ pub fn conflict_bit(message: &DnsMessage) -> bool {
 /// not yet verified the uniqueness of the name"). It carries no defined meaning in a query;
 /// it is surfaced anyway, because a querier that sets it is doing something worth seeing.
 pub fn tentative_bit(message: &DnsMessage) -> bool {
-    message.recursion_desired()
+    message.recursion_desired
 }
 
 /// LLMNR protocol action handler.
@@ -397,20 +397,16 @@ fn new_response(
     response_code: ResponseCode,
     tentative: bool,
 ) -> DnsMessage {
-    let mut message = DnsMessage::new();
-    let mut header = Header::new();
-    header.set_id(transaction_id);
-    header.set_message_type(MessageType::Response);
-    header.set_op_code(OpCode::Query);
-    header.set_response_code(response_code);
+    let mut message = DnsMessage::new(transaction_id, MessageType::Response, OpCode::Query);
+    let header = &mut message.metadata;
+    header.response_code = response_code;
     // C = 0: no conflict detected. (This is DNS's AA bit — do not set it.)
-    header.set_authoritative(false);
-    header.set_truncated(false);
+    header.authoritative = false;
+    header.truncation = false;
     // T: tentative, i.e. authoritative for the name but uniqueness not yet verified.
-    header.set_recursion_desired(tentative);
+    header.recursion_desired = tentative;
     // RA is part of LLMNR's Z field and MUST be zero.
-    header.set_recursion_available(false);
-    message.set_header(header);
+    header.recursion_available = false;
 
     let mut question = Query::query(name.clone(), query_type);
     question.set_query_class(DNSClass::IN);
@@ -471,9 +467,7 @@ fn execute_send_llmnr_response(action: &serde_json::Value) -> Result<ActionResul
         ResponseCode::NoError,
         tentative,
     );
-    let mut record = Record::with(name, record_type, ttl);
-    record.set_data(Some(rdata));
-    message.add_answer(record);
+    message.add_answer(Record::from_rdata(name, ttl, rdata));
 
     finish(message)
 }

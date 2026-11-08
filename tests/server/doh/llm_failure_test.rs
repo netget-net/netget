@@ -52,10 +52,13 @@ async fn test_doh_answers_servfail_when_llm_fails() -> E2EResult<()> {
 
     let domain = Name::from_str("example.com.")?;
     let query_id: u16 = rand::random();
-    let mut query = DnsMessage::new();
-    query.set_id(query_id);
+    let mut query = DnsMessage::new(
+        query_id,
+        hickory_proto::op::MessageType::Query,
+        hickory_proto::op::OpCode::Query,
+    );
+    query.metadata.recursion_desired = true;
     query.add_query(Query::query(domain.clone(), RecordType::A));
-    query.set_recursion_desired(true);
     let query_bytes = query.to_vec()?;
 
     let http = tokio::time::timeout(
@@ -91,29 +94,28 @@ async fn test_doh_answers_servfail_when_llm_fails() -> E2EResult<()> {
     println!("DoH reply: {response:?}");
 
     assert_eq!(
-        response.response_code(),
+        response.response_code,
         ResponseCode::ServFail,
         "expected SERVFAIL. NOERROR with an empty answer section would tell the client the \
          name exists and has no A record, and it would cache that."
     );
     assert_eq!(
-        response.id(),
-        query_id,
+        response.id, query_id,
         "the reply must echo the transaction id or the client discards it as unsolicited, \
          leaving it exactly as stuck as with silence"
     );
     assert_eq!(
-        response.queries().len(),
+        response.queries.len(),
         1,
         "the reply must echo the question section"
     );
     assert_eq!(
-        response.queries()[0].name(),
+        response.queries[0].name(),
         &domain,
         "the reply must echo the queried name"
     );
     assert!(
-        response.answers().is_empty(),
+        response.answers.is_empty(),
         "a SERVFAIL must not carry answers: {response:?}"
     );
 

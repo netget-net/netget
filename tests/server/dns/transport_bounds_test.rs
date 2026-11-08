@@ -37,11 +37,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 
 fn query(id: u16, name: &str, rtype: RecordType, edns_size: Option<u16>) -> Message {
-    let mut m = Message::new();
-    m.set_id(id)
-        .set_message_type(MessageType::Query)
-        .set_op_code(OpCode::Query)
-        .add_query(Query::query(Name::from_str(name).unwrap(), rtype));
+    let mut m = Message::new(id, MessageType::Query, OpCode::Query);
+    m.add_query(Query::query(Name::from_str(name).unwrap(), rtype));
     if let Some(size) = edns_size {
         let mut e = Edns::new();
         e.set_max_payload(size);
@@ -52,18 +49,13 @@ fn query(id: u16, name: &str, rtype: RecordType, edns_size: Option<u16>) -> Mess
 
 fn ixfr(id: u16, serial: u32) -> Message {
     let mut m = query(id, "example.com.", RecordType::IXFR, None);
-    let mut soa = Record::with(Name::from_str("example.com.").unwrap(), RecordType::SOA, 0);
-    soa.set_data(Some(RData::SOA(SOA::new(
-        Name::root(),
-        Name::root(),
-        serial,
+    let mut soa = Record::from_rdata(
+        Name::from_str("example.com.").unwrap(),
         0,
-        0,
-        0,
-        0,
-    ))));
-    soa.set_dns_class(DNSClass::IN);
-    m.add_name_server(soa);
+        RData::SOA(SOA::new(Name::root(), Name::root(), serial, 0, 0, 0, 0)),
+    );
+    soa.dns_class = DNSClass::IN;
+    m.add_authority(soa);
     m
 }
 
@@ -147,9 +139,9 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
         &mut wire,
     )
     .await;
-    assert!(!r.truncated());
+    assert!(!r.truncation);
     assert!(
-        r.extensions().is_none(),
+        r.edns.is_none(),
         "no OPT for a query without one (RFC 6891 §6.1.1)"
     );
     let r = udp(
@@ -158,9 +150,9 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
         &mut wire,
     )
     .await;
-    assert!(r.truncated(), "{PLAIN_UDP_LIMIT} bytes without EDNS");
-    assert!(r.answers().is_empty());
-    assert_eq!(r.queries().len(), 1);
+    assert!(r.truncation, "{PLAIN_UDP_LIMIT} bytes without EDNS");
+    assert!(r.answers.is_empty());
+    assert_eq!(r.queries.len(), 1);
 
     // EDNS 4096: the same answer (~1.7 KB) fits, with this server's OPT.
     let r = udp(
@@ -169,9 +161,9 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
         &mut wire,
     )
     .await;
-    assert!(!r.truncated());
-    assert_eq!(r.answers().len(), 1);
-    assert_eq!(r.extensions().as_ref().map(|e| e.max_payload()), Some(1232));
+    assert!(!r.truncation);
+    assert_eq!(r.answers.len(), 1);
+    assert_eq!(r.edns.as_ref().map(|e| e.max_payload()), Some(1232));
     // EDNS 1000: it does not.
     let r = udp(
         device.port,
@@ -179,7 +171,7 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
         &mut wire,
     )
     .await;
-    assert!(r.truncated());
+    assert!(r.truncation);
 
     // A client asking for 65000 gets MAX_UDP_RESPONSE: the ~6 KB TXT is truncated...
     let r = udp(
@@ -189,7 +181,7 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
     )
     .await;
     assert!(
-        r.truncated(),
+        r.truncation,
         "{MAX_UDP_RESPONSE} is the most a client is believed"
     );
     // ...and arrives whole over TCP.
@@ -204,8 +196,8 @@ async fn the_udp_limits_truncate_at_512_and_at_the_clients_size_capped_at_4096()
         1,
     )
     .await;
-    assert!(!r[0].truncated());
-    assert_eq!(r[0].answers().len(), 1);
+    assert!(!r[0].truncation);
+    assert_eq!(r[0].answers.len(), 1);
     assert_udp_wire_clean(&wire);
     assert_tcp_wire_clean(&tcp_wire);
 }
@@ -220,7 +212,7 @@ async fn axfr_over_udp_is_notimp_and_never_reaches_the_handler() {
         &mut wire,
     )
     .await;
-    assert_eq!(r.response_code(), ResponseCode::NotImp);
+    assert_eq!(r.response_code, ResponseCode::NotImp);
     assert!(
         device
             .events()
@@ -238,12 +230,12 @@ async fn an_ixfr_too_large_for_udp_becomes_the_soa_alone() {
     let mut wire = Vec::new();
     // From the previous serial the difference is six records and fits.
     let r = udp(device.port, &ixfr(8, SERIAL - 1), &mut wire).await;
-    assert_eq!(r.answers().len(), 6);
+    assert_eq!(r.answers.len(), 6);
     // From an unknown serial the handler sends the whole zone, which does not fit: the SOA
     // alone tells the client to come back over TCP (RFC 1995 §2).
     let r = udp(device.port, &ixfr(9, 1), &mut wire).await;
-    assert_eq!(r.answers().len(), 1);
-    assert_eq!(r.answers()[0].record_type(), RecordType::SOA);
+    assert_eq!(r.answers.len(), 1);
+    assert_eq!(r.answers[0].record_type(), RecordType::SOA);
     assert_udp_wire_clean(&wire);
 }
 
@@ -257,11 +249,11 @@ async fn a_signed_zone_refuses_an_ixfr_difference_and_serves_current() {
     // The handler answers SERIAL-1 with a difference; for a signed zone that would be an
     // unsigned change, so the server fails closed.
     let r = tcp_exchange(&mut stream, &ixfr(10, SERIAL - 1), &mut wire, 1).await;
-    assert_eq!(r[0].response_code(), ResponseCode::ServFail);
+    assert_eq!(r[0].response_code, ResponseCode::ServFail);
     // "You are current" carries nothing unsigned and is served.
     let r = tcp_exchange(&mut stream, &ixfr(11, SERIAL), &mut wire, 1).await;
-    assert_eq!(r[0].response_code(), ResponseCode::NoError);
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].response_code, ResponseCode::NoError);
+    assert_eq!(r[0].answers.len(), 1);
     assert_tcp_wire_clean(&wire);
 }
 
@@ -302,7 +294,7 @@ async fn the_tcp_connection_cap_closes_the_next_connection_unread() {
         1,
     )
     .await;
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].answers.len(), 1);
     drop(held.pop());
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mut fresh = TcpStream::connect(("127.0.0.1", device.port))
@@ -315,7 +307,7 @@ async fn the_tcp_connection_cap_closes_the_next_connection_unread() {
         1,
     )
     .await;
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].answers.len(), 1);
 }
 
 #[tokio::test]
@@ -351,7 +343,7 @@ async fn an_idle_tcp_connection_is_closed_after_the_idle_timeout() {
         )
         .await;
         assert_eq!(
-            r[0].answers().len(),
+            r[0].answers.len(),
             1,
             "query {i} at {:?}",
             started.elapsed()
@@ -399,15 +391,11 @@ fn transfer_messages_stay_near_the_target_size() {
     let query = query(1, "example.com.", RecordType::AXFR, None);
     let records: Vec<Record> = (0..3000)
         .map(|i| {
-            let mut r = Record::with(
+            Record::from_rdata(
                 Name::from_str(&format!("host{i}.example.com.")).unwrap(),
-                RecordType::A,
                 300,
-            );
-            r.set_data(Some(RData::A(hickory_proto::rr::rdata::A::new(
-                10, 0, 0, 1,
-            ))));
-            r
+                RData::A(hickory_proto::rr::rdata::A::new(10, 0, 0, 1)),
+            )
         })
         .collect();
     let messages =
@@ -415,7 +403,7 @@ fn transfer_messages_stay_near_the_target_size() {
     assert!(messages.len() > 3);
     let total: usize = messages
         .iter()
-        .map(|m| Message::from_vec(m).unwrap().answers().len())
+        .map(|m| Message::from_vec(m).unwrap().answers.len())
         .sum();
     assert_eq!(total, 3000, "every record once");
     for m in &messages {

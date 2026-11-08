@@ -179,13 +179,13 @@ async fn client_rejects_mismatched_question_opcode_nonzero_id_and_missing_fin() 
             let mut response =
                 netget::server::doq::wire::decode(&bytes, hickory_proto::op::MessageType::Query)
                     .unwrap();
-            response.set_message_type(hickory_proto::op::MessageType::Response);
+            response.metadata.message_type = hickory_proto::op::MessageType::Response;
             if mode == 0 {
-                response.queries_mut()[0]
+                response.queries[0]
                     .set_name(hickory_proto::rr::Name::from_ascii("different.example").unwrap());
             }
             if mode == 3 {
-                response.set_op_code(hickory_proto::op::OpCode::Status);
+                response.metadata.op_code = hickory_proto::op::OpCode::Status;
             }
             let mut frame = netget::server::doq::wire::encode(&response).unwrap();
             if mode == 1 {

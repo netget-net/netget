@@ -213,12 +213,12 @@ impl DoqServer {
                     None,
                 )
                 .await;
-            let response = if query.queries().len() != 1 {
+            let response = if query.queries.len() != 1 {
                 error_response(&query, ResponseCode::FormErr)
-            } else if query.op_code() != OpCode::Query
-                || query.queries()[0].query_class() != DNSClass::IN
+            } else if query.op_code != OpCode::Query
+                || query.queries[0].query_class() != DNSClass::IN
                 || !matches!(
-                    query.queries()[0].query_type(),
+                    query.queries[0].query_type(),
                     RecordType::A
                         | RecordType::AAAA
                         | RecordType::MX
@@ -229,12 +229,12 @@ impl DoqServer {
             {
                 error_response(&query, ResponseCode::NotImp)
             } else {
-                let q = &query.queries()[0];
+                let q = &query.queries[0];
                 let event = Event::new(
                     &DOQ_QUERY_EVENT,
                     json!({
                         "query_id":0,"domain":q.name().to_utf8(),"query_type":q.query_type().to_string(),
-                        "query_class":q.query_class().to_string(),"recursion_desired":query.recursion_desired(),
+                        "query_class":q.query_class().to_string(),"recursion_desired":query.recursion_desired,
                         "stream_id":u64::from(recv.id()),"peer_addr":connection.remote_address().to_string(),
                     }),
                 );
@@ -286,16 +286,15 @@ impl DoqServer {
                         }
                         let mut response = messages.remove(0);
                         for message in messages {
-                            response.add_answers(message.answers().iter().cloned());
+                            response.add_answers(message.answers.iter().cloned());
                         }
-                        response
-                            .set_id(0)
-                            .set_message_type(MessageType::Response)
-                            .set_op_code(query.op_code())
-                            .set_recursion_desired(query.recursion_desired());
-                        *response.queries_mut() = query.queries().to_vec();
+                        response.metadata.id = 0;
+                        response.metadata.message_type = MessageType::Response;
+                        response.metadata.op_code = query.op_code;
+                        response.metadata.recursion_desired = query.recursion_desired;
+                        response.queries = query.queries.to_vec();
                         let decision = if matches!(
-                            response.response_code(),
+                            response.response_code,
                             ResponseCode::NXDomain | ResponseCode::Refused
                         ) {
                             "model_reject"
@@ -305,7 +304,7 @@ impl DoqServer {
                         Log::new(Some(&ctx.status_tx)).info(format!(
                             "DoQ stream {} decision={decision} rcode={}",
                             recv.id(),
-                            response.response_code()
+                            response.response_code
                         ));
                         response
                     }
@@ -383,13 +382,9 @@ impl DoqServer {
 }
 
 fn error_response(query: &Message, code: ResponseCode) -> Message {
-    let mut response = Message::new();
-    response
-        .set_id(0)
-        .set_message_type(MessageType::Response)
-        .set_op_code(query.op_code())
-        .set_recursion_desired(query.recursion_desired())
-        .set_response_code(code)
-        .add_queries(query.queries().iter().cloned());
+    let mut response = Message::new(0, MessageType::Response, query.op_code);
+    response.metadata.recursion_desired = query.recursion_desired;
+    response.metadata.response_code = code;
+    response.add_queries(query.queries.iter().cloned());
     response
 }

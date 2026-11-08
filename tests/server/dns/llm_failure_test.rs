@@ -47,10 +47,12 @@ async fn test_dns_answers_servfail_when_llm_fails() -> E2EResult<()> {
 
     // Build a real DNS query rather than driving a resolver: a resolver would hide the
     // wire-level detail this test is about.
-    let mut query = DnsMessage::new();
-    query.set_id(QUERY_ID);
-    query.set_message_type(MessageType::Query);
-    query.set_recursion_desired(true);
+    let mut query = DnsMessage::new(
+        QUERY_ID,
+        MessageType::Query,
+        hickory_proto::op::OpCode::Query,
+    );
+    query.metadata.recursion_desired = true;
     query.add_query(hickory_proto::op::Query::query(
         Name::from_str("example.com.")?,
         RecordType::A,
@@ -87,22 +89,22 @@ async fn test_dns_answers_servfail_when_llm_fails() -> E2EResult<()> {
         .assert_clean();
 
     let response = DnsMessage::from_vec(&buf[..n])?;
-    assert_eq!(response.id(), QUERY_ID, "transaction ID must be echoed");
-    assert_eq!(response.message_type(), MessageType::Response);
+    assert_eq!(response.id, QUERY_ID, "transaction ID must be echoed");
+    assert_eq!(response.message_type, MessageType::Response);
     assert_eq!(
-        response.response_code(),
+        response.response_code,
         ResponseCode::ServFail,
         "LLM failure must be reported as SERVFAIL"
     );
     assert_eq!(
-        response.answers().len(),
+        response.answers.len(),
         0,
         "a SERVFAIL must not carry answers"
     );
 
     // The question section must come back, or glibc/systemd-resolved/dig discard the packet.
     // This regressed once before (fixed in 6a384617) and is easy to lose again.
-    let questions = response.queries();
+    let questions = &response.queries;
     assert_eq!(questions.len(), 1, "question section must be echoed");
     assert_eq!(questions[0].name(), &Name::from_str("example.com.")?);
     assert_eq!(questions[0].query_type(), RecordType::A);
@@ -182,10 +184,8 @@ async fn test_dns_distinguishes_no_usable_action_from_a_deliberate_black_hole() 
     socket.connect(format!("127.0.0.1:{}", server.port)).await?;
 
     fn query_for(id: u16, domain: &str) -> E2EResult<Vec<u8>> {
-        let mut query = DnsMessage::new();
-        query.set_id(id);
-        query.set_message_type(MessageType::Query);
-        query.set_recursion_desired(true);
+        let mut query = DnsMessage::new(id, MessageType::Query, hickory_proto::op::OpCode::Query);
+        query.metadata.recursion_desired = true;
         query.add_query(hickory_proto::op::Query::query(
             Name::from_str(domain)?,
             RecordType::A,
@@ -211,15 +211,15 @@ async fn test_dns_distinguishes_no_usable_action_from_a_deliberate_black_hole() 
         .assert_clean();
 
     let response = DnsMessage::from_vec(&buf[..n])?;
-    assert_eq!(response.id(), 0x0A0A, "transaction ID must be echoed");
+    assert_eq!(response.id, 0x0A0A, "transaction ID must be echoed");
     assert_eq!(
-        response.response_code(),
+        response.response_code,
         ResponseCode::ServFail,
         "an unusable model answer must fail closed, not fall through to silence"
     );
-    assert_eq!(response.answers().len(), 0);
+    assert_eq!(response.answers.len(), 0);
     assert_eq!(
-        response.queries().len(),
+        response.queries.len(),
         1,
         "question section must be echoed or a stub resolver discards the packet"
     );

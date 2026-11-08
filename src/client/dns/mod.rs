@@ -24,14 +24,20 @@ use crate::protocol::{Event, EventType};
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
 
-use hickory_client::client::AsyncClient;
-use hickory_client::rr::{Name, RecordType};
-use hickory_client::udp::UdpClientStream;
-use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
-use hickory_proto::rr::dnssec::rdata::DNSSECRData;
+use hickory_net::client::Client as HickoryClient;
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
+use hickory_net::xfer::{DnsHandle, FirstAnswer};
+use hickory_proto::dnssec::rdata::DNSSECRData;
+use hickory_proto::dnssec::PublicKey;
+use hickory_proto::op::{
+    DnsRequest, DnsRequestOptions, Edns, Message, MessageType, OpCode, Query, ResponseCode,
+};
 use hickory_proto::rr::rdata::SOA;
-use hickory_proto::rr::{RData, Record};
-use hickory_proto::xfer::{DnsHandle, DnsRequest, DnsRequestOptions, FirstAnswer};
+use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+/// The hickory client handle every query goes through.
+type AsyncClient = HickoryClient<TokioRuntimeProvider>;
 
 /// DNS client that connects to a DNS server
 pub struct DnsClient;
@@ -53,17 +59,19 @@ impl DnsClient {
         info!("DNS client {} connecting to {}", client_id, dns_server);
 
         // Create UDP client stream
-        let stream = UdpClientStream::<tokio::net::UdpSocket>::new(dns_server);
-        let (client, bg) = AsyncClient::connect(stream)
-            .await
-            .context("Failed to create DNS client")?;
+        // One datagram per query: hickory's UDP stream otherwise resends a query that is
+        // unanswered after 333 ms, up to three sends, and a server answering through a model
+        // would see each query two or three times.
+        let stream = UdpClientStream::builder(dns_server, TokioRuntimeProvider::new())
+            .with_max_retries(1)
+            .build();
+        let (client, bg) = AsyncClient::from_sender(stream);
 
         // Spawn the hickory transport driver. Registered so that stopping the client
         // tears the UDP socket down instead of leaving it running detached.
         let bg_handle = tokio::spawn(async move {
-            if let Err(e) = bg.await {
-                error!("DNS client {} transport driver stopped: {}", client_id, e);
-            }
+            bg.await;
+            debug!("DNS client {} transport driver stopped", client_id);
         });
         app_state.register_client_task(client_id, bg_handle).await;
 
@@ -306,13 +314,10 @@ impl DnsClient {
 
                 // Built by hand rather than with `ClientHandle::query`, which fixes RD on and
                 // offers no EDNS: `recursion_desired` and `dnssec` both have to reach the wire.
-                let mut message = Message::new();
-                message
-                    .set_id(rand::random::<u16>())
-                    .set_message_type(MessageType::Query)
-                    .set_op_code(OpCode::Query)
-                    .set_recursion_desired(recursion_desired)
-                    .add_query(Query::query(name.clone(), record_type));
+                let mut message =
+                    Message::new(rand::random::<u16>(), MessageType::Query, OpCode::Query);
+                message.metadata.recursion_desired = recursion_desired;
+                message.add_query(Query::query(name.clone(), record_type));
                 let mut edns = Edns::new();
                 edns.set_max_payload(1232)
                     .set_version(0)
@@ -323,11 +328,11 @@ impl DnsClient {
 
                 match response {
                     Ok(response) => {
-                        let response_code = response.response_code();
+                        let response_code = response.response_code;
                         let answers: Vec<serde_json::Value> =
-                            response.answers().iter().filter_map(record_json).collect();
+                            response.answers.iter().filter_map(record_json).collect();
                         let authority: Vec<serde_json::Value> = response
-                            .name_servers()
+                            .authorities
                             .iter()
                             .filter_map(record_json)
                             .collect();
@@ -344,13 +349,13 @@ impl DnsClient {
                             answers.len()
                         );
                         let mut event_data = serde_json::json!({
-                            "query_id": response.id(),
+                            "query_id": response.id,
                             "domain": domain,
                             "query_type": query_type_str,
                             "answers": answers,
                             "response_code": Self::response_code_to_string(response_code),
-                            "authenticated_data": response.authentic_data(),
-                            "truncated": response.truncated(),
+                            "authenticated_data": response.authentic_data,
+                            "truncated": response.truncation,
                         });
                         if !authority.is_empty() {
                             event_data["authority"] = serde_json::json!(authority);
@@ -660,7 +665,7 @@ impl DnsClient {
         let mut request =
             hickory_proto::op::update_message::zone_transfer(origin.clone(), last_soa.clone());
         let id: u16 = rand::random();
-        request.set_id(id);
+        request.metadata.id = id;
         let wire = request
             .to_vec()
             .context("cannot encode the transfer request")?;
@@ -703,18 +708,18 @@ impl DnsClient {
                 stream.read_exact(&mut body).await?;
                 let response = crate::utils::dns_screen::decode_dns_message(&body)
                     .map_err(|e| anyhow::anyhow!("{transfer_type} failed: {e}"))?;
-                if response.id() != id {
+                if response.id != id {
                     anyhow::bail!(
                         "{transfer_type} of {zone}: a message answered id {} where {id} was asked",
-                        response.id()
+                        response.id
                     );
                 }
                 messages += 1;
-                rcode = response.response_code();
+                rcode = response.response_code;
                 if rcode != ResponseCode::NoError {
                     break;
                 }
-                let answers = response.answers();
+                let answers = &response.answers;
                 record_count = record_count.saturating_add(answers.len());
                 let room = MAX_REPORTED_RECORDS.saturating_sub(records.len());
                 records.extend(answers.iter().take(room).cloned());
@@ -740,8 +745,8 @@ impl DnsClient {
                 )
             })??;
 
-        let serial_now = records.first().and_then(|r| match r.data() {
-            Some(RData::SOA(s)) => Some(s.serial()),
+        let serial_now = records.first().and_then(|r| match &r.data {
+            RData::SOA(s) => Some(s.serial),
             _ => None,
         });
         // RFC 1995 §4: an incremental answer's second record is an SOA (the old serial); a
@@ -795,7 +800,10 @@ impl XfrEnd {
     /// Takes one message's answers in order; `Err` for a transfer that cannot be valid.
     pub fn process(&mut self, answers: &[Record]) -> Result<(), &'static str> {
         fn serial(r: &Record) -> Option<u32> {
-            r.data().and_then(RData::as_soa).map(SOA::serial)
+            match &r.data {
+                RData::SOA(soa) => Some(soa.serial),
+                _ => None,
+            }
         }
         if answers.is_empty() {
             return Ok(());
@@ -875,18 +883,23 @@ fn type_name(t: RecordType) -> String {
 /// One record as the model reads it. DNSSEC records are reported structurally — what a
 /// signature covers and which key made it — never as base64.
 fn record_json(record: &Record) -> Option<serde_json::Value> {
-    let data = record.data()?;
+    let data = &record.data;
+    // A record with no RDATA (RFC 2136's empty-update form) says nothing to report.
+    if let RData::Update0(_) = data {
+        return None;
+    }
     let mut v = match data {
         RData::A(a) => serde_json::json!({"type": "A", "ip": a.to_string()}),
         RData::AAAA(a) => serde_json::json!({"type": "AAAA", "ip": a.to_string()}),
         RData::CNAME(c) => serde_json::json!({"type": "CNAME", "target": c.to_string()}),
         RData::MX(mx) => serde_json::json!({
             "type": "MX",
-            "exchange": mx.exchange().to_string(),
-            "preference": mx.preference(),
+            "exchange": mx.exchange.to_string(),
+            "preference": mx.preference,
         }),
         RData::TXT(txt) => {
             let text: Vec<String> = txt
+                .txt_data
                 .iter()
                 .map(|bytes| String::from_utf8_lossy(bytes).to_string())
                 .collect();
@@ -895,42 +908,42 @@ fn record_json(record: &Record) -> Option<serde_json::Value> {
         RData::NS(ns) => serde_json::json!({"type": "NS", "nameserver": ns.to_string()}),
         RData::SOA(soa) => serde_json::json!({
             "type": "SOA",
-            "mname": soa.mname().to_string(),
-            "rname": soa.rname().to_string(),
-            "serial": soa.serial(),
-            "refresh": soa.refresh(),
-            "retry": soa.retry(),
-            "expire": soa.expire(),
-            "minimum": soa.minimum(),
+            "mname": soa.mname.to_string(),
+            "rname": soa.rname.to_string(),
+            "serial": soa.serial,
+            "refresh": soa.refresh,
+            "retry": soa.retry,
+            "expire": soa.expire,
+            "minimum": soa.minimum,
         }),
         RData::PTR(ptr) => serde_json::json!({"type": "PTR", "domain": ptr.to_string()}),
         RData::SRV(srv) => serde_json::json!({
             "type": "SRV",
-            "priority": srv.priority(),
-            "weight": srv.weight(),
-            "port": srv.port(),
-            "target": srv.target().to_string(),
+            "priority": srv.priority,
+            "weight": srv.weight,
+            "port": srv.port,
+            "target": srv.target.to_string(),
         }),
         RData::DNSSEC(DNSSECRData::RRSIG(sig)) => serde_json::json!({
             "type": "RRSIG",
-            "type_covered": type_name(sig.type_covered()),
-            "algorithm": u8::from(sig.algorithm()),
-            "key_tag": sig.key_tag(),
-            "signer": sig.signer_name().to_string(),
-            "inception": sig.sig_inception(),
-            "expiration": sig.sig_expiration(),
+            "type_covered": type_name(sig.input().type_covered),
+            "algorithm": u8::from(sig.input().algorithm),
+            "key_tag": sig.input().key_tag,
+            "signer": sig.input().signer_name.to_string(),
+            "inception": sig.input().sig_inception.get(),
+            "expiration": sig.input().sig_expiration.get(),
         }),
         RData::DNSSEC(DNSSECRData::DNSKEY(key)) => serde_json::json!({
             "type": "DNSKEY",
             "flags": key.flags(),
-            "algorithm": u8::from(key.algorithm()),
+            "algorithm": u8::from(key.public_key().algorithm()),
             "key_tag": key.calculate_key_tag().ok(),
             "secure_entry_point": key.secure_entry_point(),
         }),
         RData::DNSSEC(DNSSECRData::NSEC(nsec)) => serde_json::json!({
             "type": "NSEC",
             "next": nsec.next_domain_name().to_string(),
-            "types": nsec.type_bit_maps().iter().map(|t| type_name(*t)).collect::<Vec<_>>(),
+            "types": nsec.type_bit_maps().map(type_name).collect::<Vec<_>>(),
         }),
         RData::DNSSEC(DNSSECRData::DS(ds)) => serde_json::json!({
             "type": "DS",
@@ -946,8 +959,8 @@ fn record_json(record: &Record) -> Option<serde_json::Value> {
                 .unwrap_or_default(),
         }),
     };
-    v["name"] = serde_json::json!(record.name().to_string());
-    v["ttl"] = serde_json::json!(record.ttl());
+    v["name"] = serde_json::json!(record.name.to_string());
+    v["ttl"] = serde_json::json!(record.ttl);
     Some(v)
 }
 

@@ -369,21 +369,18 @@ async fn test_llmnr_client_treats_no_answer_as_a_normal_outcome() -> E2EResult<(
 /// authoritative answer; here that bit means "a name conflict was detected on this link", which
 /// is a different message entirely.
 fn llmnr_response(id: u16, question: &Query, address: Ipv4Addr) -> E2EResult<Vec<u8>> {
-    let mut message = DnsMessage::new();
-    let mut header = Header::new();
-    header.set_id(id);
-    header.set_message_type(MessageType::Response);
-    header.set_op_code(OpCode::Query);
-    header.set_authoritative(false); // C = 0
-    header.set_truncated(false);
-    header.set_recursion_desired(false); // T = 0
-    header.set_recursion_available(false); // part of LLMNR's Z field
-    message.set_header(header);
+    let mut message = DnsMessage::new(id, MessageType::Response, OpCode::Query);
+    message.metadata.authoritative = false; // C = 0
+    message.metadata.truncation = false;
+    message.metadata.recursion_desired = false; // T = 0
+    message.metadata.recursion_available = false; // part of LLMNR's Z field
     message.add_query(question.clone());
 
-    let mut record = Record::with(question.name().clone(), RecordType::A, 30);
-    record.set_data(Some(RData::A(rdata::A(address))));
-    message.add_answer(record);
+    message.add_answer(Record::from_rdata(
+        question.name().clone(),
+        30,
+        RData::A(rdata::A(address)),
+    ));
 
     Ok(message.to_bytes()?)
 }
@@ -417,7 +414,7 @@ async fn test_llmnr_client_reports_two_responders_that_disagree() -> E2EResult<(
             let Ok(query) = DnsMessage::from_vec(&buffer[..n]) else {
                 continue;
             };
-            let Some(question) = query.queries().first().cloned() else {
+            let Some(question) = query.queries.first().cloned() else {
                 continue;
             };
 
@@ -428,7 +425,7 @@ async fn test_llmnr_client_reports_two_responders_that_disagree() -> E2EResult<(
                 // `let ... else` rather than `if let Ok`: `E2EResult`'s boxed error is not
                 // `Send`, and holding the `Result` across the `await` below would make this
                 // whole task non-`Send` and un-spawnable.
-                let Ok(bytes) = llmnr_response(query.id(), &question, address) else {
+                let Ok(bytes) = llmnr_response(query.id, &question, address) else {
                     continue;
                 };
                 let _ = socket.send_to(&bytes, from).await;

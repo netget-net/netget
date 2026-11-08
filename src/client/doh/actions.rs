@@ -227,7 +227,7 @@ impl Protocol for DohClientProtocol {
 
         ProtocolMetadataV2::builder()
             .state(DevelopmentState::Experimental)
-            .implementation("hickory-client with DNS-over-HTTPS support")
+            .implementation("hickory-proto messages over reqwest HTTPS (RFC 8484)")
             .llm_control("Full control over DNS queries with LLM-driven decision making")
             .e2e_testing("Public DoH servers (Google, Cloudflare)")
             .history(crate::protocol::metadata::HistoryMode::Last(
