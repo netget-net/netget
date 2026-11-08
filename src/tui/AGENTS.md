@@ -29,8 +29,11 @@ The interactive UI. A full-screen ratatui frame, repainted whole into the altern
 
 **Left column = every instance, always visible.** One scrollable canvas of **cards**. A
 card is its summary line (status glyph, id, protocol, address, live peers, a 30-second
-sparkline, a **driver badge**), the requests parked for you, a facts line (status, uptime,
-traffic, rate), the driver, then its **buttons as an aligned grid** — every cell as wide
+sparkline, a **driver badge**), the requests parked for you (each with the time left
+before it fails closed, from its rule's `timeout_secs`), a facts line (status, uptime,
+traffic, rate), the instance's error when it has one (wrapped whole under the facts — it is
+usually why nothing works), the driver (an LLM driver with no model selected says its events
+fail closed), then its **buttons as an aligned grid** — every cell as wide
 as the widest label, as many per row as fit — and its **sections**: `peers` (each peer
 with `[ disconnect ]` on its row and, beneath it, **the conversation on that connection**:
 one row per message in `←` and per message out `→`, oldest first, the latest few with an
@@ -51,7 +54,11 @@ listing both kinds. Rules and config start folded; everything else is open.
 closing, every request with the action that answered it, questions parked for you, the
 `[LEVEL]` log lines filtered by level) and the conversation (what you typed, the model's
 reasoning and replies, command output) are one timeline, newest at the bottom, with the
-input box under it. Event lines are one row each; conversation entries wrap. PageUp or
+input box under it. Event lines are one row each, except failures and ERROR / WARN lines,
+which wrap under their own text — they rarely link anywhere, so the line is all the
+explanation there is; conversation entries word-wrap. Everything that wraps goes through
+`wrap.rs`, which splits in terminal cells at word boundaries, so a pane knows how many rows
+its text takes (ratatui 0.29's `Wrap` cannot say). PageUp or
 the wheel scrolls back, ↑/↓ then walk lines and Enter opens what one points at.
 
 Tab hops between the two columns. That is the only thing Tab does.
@@ -129,6 +136,7 @@ the list badge, the inspector overview, the feed, and the status bar.
 | `hit.rs` | per-frame hit-test registry for the mouse |
 | `render/` | one file per pane plus `overlay.rs` for modals |
 | `modal/` | forms, composer, routing editor, intercept answer, picker, help, wireshark |
+| `wrap.rs` | word wrapping in terminal cells, one row per piece — the stream, card errors, the empty state, form help |
 | `wireshark.rs` | protocol → dissector/capture-filter table; leads with `wireshark -r <file>` when NetGet is writing the instance's own pcap (`ServerRow::capture` / `ClientRow::capture`, from `src/capture/`) and otherwise says how to turn that on |
 
 The rule that keeps keyboard and mouse from drifting: an action is an `InstanceAction`, run
@@ -177,7 +185,10 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
 - `tests/dashboard_frame_test.rs` — whole frames rendered into ratatui's `TestBackend`:
   the empty dashboard at 80×24, a populated one (peers, traffic, a parked request, an
   errored server, a client with verbs), every tab for both kinds at the minimum size, and
-  what the selection does when its instance vanishes. **Start here for any layout change**;
+  what the selection does when its instance vanishes; and what must never be cut at 80×24 —
+  a failure in the stream, an instance's error, the empty state's guidance, the selected
+  field and the error of a create form longer than the box, a parked request's time left,
+  the no-model warning on an LLM driver. **Start here for any layout change**;
   `--nocapture` prints the frames.
 - `tests/dashboard_rail_test.rs` — the summary line, driver detection/rebuild, and the
   card rows: the button grid, sections, peers with their requests, rules, config, verbs.
@@ -211,6 +222,15 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   aligned grid) and sections; ↑/↓ walk every row, ←/→ the buttons; Tab only changes column.
   One picker for both kinds. Activity and chat are one stream with the input beneath it.
 
+- 2026-11-08: walked the 80×24 flows for what an operator cannot read. Failures, ERROR and
+  WARN lines wrap in the stream instead of keeping their first ~25 characters; conversation
+  entries break between words; an instance's error wraps on its card; the empty state is
+  wrapped to the column; the create/edit form scrolls to the selected field and keeps the
+  error from `[ Apply ]` above its buttons (it used to clip both off the bottom of the box);
+  a parked request shows its time left on the card and in the answer modal; an LLM driver
+  with no model selected says its events fail closed; the help's stream section describes
+  the one stream rather than two panes.
+
 ## Next steps
 
 - Prefer `tests/dashboard_frame_test.rs` (ratatui `TestBackend`, deterministic, populated
@@ -219,4 +239,10 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   `assert_snapshot` creates a missing one and passes). Every dashboard pty test waits on
   the text its last key must paint through one `PtyScreen`; never add a fixed sleep.
 - Candidates not done: fold-all / unfold-all keys once many cards are open; per-peer
-  throughput; an `[ answer all ]` shortcut when several requests are parked.
+  throughput; an `[ answer all ]` shortcut when several requests are parked. The composer
+  and the routing draft still render through ratatui's `Wrap` with no scroll, so a verb with
+  more parameters than the box holds clips the last ones (and the error below them) the way
+  the form did; `wrap.rs` plus an explicit scroll is the shape the form now uses.
+- A result from a spawned action closes or annotates *whichever* modal of its kind is on top
+  (`keymap::handle_ui_msg` matches on the modal's type, not its identity): a slow `c` connect
+  that finishes while an edit form for another instance is open lands in that form.

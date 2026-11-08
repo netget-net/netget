@@ -1212,3 +1212,21 @@ fn an_llm_driven_instance_with_no_model_says_its_events_fail_closed() {
     );
     assert!(text.contains("the model answers"), "{text}");
 }
+
+#[test]
+fn help_describes_the_stream_as_it_is() {
+    let lines = netget::tui::modal::help::help_lines();
+    let text: Vec<String> = lines
+        .iter()
+        .map(|(k, t)| format!("{} {t}", k.unwrap_or("")))
+        .collect();
+    let text = text.join("\n");
+    assert!(
+        !text.contains("Activity (top right)"),
+        "there is no separate activity pane:\n{text}"
+    );
+    assert!(
+        text.contains("PageUp"),
+        "how to reach the stream's lines is listed:\n{text}"
+    );
+}
