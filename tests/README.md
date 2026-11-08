@@ -10,7 +10,7 @@ and validate responses using real protocol client libraries.
 | `e2e_tcp_test.rs`      | 3     | suppaftp, raw TCP     | No            |
 | `e2e_http_test.rs`     | 6     | reqwest               | No            |
 | `e2e_udp_test.rs`      | 1     | raw UDP               | No            |
-| `e2e_dns_test.rs`      | 4     | hickory-client        | No            |
+| `e2e_dns_test.rs`      | 4     | hickory-net           | No            |
 | `e2e_dhcp_test.rs`     | 3     | manual DHCP packets   | No            |
 | `e2e_ntp_test.rs`      | 4     | rsntp                 | No            |
 | `e2e_snmp_test.rs`     | 4     | snmp library, snmpget | No            |

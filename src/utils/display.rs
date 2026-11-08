@@ -3,7 +3,9 @@
 //! `ToString::to_string` panics when a `Display` implementation returns `Err` ("a Display
 //! implementation returned an error unexpectedly"). Some third-party types do: hickory-proto's
 //! record data, on a record a peer crafted, was found by the `dns_message` fuzz target in
-//! October 2026. Where the value came off the wire, format it through this instead.
+//! October 2026 (0.24 decoded an OPT record in the answer section; 0.26 refuses that message,
+//! and OPT is still the record data whose `Display` fails). Where the value came off the wire,
+//! format it through this instead.
 
 use std::fmt::{Display, Write};
 

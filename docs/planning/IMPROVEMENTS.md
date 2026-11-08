@@ -527,9 +527,24 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   `utils::dns_screen` in front of every decode site (deepest chain ≤ 127 hops; section counts must
   fit the bytes, which also stops `Message::read`'s `Vec::with_capacity(count)` reserving for
   65 535 records from a 12-byte header). Not coverable: the DNS client's plain UDP lookups go
-  through `hickory-client`'s `UdpClientStream`, which decodes internally. Everything else read
+  through hickory's `UdpClientStream`, which decodes internally. Everything else read at 0.24.4
   (rdata length arithmetic is `checked_sub` throughout; the one `panic!` in
   `rr/dnssec/rdata/mod.rs:628` is behind a type dispatch that cannot reach it) is sound.
+  **7 November 2026: upgraded to 0.26.3** (`hickory-proto`, and `hickory-net` 0.26.3 in place of
+  `hickory-client`, which 0.26 folded into it; the unused `hickory-server` dependency is gone).
+  Upstream answered the advisory (GHSA-gpvg-fj8x-74vm) that 0.25 is unsupported. 0.26.3's
+  `read_inner` is a loop: the advisory's reproduction returns `Ok` at 1 700 hops on a 2 MiB debug
+  thread, and the longest chain the format allows (8 180 hops) on a 64 KiB one, so the DNS
+  client's UDP path is no longer exposed. `utils::dns_screen` stays in front of every decode site
+  as belt and braces for the stack and as the bound on work, which 0.26.3 does not have: every
+  name entering a chain walks all of it, so a 44 KB DNS-over-TCP message with a 6 000-hop chain
+  and 2 000 owner names entering it costs 2.7 s of a debug worker and 29 ms in release. The
+  question section's `Vec::with_capacity(count)` is still there in 0.26.3; record sections now
+  reserve at most 8. Still compiled in at older versions, and why it is acceptable: `tokio-xmpp`
+  5.0.0 pulls `hickory-resolver`/`hickory-proto` 0.25.2 for its SRV lookups, which NetGet's XMPP
+  client never makes (it dials `DnsConfig::Addr`, a plain socket address, so no DNS message is
+  ever decoded); 6.0.0 moves to 0.26 but also to `xmpp-parsers` 0.23, a breaking upgrade of its
+  own.
 - **`cassandra-protocol` 3.3.0 — three panics in `Envelope::from_buffer`, pre-STARTUP.** The
   tracing flag on a response-direction frame `unwrap`s a 16-byte read (`frame.rs:187`); the
   warning flag decodes a `[string list]` whose negative `i16` count is a capacity-overflow panic

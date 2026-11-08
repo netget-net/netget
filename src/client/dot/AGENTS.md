@@ -8,7 +8,7 @@ responses.
 
 ## Library Choices
 
-### hickory-proto (v0.24)
+### hickory-proto (v0.26)
 
 - **Purpose**: DNS message construction and parsing
 - **Why**: Mature DNS library (formerly trust-dns) with excellent support for all DNS record types

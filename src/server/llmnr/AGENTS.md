@@ -43,13 +43,13 @@ identical; LLMNR only renames three flags:
 | byte 3, bit 7 | `RA` | `Z` | must be zero |
 
 `hickory-proto` has no LLMNR mode, so this is the aliasing the implementation actually uses:
-`conflict_bit()` reads `authoritative()`, `tentative_bit()` reads `recursion_desired()`, and
-`new_response()` writes them back the same way. **Those two helpers in `actions.rs` are the
-only place the aliasing happens** — nowhere else should a reader have to remember that
-`set_recursion_desired` means "tentative".
+`conflict_bit()` reads `metadata.authoritative`, `tentative_bit()` reads
+`metadata.recursion_desired`, and `new_response()` writes them back the same way. **Those two
+helpers in `actions.rs` are the only place the aliasing happens** — nowhere else should a reader
+have to remember that `recursion_desired` means "tentative".
 
 The trap this creates is worth naming: every other DNS builder in this repo calls
-`set_authoritative(true)` on an authoritative answer. Doing that here sets `C`, i.e. tells the
+`metadata.authoritative = true` on an authoritative answer. Doing that here sets `C`, i.e. tells the
 querier a name conflict was detected on the link. `new_response()` clears it explicitly, and
 `tests/server/llmnr/e2e_test.rs` asserts `buf[2] & 0x04 == 0` at the byte level so a copied
 line from `dns/actions.rs` fails rather than silently changing the meaning of every answer.

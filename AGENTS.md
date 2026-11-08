@@ -2407,9 +2407,14 @@ Read before assuming a subsystem is sound:
   each aiming two bytes back — hidden in a NULL record's RDATA — is a frame per two bytes: a
   debug build dies at 1 702 hops, 3.4 KB in one UDP datagram, in five servers at once (release
   frames are small enough that the longest chain the format allows still fits a 2 MiB worker).
-  `src/utils/dns_screen.rs` bounds the chain before every decode. **Anything a decoder
+  `src/utils/dns_screen.rs` bounds the chain before every decode. NetGet is on `hickory-proto`
+  0.26.3 since November 2026, which follows pointers in a loop (upstream's answer to the
+  advisory was that 0.25 is unsupported), so the screen is belt and braces for the stack — and
+  still the only bound on *work*, because every name entering a chain walks all of it: a 44 KB
+  DNS-over-TCP message costs 0.26.3 2.7 s of a debug worker without it. **Anything a decoder
   *follows* — a pointer, an offset, a reference — is depth too**, whether or not the format
-  looks nested. (`docs/planning/IMPROVEMENTS.md` item 48 has the rest of that audit.)
+  looks nested, and a decoder that stopped recursing can still be made to walk.
+  (`docs/planning/IMPROVEMENTS.md` item 48 has the rest of that audit.)
 
 - **Bound the *declared* size, not the remainder.** NATS's `HPUB` limit was applied to
   `total − header`, leaving `header` unbounded — and `header == total` passes every check with

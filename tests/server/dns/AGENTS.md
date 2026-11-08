@@ -4,7 +4,7 @@
 
 **Ten files, 31 tests** since October 2026 (five files and 18 tests added for TCP, EDNS,
 transfers, DNSSEC and their access controls; see the second table). Before that it was **five files, 13 tests**, and the two that carry the maturity rating are the ones this
-overview used to omit. It described only `test.rs` — "uses hickory-client (real DNS client)
+overview used to omit. It described only `test.rs` — "uses hickory-net (real DNS client)
 for protocol correctness" — which is the circular half of the suite and the reason `dig_test.rs`
 had to be written.
 
@@ -14,7 +14,7 @@ had to be written.
 | `kdig_test.rs` | Knot DNS's `kdig` (CZ.NIC) | independent resolver #2, the same record types through a different presentation writer |
 | `llm_failure_test.rs` | raw `UdpSocket` + pcap oracle | both fail-closed paths, and that `ignore_query` stays silence |
 | `bounds_test.rs` | raw `UdpSocket` + the executor | every declared bound, each verified by removal; the pcap oracle over a NOERROR answer |
-| `test.rs` | hickory-client | A, TXT, multi-domain, NXDOMAIN — **circular**, see "Client Library" below |
+| `test.rs` | hickory-net | A, TXT, multi-domain, NXDOMAIN — **circular**, see "Client Library" below |
 
 The October 2026 files run the server **in-process with a script handler** (`zone_support.rs`)
 playing an authoritative server for `example.com.` — 611 records with 600 fillers, so an AXFR
@@ -223,19 +223,21 @@ Client ignores response ❌ timeout
 
 ## Client Library
 
-- **hickory-client v0.24** - Async DNS client library
-    - `AsyncClient` - High-level DNS query interface
-    - `UdpClientStream` - UDP transport for DNS queries
+- **hickory-net v0.26** - Async DNS client library (hickory-net's successor)
+    - `Client` - High-level DNS query interface (`ClientHandle::query`)
+    - `UdpClientStream` - UDP transport for DNS queries, built with `with_max_retries(1)` so each
+      query is one datagram: 0.26 otherwise resends after 333 ms, and every resend would be
+      another `dns_query` event for the mocked model
     - Handles DNS wire protocol automatically
     - Validates response format
 
-**Why hickory-client?**:
+**Why hickory-net?**:
 
 1. Real DNS protocol validation (not just "any UDP response")
 2. Async/await compatible with Tokio
 
 Point 3 used to read "same library family as server-side hickory-proto", listed as an
-advantage. It is the opposite: hickory-client decodes with the same codec
+advantage. It is the opposite: hickory-net decodes with the same codec
 hickory-proto encoded with, so on its own this suite proves the wire format is
 self-consistent, not that it is correct. That is the circularity that kept `rss` at
 Experimental until `feed-rs` did its parsing.
@@ -279,7 +281,7 @@ they fail, loudly and by name, which is the design.
 
 ## Test Cases
 
-The four below are `test.rs`, the hickory-client file. **They are not the evidence the maturity
+The four below are `test.rs`, the hickory-net file. **They are not the evidence the maturity
 rating rests on** — see the table in Test Overview. This section listed only these four for as
 long as the other four files have existed, which made the circular suite look like the whole of
 the coverage; the rest are summarised after them.
@@ -288,7 +290,7 @@ the coverage; the rest are summarised after them.
 
 - **Prompt**: "listen on port {port} via dns. Respond to all A record queries for example.com with IP address
   93.184.216.34"
-- **Client**: Queries example.com A record using hickory-client
+- **Client**: Queries example.com A record using hickory-net
 - **Expected**: exactly one A record holding 93.184.216.34, RCODE NOERROR
 - **Purpose**: Tests basic IPv4 address resolution
 - **Validation**: `answer_a()` asserts one A record by value
@@ -407,9 +409,9 @@ would complicate assertions and increase LLM calls.
 
 ## Performance Notes
 
-### Why hickory-client?
+### Why hickory-net?
 
-Originally considered using raw UDP sockets (like DHCP/NTP tests), but hickory-client provides several advantages:
+Originally considered using raw UDP sockets (like DHCP/NTP tests), but hickory-net's client provides several advantages:
 
 - Validates DNS wire protocol compliance
 - Automatic query ID generation and matching
@@ -468,7 +470,7 @@ improvement, which is not a thing a test can hold.
 
 - [RFC 1034: DNS Concepts](https://datatracker.ietf.org/doc/html/rfc1034)
 - [RFC 1035: DNS Implementation](https://datatracker.ietf.org/doc/html/rfc1035)
-- [hickory-client Documentation](https://docs.rs/hickory-client/latest/hickory_client/)
+- [hickory-net Documentation](https://docs.rs/hickory-net/latest/hickory_net/)
 - [DNS Response Codes (IANA)](https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-6)
 
 ## Two resolvers, and why the second one exists
@@ -481,8 +483,8 @@ fails naming its package when the binary is absent:
 | `dig_test.rs` | `dig` | ISC BIND |
 | `kdig_test.rs` | `kdig` | Knot DNS, CZ.NIC |
 
-`test.rs` covers the same ground with hickory-client, which is useful and **circular on its
-own**: hickory-client decodes with the same codec hickory-proto encoded with, so it proves the
+`test.rs` covers the same ground with hickory-net, which is useful and **circular on its
+own**: hickory-net decodes with the same codec hickory-proto encoded with, so it proves the
 wire format is self-consistent rather than correct.
 
 `dig` already fixed that. The second resolver is here because **one client can agree with one

@@ -13,13 +13,14 @@ RFC 5936 (AXFR), RFC 1995 (IXFR)
 
 ## Library Choices
 
-- **hickory-client** (formerly trust-dns-client) - DNS client library
+- **hickory-net** 0.26 (the hickory-dns networking crate; hickory-client's `Client` and
+  `UdpClientStream` live here since 0.26) - DNS client library
     - Async DNS client with UDP transport
     - Supports all standard DNS record types (A, AAAA, MX, TXT, CNAME, NS, SOA, PTR, SRV, etc.)
     - Handles DNS protocol encoding/decoding automatically
-    - Provides high-level query API with RecordType enums
+- **hickory-proto** 0.26 - the messages, records and RecordType enums
 
-**Rationale**: hickory-client (part of hickory-dns ecosystem) is the de facto standard for DNS in Rust. It provides a
+**Rationale**: hickory (formerly trust-dns) is the de facto standard for DNS in Rust. It provides a
 robust, async-first client implementation that abstracts away the DNS wire protocol complexity. The LLM only needs to
 provide semantic query parameters (domain, type) and can work with structured response data (answers with type-specific
 fields).
@@ -73,16 +74,19 @@ and the OPT record carries the DO bit when `dnssec` is true.
 
 ### 5. Connection Model
 
-Queries go over one UDP socket (hickory-client's `UdpClientStream`); each is independent.
+Queries go over hickory-net's `UdpClientStream`, built with `with_max_retries(1)`: one datagram
+per query. hickory 0.26's stream otherwise resends an unanswered query every 333 ms (up to three
+sends), and a server answering through its model would see each query two or three times. Each
+query is independent.
 
 A **zone transfer** (`send_dns_zone_transfer`) opens a TCP connection of its own to the same
 server, sends hickory-proto's AXFR request (IXFR when given a serial) and reads the answer one
-length-prefixed message at a time straight off the socket. It does not use hickory-client's
+length-prefixed message at a time straight off the socket. It does not use hickory-net's
 `zone_transfer`: that reads through a multiplexer which hands responses over with `try_send`
 into a 32-slot channel and drops what does not fit, so a burst of messages lost most of them
 and the transfer still reported success (109 of 202 in the test below). Read directly, a slow
 reader only slows the server down. `XfrEnd` decides where the transfer ends with
-hickory-client's own rules (the first SOA's serial; AXFR ends at the next SOA; IXFR on an even
+hickory's own rules (the first SOA's serial; AXFR ends at the next SOA; IXFR on an even
 count of SOAs closing on that serial); a transfer that does not open with an SOA, or carries
 records after its closing SOA, is an error, and every message must carry the request's id.
 The server address comes from the client's own `remote_addr`. A transfer is abandoned with an
@@ -310,7 +314,7 @@ Flow:
 ### 5. No Query Pipelining
 
 - Queries are executed sequentially in the LLM loop
-- hickory-client supports concurrent queries internally
+- hickory-net supports concurrent queries internally
 - But LLM must explicitly send multiple actions to parallelize
 
 ## Performance Characteristics
@@ -324,7 +328,7 @@ Flow:
 ### Throughput
 
 - **Limited by LLM**: ~0.2-0.5 queries per second
-- hickory-client can handle thousands of QPS, but LLM is bottleneck
+- hickory-net can handle thousands of QPS, but LLM is bottleneck
 - Concurrent queries require LLM to generate multiple actions
 
 ### Scripting Compatibility
@@ -343,28 +347,27 @@ With scripting enabled:
 
 ## Implementation Details
 
-### hickory-client Integration
+### hickory-net Integration
 
 ```rust
-// Create UDP client stream
-let stream = UdpClientStream::<tokio::net::UdpSocket>::new(dns_server);
-let (client, bg) = AsyncClient::connect(stream).await?;
+// One datagram per query (see "Connection Model")
+let stream = UdpClientStream::builder(dns_server, TokioRuntimeProvider::new())
+    .with_max_retries(1)
+    .build();
+let (client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
 
-// Spawn background task
+// Spawn (and register) the transport driver
 tokio::spawn(bg);
 
-// Send query
-let response = client.query(name, DNSClass::IN, RecordType::A).await?;
+// Send a hand-built query (RD and the EDNS DO bit are the action's)
+let response = client.send(DnsRequest::new(message, DnsRequestOptions::default()))
+    .first_answer()
+    .await?;
 
-// Parse answers
-for answer in response.answers() {
-    match answer.record_type() {
-        RecordType::A => {
-            if let Some(a) = answer.data().and_then(|d| d.as_a()) {
-                println!("A: {}", a);
-            }
-        }
-        // ... other types
+// Read answers: hickory 0.26 messages and records expose public fields
+for answer in &response.answers {
+    if let RData::A(a) = &answer.data {
+        println!("A: {}", a);
     }
 }
 ```
@@ -372,7 +375,7 @@ for answer in response.answers() {
 ### Error Handling
 
 - **Connection errors**: Reported as client status error
-- **Query timeout**: hickory-client handles with default timeout (5 seconds)
+- **Query timeout**: hickory-net's UDP stream times out after 5 seconds
 - **NXDOMAIN/SERVFAIL**: Reported in response_code, not as error
 - **Invalid domain**: Parsing error before query sent
 
@@ -394,7 +397,7 @@ this repository forbids external endpoints.
 
 - [RFC 1034: Domain Names - Concepts and Facilities](https://datatracker.ietf.org/doc/html/rfc1034)
 - [RFC 1035: Domain Names - Implementation and Specification](https://datatracker.ietf.org/doc/html/rfc1035)
-- [hickory-dns Documentation](https://docs.rs/hickory-client/latest/hickory_client/)
+- [hickory-net Documentation](https://docs.rs/hickory-net/latest/hickory_net/)
 - [DNS Record Types (IANA)](https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-4)
 
 ## Command channel (injected actions)
@@ -404,7 +407,7 @@ dashboard's `[ send ]` — can execute an action inside the running client. The 
 registered **before** the `dns_connected` LLM call, which a `*` → manual routing rule can park
 for minutes.
 
-The hickory `AsyncClient` moved out of the conversation task into an `Arc<Mutex<_>>` created in
+The hickory `Client` moved out of the conversation task into an `Arc<Mutex<_>>` created in
 `connect_with_llm_actions`, so the command loop queries through the **same** connected resolver
 the LLM path uses rather than opening one of its own.
 

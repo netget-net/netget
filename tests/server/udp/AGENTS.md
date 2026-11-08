@@ -22,7 +22,7 @@ responses.
 
 **Note**: This is the bare minimum for UDP testing. Most UDP protocol testing happens in dedicated protocol tests:
 
-- DNS: `tests/server/dns/` (uses hickory-client)
+- DNS: `tests/server/dns/` (uses hickory-net's client)
 - DHCP: `tests/server/dhcp/` (uses dhcproto)
 - NTP: `tests/server/ntp/` (uses rsntp)
 - SNMP: `tests/server/snmp/` (uses snmp crate + snmpget)

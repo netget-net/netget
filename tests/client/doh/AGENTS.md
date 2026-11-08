@@ -170,7 +170,7 @@ Unlike other protocol tests that spin up local servers, DoH tests use **real pub
 
 **Mitigation**:
 
-- hickory-client handles TLS validation automatically
+- reqwest (rustls) handles TLS validation automatically
 - Tests verify HTTPS connection works
 - No self-signed certificate issues
 
@@ -289,7 +289,7 @@ To test a specific DoH server, modify the test URL:
 - [RFC 8484: DNS Queries over HTTPS (DoH)](https://datatracker.ietf.org/doc/html/rfc8484)
 - [Google Public DNS DoH](https://developers.google.com/speed/public-dns/docs/doh)
 - [Cloudflare DoH](https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/)
-- [hickory-client DoH Documentation](https://docs.rs/hickory-client/latest/hickory_client/)
+- [hickory-proto Documentation](https://docs.rs/hickory-proto/latest/hickory_proto/)
 
 ## `command_channel_test.rs`
 
