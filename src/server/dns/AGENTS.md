@@ -180,6 +180,12 @@ Each DNS query creates a "connection" entry in ServerInstance:
 
 ### 6. TCP, EDNS, transfers and DNSSEC (October 2026)
 
+**One answer path, three callers.** `Reply::resolve` turns what the model answered into
+messages, and `Reply::finish` finishes one; DoT and DoH call the same two through
+`StreamQuery` (TCP limits, no signer), so a fix here is a fix there. hickory's encoder does not
+fail at 65535 octets — it stops writing records, sets TC and returns `Ok` — so over TCP
+`finish` refuses a TC it did not ask for with SERVFAIL rather than send a partial NOERROR.
+
 **One answer path, two transports.** `mod.rs::answer` parses the query and decides; the UDP
 loop sends its first message, the TCP loop (`tcp_connection`) frames every message with a
 two-byte length (RFC 1035 §4.2.2) and answers queries on a connection in order. TCP binds the
@@ -425,6 +431,7 @@ with the bound removed — a bound nobody tested is a comment.
 | open TCP connections per address | 8, `tcp_connections_per_ip` 1-64 | `MAX_TCP_CONNECTIONS_PER_IP` | `security_test.rs`: the 9th from 127.0.0.1 is closed unread |
 | full zone over UDP | the SOA alone | `build_axfr` | `security_test.rs`: a zone that fits is still not sent |
 | model-supplied bytes | must parse as DNS, else SERVFAIL | `query`, `transfer` | `security_test.rs`: 12 and 70 012 unparseable bytes, UDP and TCP |
+| an answer over TCP | 65535 octets, else SERVFAIL (`fail_closed_oversize_answer`) | `Reply::finish` | `security_test.rs`: a parseable ~80 KB answer is TC over UDP and SERVFAIL over TCP |
 | TCP idle | 10 s, `tcp_idle_timeout_secs` 1-300 | `DEFAULT_TCP_IDLE_TIMEOUT` | `transport_bounds_test.rs` at 1 s |
 | UDP answer | 512 / EDNS size / at most 4096 | `PLAIN_UDP_LIMIT`, `MAX_UDP_RESPONSE` | `transport_bounds_test.rs` |
 | records in one answer | 100 | `MAX_ANSWER_RECORDS` | the executor |

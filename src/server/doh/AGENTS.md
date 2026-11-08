@@ -5,19 +5,20 @@
 DNS-over-HTTPS server implementing RFC 8484 for secure DNS queries over HTTPS transport. The LLM controls DNS responses
 while NetGet handles HTTPS server operations, TLS encryption, and HTTP/2 protocol.
 
-**Status**: Beta (Core Protocol)
+**Status**: **Stable**, set November 2026. See "Maturity: the six conditions" at the foot of
+this file for what was checked and what the rating does *not* cover.
 **RFC**: RFC 8484 (DNS Queries over HTTPS), RFC 1035 (DNS), RFC 7540 (HTTP/2)
 **Port**: 443 (HTTPS, typically), declared as `PrivilegeRequirement::PrivilegedPort(443)`
 
-### What "Beta" covers here
+### What "Stable" covers here
 
-DoH contributes the HTTPS/HTTP2 transport and the RFC 8484 request encodings;
-every DNS semantic - the action set, action execution, response construction -
-is the DNS protocol's, reached through delegation (see below). Both the GET
-(base64url `?dns=`) and POST (`application/dns-message` body) paths are
-exercised by `tests/server/doh/e2e_test.rs` against **reqwest** (hyper + rustls under the hood).
-Not covered: HTTP/1.1, CA-signed or custom certificates, rate limiting, caching,
-EDNS0.
+DoH contributes the HTTPS/HTTP2 transport and the RFC 8484 request encodings; every DNS
+semantic — the action set, action execution, and what is sent after the model answers — is the
+DNS server's, reached through delegation and `dns::StreamQuery` (see below). Two independent
+resolvers, kdig and dig, complete GET and POST sessions over ALPN-negotiated HTTP/2 and read
+every record type the actions write; every bound has a test (`tests/server/doh/bounds_test.rs`,
+`connection_bounds_test.rs`). Not covered: HTTP/1.1, CA-signed or custom certificates, rate
+limiting, caching.
 
 ### ALPN
 
@@ -37,8 +38,7 @@ its own rustls `ClientConfig` that does not offer `h2`, so it simply sends HTTP/
 `server_advertises_h2_alpn` covers the property directly instead, and also asserts the shared
 default is still ALPN-less so this cannot be "fixed" by changing it under the other three.
 
-Still unproven end to end: that a client which negotiates via ALPN completes a real DoH query.
-That needs a client which offers `h2` while trusting a self-signed certificate.
+kdig and dig both negotiate `h2` by ALPN and complete real queries (`real_client_test.rs`).
 
 ## Library Choices
 
@@ -90,10 +90,11 @@ Connection flow:
 2. Perform TLS handshake using self-signed certificate
 3. Establish HTTP/2 connection over TLS
 4. Handle HTTP requests (GET or POST) to `/dns-query` endpoint
-5. Extract DNS query from request (URL param or body)
-6. Parse DNS query with hickory-proto
-7. Send to LLM for response
-8. Return DNS response as HTTP body with `application/dns-message` content-type
+5. Extract DNS query from request (URL param or body, the body capped at `MAX_DOH_BODY_BYTES`)
+6. Screen and parse it with `dns_screen::decode_dns_message`; one that does not decode is `400`
+7. Answer a query with no question FORMERR; send any other to `call_llm`
+8. Turn the answer into at most one message with `dns::StreamQuery` — the DNS server's own
+   rules, see "Failure behaviour" below — and return it as a `200 application/dns-message`
 
 ### 3. Two HTTP Methods Supported
 
@@ -158,7 +159,8 @@ Event parameters:
 
 ### Available Actions
 
-DoH reuses all DNS actions, and only those:
+DoH offers `DnsProtocol::query_actions()`, the DNS server's query vocabulary without the
+zone-transfer actions:
 
 - `send_dns_a_response` - Return IPv4 address (A record)
 - `send_dns_aaaa_response` - Return IPv6 address (AAAA record)
@@ -166,14 +168,13 @@ DoH reuses all DNS actions, and only those:
 - `send_dns_txt_response` - Return text record
 - `send_dns_cname_response` - Return canonical name alias
 - `send_dns_nxdomain` - Domain does not exist
+- `send_dns_records` - Any number of records in any section, any RCODE
+- `send_dns_refused` - REFUSED, echoing the question
 - `send_dns_response` - Hand-assembled response, hex-encoded (escape hatch)
 - `ignore_query` - Answered as HTTP 404 rather than by dropping the request,
   since HTTP requires a response
 
 See `src/server/dns/AGENTS.md` for detailed action documentation.
-
-`dns_response` was previously listed here; no such action exists - the real name
-is `send_dns_response`.
 
 As with plain DNS, a **static** event handler cannot serve DoH answers: it
 cannot echo the client's random transaction ID or the queried name. Use script
@@ -232,7 +233,8 @@ a caller that asked for port 0 would be told the port was 0. The accept loop's
 - DoH connections are stateless at application level (REST API)
 - HTTP/2 manages connection multiplexing
 - Each request is independent (no state between requests)
-- No connection state stored in ServerInstance
+- Each connection is a `ConnectionState` in `ServerInstance.connections` (see the lifecycle
+  above); no protocol-specific state is kept in it
 
 ## Known Limitations
 
@@ -265,10 +267,10 @@ not fixed), but it does mean the server cannot host anything else alongside DoH.
 
 All limitations from standard DNS protocol apply:
 
-- Single answer per action (use `send_dns_response` for multiple)
-- Limited record type support
-- No DNSSEC
+- No DNSSEC signing (the DNS server's `dnssec_zone` is not offered here)
+- No zone transfers
 - No recursive resolution
+- An EDNS query gets an OPT back; no option is acted on
 - See `src/server/dns/AGENTS.md` for full list
 
 ### 5. No Rate Limiting
@@ -307,25 +309,57 @@ so `stop_server` aborts them; unregistered, they outlived the server.
 
 **Future Enhancement**: Add cache-control headers based on DNS TTL.
 
-## Failure behaviour: SERVFAIL in a 200, not a 5xx
+## Bounds
 
-When `call_llm` returns `Err`, the query is answered with a **DNS SERVFAIL message**
-carried in a `200 application/dns-message` - the same answer plain DNS and DoT put on
-the wire, built by the same `dns::actions::build_servfail`, so the transaction id and
-question section are echoed and the client accepts it.
+Every number this server enforces, and the test that fails when it is removed
+(`tests/server/doh/bounds_test.rs` unless named):
 
-RFC 8484 §4.2.1 makes 200 the status for "this HTTP transaction carried a DNS
-message"; whether that message is an answer or a failure is DNS's business. This used
-to return `500 "LLM error"`, which tells a DoH client the *resolver endpoint* is
-broken and makes real clients mark the server down and fail over - a much heavier
-reaction than the transient backend hiccup that caused it.
+| bound | value | direction | test |
+|---|---|---|---|
+| `MAX_CONNECTIONS` | 256 | accept | `connection_bounds_test.rs`: the 257th's handshake never starts; a closed peer's slot comes back |
+| `TLS_HANDSHAKE_TIMEOUT` | 10 s | inbound | a silent peer and a half-sent ClientHello are open at 6 s and closed by 15 s |
+| `idle_timeout_secs` (`IDLE_BETWEEN_QUERIES_TIMEOUT`) | 300 s | inbound | `connection_bounds_test.rs`: no preface, and an answered connection gone quiet, closed at a 3 s bound; a query parked for a human keeps its connection past it |
+| `GOAWAY_DRAIN_TIMEOUT` | 5 s | **outbound** | a peer that floods PINGs and never reads is let go at the idle bound plus the drain |
+| `MAX_DOH_BODY_BYTES` | 65535 | inbound | a POST of exactly 65535 octets is answered; 65536 is `413` and raises no event |
+| `dns_screen` | per message | inbound | the DNS server's `compression_chain_test.rs`; here an undecodable body is `400` |
+| hickory's encoder | 65535 octets | **outbound** | a ~80 KB answer is SERVFAIL in a 200 |
+| one reply per query | | **outbound** | an answer with two A actions is answered with the first |
 
-The HTTP-level failure is reserved for the case where no DNS message can be built at
-all: `503` + `Retry-After` for `WireFailure::Overloaded`, `500` for `Unavailable`,
-carrying the category text and never the error itself. Which of the two applied is
-recorded in the log as `decision=fail_closed_llm_overload` /
-`decision=fail_closed_llm_error`, the way `src/server/radius/` does it, because
-SERVFAIL is the same bytes whatever went wrong.
+The GET `dns=` parameter rides in the request's `:path`, which hyper's HTTP/2 server bounds
+with its own header-list limit (16 KiB by default); NetGet declares no number of its own for it.
+
+## Failure behaviour: a DNS message in a 200, not a 5xx
+
+DoH answers through `dns::StreamQuery`, which is the DNS server's own `Reply::resolve` and
+`Reply::finish` with the TCP limits, so the outcomes and their `decision=` tags are the DNS
+server's (`src/server/dns/AGENTS.md`, "Failure behaviour"), logged with `DoH` in place of `DNS`:
+
+| outcome | HTTP | body | `decision=` |
+|---|---|---|---|
+| the first DNS message an action produced | 200 | that message, OPT echoed for an EDNS query | `model_answer` |
+| `ignore_query` | 404 | `Query ignored` | `model_silent` |
+| an answer with no sendable action | 200 | SERVFAIL | `fail_closed_no_action` |
+| `send_dns_response` bytes that are not a DNS message | 200 | SERVFAIL | `fail_closed_unparseable_answer` |
+| an answer too large to encode | 200 | SERVFAIL | `fail_closed_no_action` ("cannot encode") |
+| the backend failed / was overloaded | 200 | SERVFAIL | `fail_closed_llm_error` / `fail_closed_llm_overload` |
+| a query with no question | 200 | FORMERR, from the server | `spec_reply` |
+| a body that does not decode, a bad `dns=` encoding, a wrong media type | 400 | text | — |
+| a body over `MAX_DOH_BODY_BYTES` | 413 | text | — |
+
+RFC 8484 §4.2.1 makes 200 the status for "this HTTP transaction carried a DNS message";
+whether that message is an answer or a failure is DNS's business. A 5xx tells a DoH client the
+*resolver endpoint* is broken, and real clients mark the server down and fail over — a much
+heavier reaction than a transient backend hiccup. The HTTP-level failure is reserved for a
+backend failure where not even a SERVFAIL could be built: `503` + `Retry-After` for
+`WireFailure::Overloaded`, `500` for `Unavailable`, carrying the category text and never the
+error itself.
+
+**Until November 2026 three of those rows were different.** DoH had its own copy of the answer
+loop: an answer with no sendable action got `500 "No response generated"` — the 5xx the
+paragraph above argues against, for the case most likely to happen; `send_dns_response`'s bytes
+went out unparsed as `application/dns-message`; and a query with no question was `400 "No DNS
+queries"`, though it is a well-formed DNS message the DNS server answers FORMERR.
+`bounds_test.rs` drives every row.
 
 ## Example Prompts
 
@@ -538,34 +572,54 @@ quietly stale.
 
 ## Verified
 
-**State: Beta**, on **two** independent peers as of September 2026:
-
 | test | peer | what it proves |
 |---|---|---|
-| `tests/server/doh/real_client_test.rs` | `kdig` (Knot DNS 3.6, C) | a third-party resolver completes both RFC 8484 encodings, negotiating `h2` over ALPN |
-| `tests/server/doh/e2e_test.rs` | `reqwest` (hyper + rustls) | the HTTP/2 and TLS transport, the 200 status and Content-Type, a mixed-case media type with a charset parameter |
+| `tests/server/doh/real_client_test.rs` | `kdig` (Knot DNS 3.6, GnuTLS) | POST and GET for two names, then AAAA, MX, TXT, CNAME and NXDOMAIN, negotiating `h2` by ALPN; decrypted by the pcap oracle |
+| `tests/server/doh/real_client_test.rs` | `dig` (ISC BIND 9.20, OpenSSL) | the same with dig's defaults, EDNS and a COOKIE offered; the echoed OPT read back |
+| `tests/server/doh/e2e_test.rs` | reqwest (hyper + rustls) | the HTTP/2 transport, status and `Content-Type` — generic HTTP, so not DNS evidence |
 
-Neither is `#[ignore]`d; the kdig test **fails** naming `brew install knot` rather than skipping.
+Neither real-client test is `#[ignore]`d; each **fails** naming its package when the binary
+is absent. Verified by breaking it: a fixed transaction id makes both resolvers discard the
+reply; advertising `http/1.1` instead of `h2` fails kdig's handshake with
+`TLS, handshake failed (A TLS fatal alert has been received.)`.
 
-**The second one alone was half circular.** reqwest proves an HTTP server answers, not that the
-DNS on top is right — the root `AGENTS.md` says exactly that about generic HTTP clients — and
-the DNS message is decoded with **hickory-proto, the codec this server encodes with**. ALPN was
-unproven for a related reason: that client uses `http2_prior_knowledge()`, which skips ALPN
-entirely, so the `h2` advertisement could have been anything.
+`+https` takes `[authority][/path]`, and the authority becomes the TLS SNI: an IP literal there
+is rejected by rustls, and a name switches kdig to a validating profile a self-signed
+certificate cannot pass. The tests pass the path alone.
 
-Both are now covered, and both were verified by breaking them:
+**Unproven:** certificate validation of any kind, and client auth.
 
-- Answering with a fixed transaction id instead of the client's → kdig discards the reply and
-  the test fails.
-- Advertising `http/1.1` instead of `h2` → the handshake fails with kdig's own alert,
-  `TLS, handshake failed (A TLS fatal alert has been received.)`.
+## Maturity: the six conditions
 
-**Two things about driving kdig here, both of which cost a debugging cycle.** `+https` takes
-`[authority][/path]`, and the authority becomes the TLS SNI as well as the `:authority` header.
-An IP literal there is rejected by rustls outright, which surfaces as a fatal alert that looks
-exactly like a cipher or ALPN mismatch. A *name* there instead switches kdig to a validating
-profile, which a self-signed certificate cannot satisfy. Passing the path alone keeps the
-opportunistic profile, which is also what the DoT test relies on.
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source in
+November 2026 rather than inherited. **The rating covers the surface this server implements**:
+RFC 8484 over HTTP/2 with ALPN `h2`, both request encodings, a self-signed certificate, and the
+DNS server's query actions and answer rules. HTTP/1.1, certificate provisioning, client
+authentication, HTTP caching headers and path routing are not implemented, and the DNS server's
+DNSSEC signing and zone transfers are not offered here.
 
-**Unproven:** certificate validation of any kind, client auth, and record types beyond A.
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — `kdig` (Knot DNS, GnuTLS) and `dig` (ISC BIND, OpenSSL), each negotiating `h2` by ALPN and hard-failing when absent; both encodings for two names, then AAAA, MX, TXT, CNAME and NXDOMAIN |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — kdig's sessions cross `recording_relay` with `SSLKEYLOGFILE`; tshark decrypts them and must dissect `http2` and `dns` |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes, as of this pass** — `dns_message`, rebuilt this pass (nightly-2025-12-04, the `-undefined,dynamic_lookup` link flag, `fuzz/Cargo.lock` seeded from the root) and run `-max_total_time=300 -timeout=25` from the committed seeds, `pointer_chain_bomb` among them: 137 196 inputs in 301 s, clean; the corpus grew from 7 to 742 inputs (kept out of the tree). The framing around it is hyper's HTTP/2 and a base64url decode, so this decoder is the one peer bytes reach |
+| 4 | every declared bound has a test | **yes, as of this pass** — the Bounds table above, each verified by removal |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/doh/AGENTS.md`, the latter rewritten |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/doh/` is empty, and kdig and dig fail rather than skip |
 
+**Condition 1 rested on one client.** "Verified" below named two peers, and the second was
+reqwest — a generic HTTP client, which the root `AGENTS.md` rules out as evidence for a protocol
+carried on HTTP — with the DNS decoded by hickory-proto, the server's own codec. kdig was the
+only independent DoH client, for A records. `dig +https` / `+https-get` (BIND 9.20) is the
+second, and both now read every record type the actions write.
+
+**Condition 4 found two bounds nothing tested** — the handshake deadline and the GOAWAY drain —
+and **condition 5 found the failure section's promise broken** for the most likely failure: a
+model that answers without a sendable action got `500 "No response generated"`, the 5xx the
+section explains a DoH client reads as the endpoint being down. DoH had its own answer loop;
+it now answers through `dns::StreamQuery` (see "Failure behaviour"). Also corrected: the action
+list, "no connection state stored in ServerInstance", the inherited-limitations list, and the
+"Verified" section's claim that reqwest made a second independent peer.
+
+**What the oracle cannot see here** is the GET request's query (base64url in `:path`) and
+anything about certificate validation: neither client authenticates the self-signed certificate.

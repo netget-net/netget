@@ -519,6 +519,7 @@ impl DnsServer {
             dnssec_ok,
             udp_limit,
             transport,
+            label: "DNS",
         };
 
         let Some(question) = query.queries.first().cloned() else {
@@ -598,53 +599,13 @@ impl DnsServer {
             shared.protocol.as_ref(),
         )
         .await;
-        let execution = match result {
-            Ok(r) => r,
-            Err(e) => return reply.servfail_for_llm_error(&e, peer_addr, connection_id, log),
-        };
-        for message in &execution.messages {
-            log.info(message);
-        }
-        // Three outcomes stay distinct, and two of them look identical on the wire: an answer
-        // was written (model_answer), `ignore_query` (model_silent, a real decision), and
-        // nothing usable came back (fail_closed_no_action) — a model answering only with
-        // common actions, or with a DNS action `execute_action` refused.
-        let mut model_chose_silence = false;
-        for result in execution.protocol_results {
-            match result {
-                ActionResult::NoAction => model_chose_silence = true,
-                ActionResult::Output(bytes) => {
-                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(&bytes) else {
-                        // Only `send_dns_response`'s hand-assembled bytes can fail here. Bytes
-                        // that are not a DNS message never go out: unparsed, they would skip
-                        // truncation and could be any length at all.
-                        log.error(format!(
-                            "DNS answer to the query from {peer_addr} is not a DNS message \
-                             ({} bytes); answering SERVFAIL \
-                             decision=fail_closed_unparseable_answer",
-                            bytes.len()
-                        ));
-                        return reply.servfail();
-                    };
-                    log.debug(format!("DNS query from {peer_addr} decision=model_answer"));
-                    log.info(format!("DNS response to {peer_addr}"));
-                    return reply.finish(message, shared.signer.as_deref(), log);
-                }
-                _ => {}
-            }
-        }
-        if model_chose_silence {
-            log.debug(format!(
-                "DNS deliberately sending nothing to {peer_addr} decision=model_silent"
-            ));
-            return Vec::new();
-        }
-        log.error(format!(
-            "DNS no usable action for the query from {peer_addr} ({connection_id}); answering \
-             SERVFAIL decision=fail_closed_no_action (failures: {:?})",
-            execution.failures
-        ));
-        reply.servfail()
+        reply.resolve(
+            result,
+            shared.signer.as_deref(),
+            peer_addr,
+            connection_id,
+            log,
+        )
     }
 
     async fn transfer(
@@ -907,6 +868,80 @@ struct Reply<'a> {
     dnssec_ok: bool,
     udp_limit: usize,
     transport: Transport,
+    /// The protocol name the log lines carry: `DNS`, or the transport answering through
+    /// [`StreamQuery`].
+    label: &'static str,
+}
+
+/// The DNS server's answer rules, for a protocol that carries DNS messages over a stream of its
+/// own — DoT (RFC 7858) and DoH (RFC 8484).
+///
+/// Those servers delegate their actions to [`DnsProtocol`], so the model is offered the same
+/// vocabulary on all three. What they did not share was what happens *after* the model answers,
+/// and each had re-written it with a different defect: DoT wrote nothing at all when the answer
+/// held no sendable action (so the resolver waited out its timeout), sent every message an
+/// answer produced (two replies with one id on a pinned connection), and put bytes that were not
+/// a DNS message on the wire; DoH answered the same three cases with an HTTP 500, a first-wins
+/// reply and unchecked bytes. This is the DNS server's own path — `Reply::resolve` and
+/// `Reply::finish` with the TCP limits (no truncation, the OPT echoed for an EDNS query) — so
+/// the three answer alike and a fix to one is a fix to all.
+pub struct StreamQuery<'a> {
+    reply: Reply<'a>,
+}
+
+impl<'a> StreamQuery<'a> {
+    /// `label` names the transport in the log lines (`"DoT"`, `"DoH"`).
+    pub fn new(query: &'a DnsMessage, label: &'static str) -> Self {
+        let dnssec_ok = query.edns.as_ref().is_some_and(|e| e.flags().dnssec_ok);
+        Self {
+            reply: Reply {
+                query,
+                edns: query.edns.is_some(),
+                dnssec_ok,
+                udp_limit: u16::MAX as usize,
+                transport: Transport::Tcp,
+                label,
+            },
+        }
+    }
+
+    /// FORMERR for a query with no question, which the DNS server answers without the model
+    /// (`decision=spec_reply`): there is nothing to ask it about, and a reply has to say so —
+    /// the peer is waiting on this transaction id. `None` when the query has a question.
+    pub fn formerr_without_question(
+        &self,
+        peer_addr: SocketAddr,
+        log: &Log<'_>,
+    ) -> Option<Vec<u8>> {
+        if !self.reply.query.queries.is_empty() {
+            return None;
+        }
+        log.warn(format!(
+            "{} query from {peer_addr} has no question; FORMERR decision=spec_reply",
+            self.reply.label
+        ));
+        self.reply
+            .rcode_only(ResponseCode::FormErr)
+            .into_iter()
+            .next()
+    }
+
+    /// The message to send for what `call_llm` returned, or `None` when the model chose
+    /// `ignore_query` (`decision=model_silent`). Every other outcome is a message: the answer,
+    /// or SERVFAIL tagged `fail_closed_llm_error`, `fail_closed_llm_overload`,
+    /// `fail_closed_unparseable_answer` or `fail_closed_no_action`.
+    pub fn answer(
+        &self,
+        result: Result<crate::llm::actions::executor::ExecutionResult>,
+        peer_addr: SocketAddr,
+        connection_id: ConnectionId,
+        log: &Log<'_>,
+    ) -> Option<Vec<u8>> {
+        self.reply
+            .resolve(result, None, peer_addr, connection_id, log)
+            .into_iter()
+            .next()
+    }
 }
 
 impl Reply<'_> {
@@ -935,6 +970,72 @@ impl Reply<'_> {
         message.to_vec().map(|b| vec![b]).unwrap_or_default()
     }
 
+    /// Turn what the model (or a handler) answered into the messages to send: the first DNS
+    /// message an action produced, finished; nothing for `ignore_query`; SERVFAIL for a backend
+    /// failure, for bytes that are not a DNS message, and for an answer with nothing sendable.
+    ///
+    /// The one place those rules live, so the DNS server and the transports that carry its
+    /// messages over a stream of their own (DoT, DoH, through [`StreamQuery`]) answer alike.
+    fn resolve(
+        &self,
+        result: Result<crate::llm::actions::executor::ExecutionResult>,
+        signer: Option<&ZoneSigner>,
+        peer_addr: SocketAddr,
+        connection_id: ConnectionId,
+        log: &Log<'_>,
+    ) -> Vec<Vec<u8>> {
+        let label = self.label;
+        let execution = match result {
+            Ok(r) => r,
+            Err(e) => return self.servfail_for_llm_error(&e, peer_addr, connection_id, log),
+        };
+        for message in &execution.messages {
+            log.info(message);
+        }
+        // Three outcomes stay distinct, and two of them look identical on the wire: an answer
+        // was written (model_answer), `ignore_query` (model_silent, a real decision), and
+        // nothing usable came back (fail_closed_no_action) — a model answering only with
+        // common actions, or with a DNS action `execute_action` refused.
+        let mut model_chose_silence = false;
+        for result in execution.protocol_results {
+            match result {
+                ActionResult::NoAction => model_chose_silence = true,
+                ActionResult::Output(bytes) => {
+                    let Ok(message) = crate::utils::dns_screen::decode_dns_message(&bytes) else {
+                        // Only `send_dns_response`'s hand-assembled bytes can fail here. Bytes
+                        // that are not a DNS message never go out: unparsed, they would skip
+                        // truncation and could be any length at all.
+                        log.error(format!(
+                            "{label} answer to the query from {peer_addr} is not a DNS message \
+                             ({} bytes); answering SERVFAIL \
+                             decision=fail_closed_unparseable_answer",
+                            bytes.len()
+                        ));
+                        return self.servfail();
+                    };
+                    log.debug(format!(
+                        "{label} query from {peer_addr} decision=model_answer"
+                    ));
+                    log.info(format!("{label} response to {peer_addr}"));
+                    return self.finish(message, signer, log);
+                }
+                _ => {}
+            }
+        }
+        if model_chose_silence {
+            log.debug(format!(
+                "{label} deliberately sending nothing to {peer_addr} decision=model_silent"
+            ));
+            return Vec::new();
+        }
+        log.error(format!(
+            "{label} no usable action for the query from {peer_addr} ({connection_id}); answering \
+             SERVFAIL decision=fail_closed_no_action (failures: {:?})",
+            execution.failures
+        ));
+        self.servfail()
+    }
+
     /// SERVFAIL, through the one builder every fail-closed path uses.
     fn servfail(&self) -> Vec<Vec<u8>> {
         match actions::build_servfail(self.query) {
@@ -950,6 +1051,7 @@ impl Reply<'_> {
         connection_id: ConnectionId,
         log: &Log<'_>,
     ) -> Vec<Vec<u8>> {
+        let label = self.label;
         // SERVFAIL is the same bytes whatever went wrong, so the log is the only place the
         // distinction survives (`src/server/radius/` is the model for this).
         let decision = if crate::llm::is_overload_error(e) {
@@ -958,12 +1060,12 @@ impl Reply<'_> {
             "fail_closed_llm_error"
         };
         log.warn(format!(
-            "DNS LLM call failed for query from {peer_addr} ({connection_id}) decision={decision}: {e}"
+            "{label} LLM call failed for query from {peer_addr} ({connection_id}) decision={decision}: {e}"
         ));
         let out = self.servfail();
         if let Some(packet) = out.first() {
             log.info(format!(
-                "DNS SERVFAIL to {peer_addr} ({} bytes)",
+                "{label} SERVFAIL to {peer_addr} ({} bytes)",
                 packet.len()
             ));
         }
@@ -978,12 +1080,13 @@ impl Reply<'_> {
         signer: Option<&ZoneSigner>,
         log: &Log<'_>,
     ) -> Vec<Vec<u8>> {
+        let label = self.label;
         let qname = self.query.queries.first().map(|q| q.name().clone());
         if let (Some(signer), Some(qname)) = (signer, qname.as_ref()) {
             if self.dnssec_ok && signer.covers(qname) {
                 if let Err(e) = Self::sign_answer(&mut message, signer, qname) {
                     log.error(format!(
-                        "DNS cannot sign the answer for {qname} ({e:#}); answering SERVFAIL \
+                        "{label} cannot sign the answer for {qname} ({e:#}); answering SERVFAIL \
                          decision=fail_closed_dnssec"
                     ));
                     return self.servfail();
@@ -997,12 +1100,27 @@ impl Reply<'_> {
             Ok(b) => b,
             Err(e) => {
                 log.error(format!(
-                    "DNS cannot encode the answer ({e}); answering SERVFAIL \
+                    "{label} cannot encode the answer ({e}); answering SERVFAIL \
                      decision=fail_closed_no_action"
                 ));
                 return self.servfail();
             }
         };
+        // hickory's encoder does not fail at its 65535-octet ceiling: it stops writing records,
+        // sets TC and returns `Ok`. Over UDP the check below replaces any answer that large
+        // anyway. Over a stream there is nothing to retry on, so TC there is a partial answer
+        // passed off as NOERROR — the resolver caches half an RRset. The answer did not fit the
+        // transport, and SERVFAIL says so.
+        if self.transport == Transport::Tcp
+            && !message.metadata.truncation
+            && bytes.get(2).is_some_and(|flags| flags & 0x02 != 0)
+        {
+            log.error(format!(
+                "{label} answer does not fit a 65535-octet message; answering SERVFAIL \
+                 decision=fail_closed_oversize_answer"
+            ));
+            return self.servfail();
+        }
         if self.transport == Transport::Udp && bytes.len() > self.udp_limit {
             // RFC 2181 §9 / RFC 7766: set TC and send what is certain to fit — the header and
             // the question — so the client retries over TCP.
