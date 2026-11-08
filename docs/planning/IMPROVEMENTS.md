@@ -540,7 +540,9 @@ and `pgwire` (#77) were done earlier; `kafka-protocol` remains.
   name entering a chain walks all of it, so a 44 KB DNS-over-TCP message with a 6 000-hop chain
   and 2 000 owner names entering it costs 2.7 s of a debug worker and 29 ms in release. The
   question section's `Vec::with_capacity(count)` is still there in 0.26.3; record sections now
-  reserve at most 8. Still compiled in at older versions, and why it is acceptable: `tokio-xmpp`
+  reserve at most 8. The `mongodb` driver went 3.3.0 → 3.10.0 in the same pass, which moves its
+  SRV/TXT resolver from `hickory-resolver` 0.24.4 to 0.26.3. Still compiled in at an older
+  version, and why it is acceptable: `tokio-xmpp`
   5.0.0 pulls `hickory-resolver`/`hickory-proto` 0.25.2 for its SRV lookups, which NetGet's XMPP
   client never makes (it dials `DnsConfig::Addr`, a plain socket address, so no DNS message is
   ever decoded); 6.0.0 moves to 0.26 but also to `xmpp-parsers` 0.23, a breaking upgrade of its

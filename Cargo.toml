@@ -436,7 +436,7 @@ mysql_async = { version = "0.34" }
 tiberius = { version = "0.12" }
 # PostgreSQL client
 tokio-postgres = { version = "0.7" }
-mongodb = { version = "3.3" }  # Official MongoDB async driver
+mongodb = { version = "3.10" }  # Official MongoDB async driver (3.10: hickory 0.26 for its SRV resolver)
 # redis-rs: used only by tests, as an independent client of NetGet's Redis server (src/ frames
 # RESP itself). An optional dev-dependency is not possible, so it rides on the `redis` feature;
 # `cluster-async` is its cluster client, which tests/server/redis/cluster_test.rs drives.
