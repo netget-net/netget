@@ -142,6 +142,16 @@ pub fn format_pop3_multiline_body(content: &str) -> String {
     out
 }
 
+/// The size RFC 1939 counts for a multi-line body as [`format_pop3_multiline_body`] wrote it:
+/// its CRLF octets with the transparency dots taken back out.
+pub fn pop3_message_octets(stuffed: &str) -> u64 {
+    let dots = stuffed
+        .split("\r\n")
+        .filter(|line| line.starts_with(".."))
+        .count();
+    (stuffed.len() - dots) as u64
+}
+
 pub struct Pop3Protocol;
 
 impl Pop3Protocol {
@@ -247,13 +257,15 @@ impl Pop3Protocol {
 
         let body = format_pop3_multiline_body(&content);
 
-        // RFC 1939 treats the octet count as informational (the terminating "." is what ends
-        // the response), so an LLM-supplied `size` is honoured, but omitting it yields the
-        // byte count actually written - which is what a client comparing the two expects.
+        // The count in `+OK <n> octets` is the message's size, the number `LIST` gives for
+        // it: the CRLF text *before* byte-stuffing, since the dots are transport that the
+        // client removes (RFC 1939 §3). Counting `body` counted each transparency dot, so a
+        // message with a line starting with "." was announced larger than its own LIST entry. An LLM-supplied `size` is honoured, since
+        // the model chose the LIST size too.
         let size = action
             .get("size")
             .and_then(|v| v.as_u64())
-            .unwrap_or_else(|| body.len() as u64);
+            .unwrap_or_else(|| pop3_message_octets(&body));
 
         let response = format!("+OK {} octets\r\n{}.\r\n", size, body);
 
@@ -279,14 +291,9 @@ impl Pop3Protocol {
             .and_then(|v| v.as_str())
             .context("Missing 'message' parameter")?;
 
-        // Ensure message ends with \r\n
-        let formatted = if message.ends_with("\r\n") {
-            message.to_string()
-        } else if message.ends_with('\n') {
-            format!("{}\r", message.trim_end_matches('\n'))
-        } else {
-            format!("{}\r\n", message)
-        };
+        // Exactly one CRLF at the end, whichever ending the model wrote. A bare "\n" used
+        // to become a lone "\r", so the client never saw the end of the line.
+        let formatted = format!("{}\r\n", message.trim_end_matches(['\r', '\n']));
 
         debug!("POP3 sending custom message: {}", formatted.trim());
         Ok(ActionResult::Output(formatted.as_bytes().to_vec()))
@@ -649,18 +656,26 @@ impl Protocol for Pop3Protocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .implementation(
                 "Manual line-based TCP implementation with full LLM control over protocol responses",
             )
             .llm_control("Full control over POP3 responses (+OK, -ERR, STAT, LIST, RETR, etc.)")
-            .e2e_testing("Manual TCP client with line-based protocol testing")
+            .e2e_testing(
+                "Two independent clients complete sessions in \
+                 tests/server/pop3/real_client_test.rs, failing rather than skipping when \
+                 absent: python3's stdlib poplib (CAPA, USER, PASS, STAT, LIST, LIST n, UIDL, \
+                 RETR of a dot-stuffed UTF-8 message, TOP, DELE, NOOP, RSET, QUIT) and curl's \
+                 libcurl POP3 (CAPA, USER, PASS, LIST, RETR, QUIT, on two connections). The \
+                 pcap oracle reads poplib's session",
+            )
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(110))
             .well_known_port(110)
             .max_inbound_bytes(crate::server::pop3::MAX_COMMAND_BYTES)
             .notes(
                 "No mailbox storage: the model answers STAT/LIST/RETR itself. Plain TCP only - \
-                 neither POP3S nor STLS is available.",
+                 neither POP3S nor STLS is available; no APOP or SASL AUTH, so CAPA offers USER \
+                 alone. UIDL n and TOP are answered by the model like the rest.",
             )
             .history(crate::protocol::metadata::HistoryMode::Last(crate::protocol::metadata::SESSION_HISTORY_ENTRIES))
             // Pipelined transaction commands (STAT, LIST, UIDL, RETR, TOP, DELE, NOOP, RSET,
