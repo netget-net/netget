@@ -10,6 +10,7 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
+use crate::server::dns::StreamQuery;
 use crate::server::DotProtocol;
 use crate::state::app_state::AppState;
 use crate::state::ServerId;
@@ -32,13 +33,18 @@ use tracing::error;
 /// wire by anyone who can connect, and costs a task and a socket per attempt.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Bound on how long an established DoT connection may sit without sending a query.
+/// Default bound on how long an established DoT connection may sit without sending a query.
 ///
 /// RFC 7858 §3.4 has the client manage an idle timeout and the server free to close an idle
 /// connection; without any bound here a connection that never sends a second query is a
 /// permanently parked task. This is deliberately generous — resolvers legitimately pin one
-/// TLS connection and reuse it — but finite.
-const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
+/// TLS connection and reuse it — but finite. It runs only while the server waits for the next
+/// length prefix: a query being answered (a model round-trip, a `manual` rule parked for a
+/// person) is not idle. Declared as the `idle_timeout_secs` startup parameter (1-3600).
+pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The largest `idle_timeout_secs` accepted: an hour.
+pub const MAX_IDLE_TIMEOUT_SECS: u64 = 3600;
 
 /// Once a length prefix arrives, the peer must finish that DNS message promptly. The
 /// between-query idle timeout cannot bound a read that is already waiting for its body.
@@ -105,6 +111,7 @@ impl DotServer {
         app_state: Arc<AppState>,
         server_id: ServerId,
         status_tx: mpsc::UnboundedSender<String>,
+        idle_timeout: Duration,
     ) -> Result<SocketAddr> {
         // Generate TLS configuration (use default self-signed cert)
         let tls_config = crate::server::tls_cert_manager::generate_default_tls_config()
@@ -126,7 +133,13 @@ impl DotServer {
         let task_registrar = app_state.clone();
         let handle = tokio::spawn(async move {
             if let Err(e) = Self::run(
-                listener, tls_config, llm_client, app_state, server_id, status_tx,
+                listener,
+                tls_config,
+                llm_client,
+                app_state,
+                server_id,
+                status_tx,
+                idle_timeout,
             )
             .await
             {
@@ -148,6 +161,7 @@ impl DotServer {
         app_state: Arc<AppState>,
         server_id: ServerId,
         status_tx: mpsc::UnboundedSender<String>,
+        idle_timeout: Duration,
     ) -> Result<()> {
         let acceptor = TlsAcceptor::from(tls_config);
         let local_addr = listener
@@ -228,10 +242,11 @@ impl DotServer {
                             app_state,
                             server_id,
                             status_tx,
+                            idle_timeout,
                         )
                         .await
                         {
-                            error!("DoT connection error from {}: {}", peer_addr, e);
+                            error!("DoT connection error from {}: {:#}", peer_addr, e);
                         }
                     });
                     conn_state.register_server_task(server_id, handle).await;
@@ -256,6 +271,7 @@ impl DotServer {
         app_state: Arc<AppState>,
         server_id: ServerId,
         status_tx: mpsc::UnboundedSender<String>,
+        idle_timeout: Duration,
     ) -> Result<()> {
         let outcome = Self::serve_connection(
             stream,
@@ -266,6 +282,7 @@ impl DotServer {
             &app_state,
             server_id,
             &status_tx,
+            idle_timeout,
         )
         .await;
 
@@ -289,11 +306,12 @@ impl DotServer {
         app_state: &Arc<AppState>,
         server_id: ServerId,
         status_tx: &mpsc::UnboundedSender<String>,
+        idle_timeout: Duration,
     ) -> Result<()> {
         let status_tx = status_tx.clone();
         let app_state = app_state.clone();
-        // Perform TLS handshake, bounded. An unbounded `accept` is a task a peer can
-        // park forever by connecting and saying nothing.
+        // Perform TLS handshake, bounded. An unbounded `accept` is a task a peer can park
+        // forever by connecting and saying nothing.
         let mut tls_stream = timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
             .await
             .map_err(|_| {
@@ -308,21 +326,23 @@ impl DotServer {
 
         Log::new(Some(&status_tx)).info(format!("DoT connection from {}", peer_addr));
 
+        let protocol = DotProtocol::new();
+
         // Handle DNS queries over TLS
         loop {
             // Read length-prefixed DNS message (2-byte big-endian length)
             let mut len_buf = [0u8; 2];
-            let read_len =
-                match timeout(IDLE_READ_TIMEOUT, tls_stream.read_exact(&mut len_buf)).await {
-                    Ok(r) => r,
-                    Err(_) => {
-                        Log::new(Some(&status_tx)).debug(format!(
-                            "DoT connection from {} idle for {:?}, closing",
-                            peer_addr, IDLE_READ_TIMEOUT
-                        ));
-                        break;
-                    }
-                };
+            let read_len = match timeout(idle_timeout, tls_stream.read_exact(&mut len_buf)).await {
+                Ok(r) => r,
+                Err(_) => {
+                    Log::new(Some(&status_tx)).debug(format!(
+                        "DoT connection from {} idle for {}s, closing decision=tcp_idle",
+                        peer_addr,
+                        idle_timeout.as_secs()
+                    ));
+                    break;
+                }
+            };
             match read_len {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -378,25 +398,45 @@ impl DotServer {
 
             Log::new(Some(&status_tx))
                 .debug(format!("DoT received {} bytes from {}", dns_len, peer_addr));
+            Log::new(Some(&status_tx))
+                .trace(format!("DoT DNS query hex: {}", hex::encode(&dns_buf)));
 
-            // Parse DNS query
+            // A message that does not decode is not answered, and the connection is closed
+            // rather than kept: the DNS server's TCP path does the same, and EOF is something
+            // the resolver acts on at once, where an unanswered query on a live connection
+            // costs it its whole timeout. Nothing can be answered — no id or question was
+            // read — and the screen refuses a compression-pointer chain here too.
             let dns_message = match crate::utils::dns_screen::decode_dns_message(&dns_buf) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    Log::new(Some(&status_tx))
-                        .warn(format!("Failed to parse DoT DNS message: {}", e));
-                    continue;
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "Failed to parse DoT DNS message from {peer_addr}: {e}; closing \
+                         decision=fail_closed_unparseable_query"
+                    ));
+                    break;
                 }
             };
 
-            // Extract query information
-            let queries = &dns_message.queries;
-            if queries.is_empty() {
-                Log::new(Some(&status_tx)).warn("DoT DNS message has no queries");
+            let log = Log::new(Some(&status_tx));
+            let stream_query = StreamQuery::new(&dns_message, "DoT");
+            if let Some(formerr) = stream_query.formerr_without_question(peer_addr, &log) {
+                if !Self::send_framed(
+                    &mut tls_stream,
+                    &formerr,
+                    peer_addr,
+                    connection_id,
+                    server_id,
+                    &app_state,
+                    &status_tx,
+                )
+                .await
+                {
+                    break;
+                }
                 continue;
             }
 
-            let query = &queries[0];
+            let query = &dns_message.queries[0];
             let domain = query.name().to_utf8();
             // Display, not Debug: the model reads this string and echoes it back into
             // `send_dns_nxdomain`'s `query_type`, which parses it with
@@ -405,15 +445,11 @@ impl DotServer {
             let query_type = query.query_type().to_string();
             let query_id = dns_message.id;
 
-            Log::new(Some(&status_tx)).info(format!(
+            log.info(format!(
                 "DoT query: {} {} (ID: {})",
                 domain, query_type, query_id
             ));
 
-            Log::new(Some(&status_tx))
-                .trace(format!("DoT DNS query hex: {}", hex::encode(&dns_buf)));
-
-            // Create event for LLM
             let event = Event::new(
                 &DOT_QUERY_EVENT,
                 json!({
@@ -424,129 +460,37 @@ impl DotServer {
                 }),
             );
 
-            // Get protocol actions
-            let protocol = Arc::new(DotProtocol::new());
+            log.debug(format!("DoT calling LLM for query from {}", peer_addr));
 
-            Log::new(Some(&status_tx))
-                .debug(format!("DoT calling LLM for query from {}", peer_addr));
-
-            // Call LLM
-            match call_llm(
+            let result = call_llm(
                 &llm_client,
                 &app_state,
                 server_id,
                 Some(connection_id),
                 &event,
-                protocol.as_ref(),
+                &protocol,
             )
-            .await
-            {
-                Ok(execution_result) => {
-                    // Display messages from LLM
-                    for message in &execution_result.messages {
-                        Log::new(Some(&status_tx)).info(format!("{}", message));
-                    }
+            .await;
 
-                    Log::new(Some(&status_tx)).debug(format!(
-                        "DoT got {} protocol results",
-                        execution_result.protocol_results.len()
-                    ));
-
-                    // Execute actions from LLM response
-                    for protocol_result in &execution_result.protocol_results {
-                        use crate::llm::actions::protocol_trait::ActionResult;
-                        match protocol_result {
-                            ActionResult::Output(bytes) => {
-                                Self::send_framed(
-                                    &mut tls_stream,
-                                    bytes,
-                                    peer_addr,
-                                    connection_id,
-                                    server_id,
-                                    &app_state,
-                                    &status_tx,
-                                )
-                                .await;
-                            }
-                            ActionResult::Custom { data, .. } => {
-                                if let Some(output_data) =
-                                    data.get("output_data").and_then(|v| v.as_str())
-                                {
-                                    // Decode hex DNS response
-                                    if let Ok(response_bytes) = hex::decode(output_data) {
-                                        Self::send_framed(
-                                            &mut tls_stream,
-                                            &response_bytes,
-                                            peer_addr,
-                                            connection_id,
-                                            server_id,
-                                            &app_state,
-                                            &status_tx,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                            ActionResult::CloseConnection => {
-                                Log::new(Some(&status_tx)).info(format!(
-                                    "DoT connection from {} closed by LLM",
-                                    peer_addr
-                                ));
-                                return Ok(());
-                            }
-                            ActionResult::NoAction => {
-                                // Ignore query - don't send response
-                                Log::new(Some(&status_tx)).debug("DoT query ignored by LLM");
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    // DoT is DNS: the client is a stub resolver blocked on an answer, and
-                    // `continue` gave it nothing until its own timeout expired - the same
-                    // defect plain DNS had, and worse here, because a TLS connection is
-                    // expensive enough that resolvers pin one and serialise queries over it.
-                    //
-                    // SERVFAIL makes the resolver move on to another server at once. The
-                    // query id and question section must be echoed or a stub resolver
-                    // discards the packet as unsolicited and we are back to silence, so this
-                    // reuses the DNS server's own builder rather than synthesising a header.
-                    // `decision=` tag, as `src/server/radius/` does it: SERVFAIL is the
-                    // same byte sequence whatever went wrong, so the log is the only place
-                    // the distinction can survive.
-                    let decision = if crate::llm::is_overload_error(&e) {
-                        "fail_closed_llm_overload"
-                    } else {
-                        "fail_closed_llm_error"
-                    };
-                    Log::new(Some(&status_tx)).warn(format!(
-                        "DoT answering SERVFAIL to {} decision={}: {}",
-                        peer_addr, decision, e
-                    ));
-                    match crate::server::dns::actions::build_servfail(&dns_message) {
-                        Ok(packet) => {
-                            // RFC 7858 uses the DNS-over-TCP framing: a two-byte length
-                            // prefix in front of every message.
-                            Self::send_framed(
-                                &mut tls_stream,
-                                &packet,
-                                peer_addr,
-                                connection_id,
-                                server_id,
-                                &app_state,
-                                &status_tx,
-                            )
-                            .await;
-                        }
-                        Err(build_err) => {
-                            Log::new(Some(&status_tx)).error(format!(
-                                "DoT failed to build SERVFAIL for {}: {}",
-                                peer_addr, build_err
-                            ));
-                        }
-                    }
-                    continue;
+            // The DNS server's own rules decide what goes back (`StreamQuery::answer`): the
+            // first message an action produced, finished; nothing for `ignore_query`;
+            // SERVFAIL — echoing the id and question, which a resolver checks before it reads
+            // the rcode — for a backend failure, for bytes that are not a DNS message, and for
+            // an answer with nothing sendable in it. RFC 7858 frames each with a two-byte
+            // length (`send_framed`).
+            if let Some(reply) = stream_query.answer(result, peer_addr, connection_id, &log) {
+                if !Self::send_framed(
+                    &mut tls_stream,
+                    &reply,
+                    peer_addr,
+                    connection_id,
+                    server_id,
+                    &app_state,
+                    &status_tx,
+                )
+                .await
+                {
+                    break;
                 }
             }
         }
@@ -558,17 +502,17 @@ impl DotServer {
     }
 
     /// Write one DNS message to the peer in RFC 7858 framing: a two-byte big-endian
-    /// length followed by the message.
+    /// length followed by the message. Returns whether the connection can go on.
     ///
-    /// The length is checked rather than cast. Every call site used
-    /// `bytes.len() as u16`, which **wraps** silently: a 65540-byte message — reachable
-    /// through `send_dns_response`, whose whole point is that the model hands over
-    /// arbitrary hex — announces a length of 4 and then writes 65540 bytes. The peer
-    /// reads 4 of them as a message and the remaining 65536 as the next length prefix
-    /// and the next message, so the stream is desynchronised for good and every
-    /// subsequent query on that connection is answered with garbage. Refusing to send
-    /// is the only safe outcome; a DNS message cannot exceed 65535 bytes by definition,
-    /// so nothing legitimate is being turned away.
+    /// The length is checked rather than cast. `bytes.len() as u16` **wraps**: a
+    /// 65540-byte message would announce a length of 4 and then write 65540 bytes, the
+    /// peer would read the rest as the next length prefix and the next message, and the
+    /// stream would be desynchronised for good. Every message reaching here was encoded by
+    /// hickory through `StreamQuery`, whose encoder stops at 65535 octets and turns an
+    /// answer that does not fit into SERVFAIL, so this cannot fire from anything the model
+    /// sends; if it ever does, the connection is closed
+    /// (`decision=fail_closed_oversize_answer`) as the DNS server's TCP path closes it —
+    /// the peer reads EOF, never a misframed message.
     #[allow(clippy::too_many_arguments)]
     async fn send_framed(
         tls_stream: &mut tokio_rustls::server::TlsStream<TcpStream>,
@@ -578,16 +522,15 @@ impl DotServer {
         server_id: ServerId,
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
-    ) {
+    ) -> bool {
         let Ok(len) = u16::try_from(message.len()) else {
             Log::new(Some(status_tx)).error(format!(
-                "DoT refusing to send a {}-byte message to {}: RFC 7858 framing carries a \
-                 16-bit length, so this cannot be put on the wire without desynchronising \
-                 the connection",
+                "DoT reply of {} bytes to {} does not fit RFC 7858's 16-bit length; closing \
+                 decision=fail_closed_oversize_answer",
                 message.len(),
                 peer_addr
             ));
-            return;
+            return false;
         };
 
         let mut framed = Vec::with_capacity(message.len() + 2);
@@ -599,7 +542,7 @@ impl DotServer {
                 "Failed to send DoT response to {}: {}",
                 peer_addr, e
             ));
-            return;
+            return false;
         }
 
         app_state
@@ -616,5 +559,6 @@ impl DotServer {
         let log = Log::new(Some(status_tx));
         log.debug(format!("DoT sent {} bytes to {}", message.len(), peer_addr));
         log.trace(format!("DoT response hex: {}", hex::encode(message)));
+        true
     }
 }

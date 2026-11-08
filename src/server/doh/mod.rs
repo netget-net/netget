@@ -10,6 +10,7 @@ use crate::llm::ollama_client::OllamaClient;
 use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::server::connection::ConnectionId;
+use crate::server::dns::StreamQuery;
 use crate::server::DohProtocol;
 use crate::state::app_state::AppState;
 use crate::state::ServerId;
@@ -549,26 +550,28 @@ impl DohServer {
             }
         };
 
-        // Extract query information
-        let queries = &dns_message.queries;
-        if queries.is_empty() {
-            Log::new(Some(&status_tx)).warn("DoH DNS message has no queries");
-            return Ok(error_response(StatusCode::BAD_REQUEST, "No DNS queries"));
+        // A query with no question is answered FORMERR by the server itself, in a 200: RFC 8484
+        // §4.2.1 makes 200 the status for any DNS response whatever its rcode, and the client
+        // is waiting on this transaction id.
+        let log = Log::new(Some(&status_tx));
+        let stream_query = StreamQuery::new(&dns_message, "DoH");
+        if let Some(formerr) = stream_query.formerr_without_question(peer_addr, &log) {
+            Self::count_sent(&app_state, server_id, connection_id, formerr.len()).await;
+            return Ok(dns_message_response(formerr));
         }
 
-        let query = &queries[0];
+        let query = &dns_message.queries[0];
         let domain = query.name().to_utf8();
         // Display, not Debug: the model reads this string and echoes it back into
         // `send_dns_nxdomain`'s `query_type`, which parses it with `RecordType::from_str`.
         let query_type = query.query_type().to_string();
         let query_id = dns_message.id;
 
-        Log::new(Some(&status_tx)).info(format!(
+        log.info(format!(
             "DoH query: {} {} (ID: {})",
             domain, query_type, query_id
         ));
 
-        // Create event for LLM
         let event = Event::new(
             &DOH_QUERY_EVENT,
             json!({
@@ -580,145 +583,66 @@ impl DohServer {
             }),
         );
 
-        // Get protocol actions
-        let protocol = Arc::new(DohProtocol::new());
+        log.debug(format!("DoH calling LLM for query from {}", peer_addr));
 
-        Log::new(Some(&status_tx)).debug(format!("DoH calling LLM for query from {}", peer_addr));
-
-        // Call LLM
-        let execution_result = match call_llm(
+        let protocol = DohProtocol::new();
+        let result = call_llm(
             &llm_client,
             &app_state,
             server_id,
             Some(connection_id),
             &event,
-            protocol.as_ref(),
+            &protocol,
         )
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                // Answer SERVFAIL in a 200, the way DNS and DoT answer SERVFAIL on the wire.
-                //
-                // RFC 8484 §4.2.1 makes 200 the status for "the HTTP transaction carried a
-                // DNS message"; whether that message is an answer or a failure is DNS's
-                // business, not HTTP's. A 5xx instead tells the client the *resolver
-                // endpoint* is broken, which makes real DoH clients mark the server down and
-                // fail over — a heavier reaction than the transient backend hiccup that
-                // caused it. The transaction id and question are echoed by `build_servfail`,
-                // without which the client discards the message.
-                //
-                // `decision=`, as `src/server/radius/` does it: SERVFAIL is the same bytes
-                // whatever went wrong, so the log is the only place the distinction lives.
-                let decision = if crate::llm::is_overload_error(&e) {
-                    "fail_closed_llm_overload"
-                } else {
-                    "fail_closed_llm_error"
-                };
-                Log::new(Some(&status_tx)).warn(format!(
-                    "DoH answering SERVFAIL to {} decision={}: {}",
-                    peer_addr, decision, e
-                ));
+        .await;
 
-                return Ok(
-                    match crate::server::dns::actions::build_servfail(&dns_message) {
-                        Ok(packet) => dns_message_response(packet),
-                        Err(build_err) => {
-                            // Nothing DNS-shaped can be produced, so the failure has to be
-                            // expressed in HTTP. The peer gets a category, never the error text.
-                            Log::new(Some(&status_tx)).error(format!(
-                                "DoH failed to build SERVFAIL for {}: {}",
-                                peer_addr, build_err
-                            ));
-                            let failure = crate::utils::WireFailure::classify(&e);
-                            match failure {
-                                crate::utils::WireFailure::Overloaded => retry_later_response(),
-                                crate::utils::WireFailure::Unavailable => error_response(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    failure.prefixed_text(),
-                                ),
-                            }
-                        }
-                    },
-                );
+        // The DNS server's own rules decide the answer (`StreamQuery::answer`): the first
+        // message an action produced, finished; SERVFAIL — id and question echoed — for a
+        // backend failure, for bytes that are not a DNS message and for an answer with nothing
+        // sendable in it. SERVFAIL goes in a 200, as RFC 8484 §4.2.1 has every DNS response: a
+        // 5xx tells the client the *resolver endpoint* is broken, and real DoH clients mark the
+        // server down and fail over — a heavier reaction than a transient backend hiccup.
+        let failure = result
+            .as_ref()
+            .err()
+            .map(crate::utils::WireFailure::classify);
+        match stream_query.answer(result, peer_addr, connection_id, &log) {
+            Some(bytes) => {
+                log.debug(format!("DoH sending {} bytes", bytes.len()));
+                log.trace(format!("DoH response hex: {}", hex::encode(&bytes)));
+                Self::count_sent(&app_state, server_id, connection_id, bytes.len()).await;
+                Ok(dns_message_response(bytes))
             }
-        };
-
-        // Display messages from LLM
-        for message in &execution_result.messages {
-            Log::new(Some(&status_tx)).info(format!("{}", message));
+            // Only reachable for a backend failure if not even a SERVFAIL could be built; the
+            // failure is then said in HTTP, as a category and never the error text.
+            None => Ok(match failure {
+                Some(crate::utils::WireFailure::Overloaded) => retry_later_response(),
+                Some(failure @ crate::utils::WireFailure::Unavailable) => {
+                    error_response(StatusCode::INTERNAL_SERVER_ERROR, failure.prefixed_text())
+                }
+                // `ignore_query`: HTTP has no silence, so the decision is a 404 with no DNS
+                // message in it.
+                None => error_response(StatusCode::NOT_FOUND, "Query ignored"),
+            }),
         }
+    }
 
-        Log::new(Some(&status_tx)).debug(format!(
-            "DoH got {} protocol results",
-            execution_result.protocol_results.len()
-        ));
-
-        // Execute actions from LLM response
-        for protocol_result in &execution_result.protocol_results {
-            use crate::llm::actions::protocol_trait::ActionResult;
-            match protocol_result {
-                ActionResult::Output(bytes) => {
-                    // DNS action returned binary response directly
-                    let log = Log::new(Some(&status_tx));
-                    log.debug(format!("DoH sending {} bytes", bytes.len()));
-                    log.trace(format!("DoH response hex: {}", hex::encode(bytes)));
-
-                    app_state
-                        .update_connection_stats(
-                            server_id,
-                            connection_id,
-                            None,
-                            Some(bytes.len() as u64),
-                            None,
-                            Some(1),
-                        )
-                        .await;
-
-                    // Return DNS response with correct Content-Type.
-                    // Content-Length is left to hyper, which derives it from the
-                    // Full<Bytes> body - keeping every builder input constant so
-                    // this cannot panic on model-supplied data.
-                    return Ok(dns_message_response(bytes.clone()));
-                }
-                ActionResult::Custom { data, .. } => {
-                    if let Some(output_data) = data.get("output_data").and_then(|v| v.as_str()) {
-                        // Decode hex DNS response
-                        if let Ok(response_bytes) = hex::decode(output_data) {
-                            let log = Log::new(Some(&status_tx));
-                            log.debug(format!("DoH sending {} bytes", response_bytes.len()));
-                            log.trace(format!("DoH response hex: {}", output_data));
-
-                            app_state
-                                .update_connection_stats(
-                                    server_id,
-                                    connection_id,
-                                    None,
-                                    Some(response_bytes.len() as u64),
-                                    None,
-                                    Some(1),
-                                )
-                                .await;
-
-                            // Return DNS response with correct Content-Type
-                            return Ok(dns_message_response(response_bytes));
-                        }
-                    }
-                }
-                ActionResult::NoAction => {
-                    // Ignore query - return empty response
-                    Log::new(Some(&status_tx)).debug("DoH query ignored by LLM");
-                    return Ok(error_response(StatusCode::NOT_FOUND, "Query ignored"));
-                }
-                _ => {}
-            }
-        }
-
-        // Default: no response sent
-        Ok(error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "No response generated",
-        ))
+    async fn count_sent(
+        app_state: &AppState,
+        server_id: ServerId,
+        connection_id: ConnectionId,
+        bytes: usize,
+    ) {
+        app_state
+            .update_connection_stats(
+                server_id,
+                connection_id,
+                None,
+                Some(bytes as u64),
+                None,
+                Some(1),
+            )
+            .await;
     }
 }
 
