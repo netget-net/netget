@@ -596,7 +596,8 @@ absent: curl's libcurl TFTP (a three-block `send_tftp_file` download, a model-dr
 RFC 2347 options are ignored and it falls back to 512-byte blocks) and the system `tftp(1)`
 (BSD tftp on macOS, tftp-hpa on Linux: a `netascii` download, an `octet` download of exactly
 1024 bytes ending in an empty block, and an upload). Not implemented, so not claimed: option
-negotiation (OACK, `blksize`, `tsize`, `timeout`, `windowsize`) and `mail` mode. There is no
-pcap-oracle check of the real clients' traffic: a transfer moves to a TID port the recording
+negotiation (OACK, `blksize`, `tsize`, `timeout`, `windowsize`) and `mail` mode. `retransmit_test.rs` provokes what a loopback client never does: a repeated RRQ, a withheld
+ACK, a stale ACK, a stranger on the TID, a repeated upload block, and checks netascii on the
+wire. There is no pcap-oracle check of the real clients' traffic: a transfer moves to a TID port the recording
 relay cannot follow; `e2e_test.rs` runs the oracle over packets it exchanges itself. What the
 clients found is in the test file's header.

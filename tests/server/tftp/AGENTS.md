@@ -84,6 +84,14 @@ upload of two blocks) and the system `tftp(1)` — BSD tftp on macOS, tftp-hpa o
 upload). Both fail rather than skip when the client is absent. Downloads are compared byte for
 byte with what the model served; uploads are reassembled from the `data` the model was shown.
 
+## `retransmit_test.rs` - the lockstep's failure cases
+
+One server, raw sockets, 6 LLM calls: the same RRQ twice back to back (one transfer, one TID),
+a withheld ACK (block 1 again, same TID), a stranger's datagram on the TID (`ERROR 5`), a stale
+ACK (no retransmission), an upload whose block 1 is sent twice (ACK 1 again, one model call),
+and a `netascii` download whose blocks must carry CR LF. The dedupe and the encoding were each
+verified by removing them.
+
 ## TFTP Client Implementation
 
 The other files use **manual packet construction** (no external TFTP library):

@@ -18,16 +18,15 @@
 //! | DATA (client → server) / ACK (server → client) | yes | yes |
 //! | ERROR 1 (file not found) | yes, curl exits 68 | - |
 //!
-//! curl sends RFC 2347 options (`blksize`, `tsize`) in its RRQ/WRQ; the server implements no
-//! option negotiation, sends no OACK, and curl falls back to RFC 1350's 512-byte blocks, as
-//! RFC 2347 requires of a client whose server ignores its options.
+//! The server implements no RFC 2347 option negotiation and sends no OACK; a client that asked
+//! for options must then fall back to RFC 1350's 512-byte blocks, and both clients here do.
 //!
 //! # What this pass found
 //!
-//! Item 3 is what these two clients exposed, and 2 is what makes their downloads one model
-//! call each rather than one per block; 1, 4 and 6 are the lockstep's failure
-//! cases, which a loopback client rarely provokes, so `retransmit_test.rs` provokes them from
-//! raw sockets; 5 was found reading the transfer code.
+//! Neither client failed on a loopback with a fast mock: TFTP's defects are in what happens
+//! when a packet is late, repeated or from elsewhere, and in modes, so `retransmit_test.rs`
+//! provokes 1, 3, 4 and 6 from raw sockets. 2 is what makes the clients' downloads one model
+//! call each rather than one per block, and 5 was found reading the transfer code.
 //!
 //! 1. **A block was sent once.** The server sent each DATA packet a single time and read one
 //!    datagram back; any other datagram — a duplicate ACK, or one from another port — ended
@@ -39,9 +38,9 @@
 //!    `data_hex`, and every ACK cost a model call. `send_tftp_file` takes the whole file as
 //!    text and NetGet sends the blocks; `send_tftp_data` takes text too.
 //! 3. **`netascii` was not encoded.** RFC 1350 §5 makes a netascii file's lines end in CR LF;
-//!    the server sent the bytes the model wrote, so `tftp(1)` in `ascii` mode received bare
-//!    LFs. The file now goes out netascii-encoded and `tftp` writes back exactly the text the
-//!    model served.
+//!    the server sent the bytes the model wrote, so a client in `ascii` mode received bare LFs.
+//!    `tftp(1)` passes a bare LF through, so the `ascii` download below succeeds either way;
+//!    `retransmit_test.rs` checks the encoding on the wire.
 //! 4. **A retransmitted RRQ started a second transfer**, on a second TID, which a client
 //!    rejects with ERROR 5 — and a model thinking for a few seconds is exactly when clients
 //!    retransmit. A repeat of a request whose transfer is running is now ignored.

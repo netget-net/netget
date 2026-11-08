@@ -324,8 +324,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   **`smtp`, `pop3` and `tftp` went to Beta on 8 November 2026, each on two clients already on
   every machine** — python3's stdlib `smtplib`/`poplib` and curl for the mail protocols, curl
   and the system `tftp(1)` for TFTP (`tests/server/<p>/real_client_test.rs`; each header lists
-  the verbs each client drives). None had a real client before, and every one had defects only
-  a real client exposed. SMTP raised one model call per message line, judged the message on an
+  the verbs each client drives). None had a real client before. For SMTP and POP3 the clients
+  found the defects; TFTP's clients passed on a loopback with a fast mock, and its defects
+  were in what happens when a packet is late, repeated or from elsewhere, which
+  `tests/server/tftp/retransmit_test.rs` provokes from raw sockets. SMTP raised one model call per message line, judged the message on an
   event carrying only `"."`, and `trim()`med each line before comparing it with `"."`, so a
   body line `" ."` ended the message and the rest was read as commands; it now reads the
   message itself (only `<CRLF>.<CRLF>` ends it, dots unstuffed, `SIZE` advertised and
@@ -335,8 +337,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   a second transfer for every retransmitted RRQ, bound its transfer sockets to `0.0.0.0`
   whatever address it was given, and made the model write files as hex a block per call; it
   now retransmits, serves a whole text file from one answer (`send_tftp_file`) and dedupes
-  requests. **The common lesson: a protocol's own raw-socket suite is written by someone who
-  already knows where the message ends; a real client is not.** `ftp` was considered and left
+  requests. **The lesson from the mail protocols: a protocol's own raw-socket suite is written by
+  someone who already knows where the message ends; a real client is not. The lesson from
+  TFTP: a real client on loopback never loses a packet, so a lockstep protocol's evidence
+  also needs a test that does.** `ftp` was considered and left
   Experimental: it has no data connection (no `PASV`/`EPSV`/`PORT`), so a real client can log
   in and do nothing else.
 

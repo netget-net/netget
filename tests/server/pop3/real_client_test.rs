@@ -27,14 +27,16 @@
 //!
 //! 1. **`RETR`'s octet count counted the transparency dots.** The count in `+OK <n> octets`
 //!    is the message's size — the number `LIST` gives for it; the dots are transport the client
-//!    removes (RFC 1939 §3) — and the server counted the byte-stuffed body, so every message with a line starting with `.` was
-//!    announced one byte larger per such line than its own `LIST` entry said. Verified by
-//!    putting the stuffed length back: poplib's `retr` status then reads `+OK 177 octets`
-//!    against `LIST`'s `176`.
+//!    removes (RFC 1939 §3) — and the server counted the byte-stuffed body, so every message
+//!    with a line starting with `.` was announced one byte larger per such line than its own
+//!    `LIST` entry said. Asserted here on poplib's `retr` status line; verified by putting the
+//!    stuffed length back, which `answer_with_test.rs` then reports as 92 octets for a
+//!    91-octet message.
 //! 2. **`send_pop3_message` ended a line with a bare CR.** A message ending in `\n` was written
 //!    as `text\r` with no LF, so the client never saw the end of the line. Covered here by the
 //!    `NOOP` answer, which the mock writes as `send_pop3_message` ending in `\n`: poplib then
-//!    blocks for the rest of the line and the session times out.
+//!    blocks for the rest of the line and the session times out (verified by putting the bare CR
+//!    back: poplib raises on its `noop()`).
 //!
 //! Run with:
 //!   ./cargo-isolated.sh test --no-default-features --features mcp-stdio,mcp-http,sqlite,terminal-snapshot \

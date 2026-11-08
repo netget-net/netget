@@ -42,11 +42,12 @@
 //! 4. **`send_smtp_message` ended a reply with a bare CR** when the model's text ended in `\n`,
 //!    so the client never saw the end of the line. The `VRFY` answer here is such a reply.
 //!
-//! Each was verified by putting the old behaviour back and watching the test fail:
-//! re-`trim()`ming the line before `ends_message` makes smtplib's message end at `" ."` (the
-//! body the model receives stops there and the next line is answered as a command); dropping
-//! `unstuff_line` makes the body hold `..leading dot`; and removing the `declared_size` check
-//! lets the oversized `MAIL FROM` through to the model, which smtplib then reports as accepted.
+//! Verified by putting the old behaviour back and watching a test fail: the bare CR makes
+//! smtplib time out waiting for the `VRFY` reply; dropping `unstuff_line` hands the model curl's
+//! message with `..hidden line` in it; and comparing a trimmed line in
+//! `ends_message` is caught by `data_framing_test.rs`, which the bare CR masks here. The
+//! `declared_size` refusal is asserted (smtplib's second `MAIL` must read `552`) but was not
+//! separately reverted.
 //!
 //! The pcap oracle reads smtplib's session as it crossed a recording relay, so Wireshark's own
 //! SMTP dissector checks the replies' framing too.

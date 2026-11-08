@@ -6,13 +6,14 @@
 //! * **A repeated RRQ is one transfer.** Two copies of the same request from the same port
 //!   (what a client sends while the model is thinking) reach the model once and produce one
 //!   stream of DATA from one TID. Verified by removing `claim_request`: the read rule is then
-//!   called twice and a second TID answers.
+//!   called twice and a second TID answers (block 1 then arrives from another port).
 //! * **An unacknowledged block is sent again**, on the same TID, and the transfer continues
-//!   once it is acknowledged. Verified by making `await_ack` give up on its first timeout.
+//!   once it is acknowledged.
 //! * **A stale ACK is not answered** (no Sorcerer's Apprentice), and **a stranger's datagram on
 //!   the TID gets ERROR 5** without disturbing the transfer.
 //! * **A repeated upload block gets its ACK again and does not reach the model**: the data-block
 //!   rule expects exactly as many calls as there are distinct blocks.
+//! * **A netascii download is encoded**: its lines end CR LF on the wire.
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::net::SocketAddr;
@@ -21,10 +22,14 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 fn request(opcode: u16, filename: &str) -> Vec<u8> {
+    request_in(opcode, filename, "octet")
+}
+
+fn request_in(opcode: u16, filename: &str, mode: &str) -> Vec<u8> {
     let mut packet = opcode.to_be_bytes().to_vec();
     packet.extend_from_slice(filename.as_bytes());
     packet.push(0);
-    packet.extend_from_slice(b"octet");
+    packet.extend_from_slice(mode.as_bytes());
     packet.push(0);
     packet
 }
@@ -83,7 +88,7 @@ async fn tftp_transfers_survive_repeats_losses_and_strangers() -> E2EResult<()> 
                 .respond_with_actions(serde_json::json!([
                     {"type": "send_tftp_file", "content": served}
                 ]))
-                .expect_calls(1)
+                .expect_calls(2)
                 .and()
                 .on_event("tftp_write_request")
                 .respond_with_actions(serde_json::json!([
@@ -163,6 +168,32 @@ async fn tftp_transfers_survive_repeats_losses_and_strangers() -> E2EResult<()> 
     uploader.send_to(&data(2, b"end\n"), utid).await?;
     let (_, opcode, block, _) = recv(&uploader, 30).await?;
     assert_eq!((opcode, block), (4, 2));
+
+    // netascii: the same file again, encoded on the wire (RFC 1350 §5). Neither real client in
+    // real_client_test.rs tells the difference for text with no CR in it, so it is checked
+    // here, from the bytes. Verified by serving the content unencoded: block 1 then holds bare
+    // LFs and this assertion fails.
+    let reader = UdpSocket::bind("127.0.0.1:0").await?;
+    reader
+        .send_to(&request_in(1, "two-blocks.txt", "netascii"), main)
+        .await?;
+    let encoded = file.replace('\n', "\r\n").into_bytes();
+    let mut wire = Vec::new();
+    for expected_block in 1u16.. {
+        let (from, opcode, block, bytes) = recv(&reader, 30).await?;
+        assert_eq!((opcode, block), (3, expected_block));
+        reader.send_to(&ack(block), from).await?;
+        let last = bytes.len() < 512;
+        wire.extend_from_slice(&bytes);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&wire),
+        String::from_utf8_lossy(&encoded),
+        "a netascii file goes out with CR LF line endings"
+    );
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;

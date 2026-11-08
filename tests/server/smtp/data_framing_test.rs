@@ -4,10 +4,10 @@
 //!   or after a line that was, is message text. Treating `<LF>.<LF>` as the end is the
 //!   disagreement SMTP smuggling exploits: the rest of the "message" — here a `MAIL FROM` — is
 //!   then read as a command. Verified by making `ends_message` accept a trimmed `.`: the model is
-//!   then handed a message without the smuggled line, and the line is answered as a command.
+//!   then handed a message that stops before the smuggled line, which no rule here accepts.
 //! * **A message over `SIZE` is refused by NetGet** with `552 5.3.4`, read to its end so the
 //!   session stays in step, and never reaches the model (the message rule expects one call, for
-//!   the first message only). Verified by removing the `TooBig` arm's early `continue`.
+//!   the first message only).
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;

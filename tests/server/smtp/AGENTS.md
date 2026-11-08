@@ -61,7 +61,7 @@ server, each failing rather than skipping when its client is absent. One mock ru
 `verify_mocks` counts what each client drove; the message rule records the event and answers
 with what it saw (`queued: <bytes> bytes, subject <subject>`), so the client's own output
 shows the model's view. The pcap oracle reads smtplib's session through
-`helpers::recording_relay`. The header lists the verbs each client drives and the three defects
+`helpers::recording_relay`. The header lists the verbs each client drives and the defects
 they found.
 
 ## `data_framing_test.rs` - where a message ends, and how large it may be
