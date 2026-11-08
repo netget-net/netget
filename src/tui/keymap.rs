@@ -299,6 +299,25 @@ async fn instance_letter(app: &mut DashboardApp, code: KeyCode, state: &AppState
         (KeyCode::Char('d'), _) => InstanceAction::Docs,
         (KeyCode::Char('c'), UiKey::Server(_)) => InstanceAction::ConnectClient,
         (KeyCode::Char('n'), UiKey::Client(_)) => InstanceAction::Send,
+        // The other kind's letter: say what it does and where, the way a
+        // disabled button says why, rather than doing nothing silently.
+        (KeyCode::Char('c'), UiKey::Client(_)) => {
+            app.push_system(format!(
+                "c: connects a new client to a server — it works on a server's card, and \
+                 {} is a client (n sends through it)",
+                key.describe()
+            ));
+            return true;
+        }
+        (KeyCode::Char('n'), UiKey::Server(_)) => {
+            app.push_system(format!(
+                "n: sends a message through a client — it works on a client's card, and \
+                 {} is a server (to message one of its peers, use [ send message ] \
+                 under that peer; c connects a client to it)",
+                key.describe()
+            ));
+            return true;
+        }
         _ => return false,
     };
     actions::run(app, key, action, state).await;

@@ -1351,3 +1351,64 @@ fn a_spawned_result_lands_only_in_the_modal_that_started_it() {
     );
     assert!(matches!(app.modals.last(), Some(Modal::Help { .. })));
 }
+
+/// `c` belongs to a server's card and `n` to a client's. Pressed on the other
+/// kind they used to do nothing and say nothing; now they say what they do and
+/// where, the way a disabled button says why.
+#[tokio::test]
+async fn a_card_letter_for_the_other_kind_says_where_it_works() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use netget::tui::keymap::handle_key;
+
+    let mut app = app();
+    app.absorb_snapshot(populated());
+    app.focus = Focus::Cards;
+    let state = netget::state::AppState::new();
+    let handler = netget::events::EventHandler::new(
+        state.clone(),
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+    );
+    let (status_tx, _status_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let row_of = |app: &DashboardApp, client: bool| {
+        app.rows()
+            .iter()
+            .position(|r| match r.key {
+                Some(UiKey::Client(_)) => client,
+                Some(UiKey::Server(_)) => !client,
+                None => false,
+            })
+            .expect("a card of that kind")
+    };
+    let press = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let last_line = |app: &DashboardApp| {
+        app.activity
+            .entries
+            .back()
+            .map(|e| e.event.text.clone())
+            .unwrap_or_default()
+    };
+
+    app.cards.row = row_of(&app, true);
+    let before = app.activity.entries.len();
+    handle_key(&mut app, press('c'), &state, &handler, &status_tx).await;
+    assert!(app.modals.is_empty(), "nothing opened");
+    assert_eq!(app.activity.entries.len(), before + 1, "one line says why");
+    let said = last_line(&app);
+    assert!(
+        said.starts_with("c: ") && said.contains("server's card") && said.contains("is a client"),
+        "c on a client says what it does and where: {said}"
+    );
+
+    app.cards.row = row_of(&app, false);
+    handle_key(&mut app, press('n'), &state, &handler, &status_tx).await;
+    assert!(app.modals.is_empty(), "nothing opened");
+    let said = last_line(&app);
+    assert!(
+        said.starts_with("n: ")
+            && said.contains("client's card")
+            && said.contains("is a server")
+            && said.contains("[ send message ]"),
+        "n on a server says what it does, where, and what to use instead: {said}"
+    );
+}
