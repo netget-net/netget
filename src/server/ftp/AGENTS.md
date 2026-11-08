@@ -186,7 +186,8 @@ verb and argument. The single sentinel value `CONNECTION_ESTABLISHED` means "TCP
 accepted, send your 220 greeting"; it is never sent by a client.
 
 `answer_with` is the reply RFC 959 expects for the verb (`actions::answer_with_for_command`:
-one 220 greeting, 331 **or** 230 for `USER`, 230/530 for `PASS`, a `257 "<dir>"` for `PWD`, …),
+one 220 greeting, 331 **or** 230 for `USER`, 230/530 for `PASS` and "not the 331 that answered
+USER" (without it llama3.1:8b repeated that 331 on 15 replayed seeds in 40, with it on 5), a `257 "<dir>"` for `PWD`, …),
 absent for a verb it does not classify.
 
 ### One completion reply per command

@@ -783,7 +783,13 @@ pub fn answer_with_for_command(command: &str) -> Option<&'static str> {
             "one reply: 331 to ask for a password, or 230 if this user is logged in with no \
              password - not both"
         }
-        "PASS" => "one reply: 230 if the login succeeds, 530 if it does not",
+        // Without the last clause llama3.1:8b answered PASS with the 331 it had just sent for
+        // USER, word for word, on 15 replayed seeds in 40; with it, on 5
+        // (eval-results/2026-11-08-weak-cases-replay/).
+        "PASS" => {
+            "one reply to the password: 230 if the login succeeds, 530 if it does not - not the \
+             331 that answered USER"
+        }
         "PWD" | "XPWD" => {
             "one 257 reply whose message starts with the directory in double quotes, e.g. \
              \"/pub\" is the current directory"

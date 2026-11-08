@@ -672,6 +672,13 @@ const CYPHER_LEADING_CLAUSES: &[&str] = &[
 /// model refused `SELECT name FROM people` with `Neo.ClientError.Security.Forbidden` "Write
 /// operations are not allowed" five runs in five: cypher-shell sends every query with `mode`
 /// write, and the example turned that field into a reason. The hint says what `mode` is.
+///
+/// "Fields are the names after RETURN" was not enough for an aliased item: asked
+/// `MATCH (m:Movie) RETURN count(m) AS movies`, llama3.1:8b named the column `count(m)` or
+/// `count` on 13 replayed seeds in 20 (the record often keyed `movies` all the same, which the
+/// executor refuses), so cypher-shell printed no `movies` column. With the columns read off the
+/// query by [`return_columns`] and named exactly, all 20 named it `movies`
+/// (`eval-results/2026-11-08-weak-cases-replay/`).
 pub fn query_answer_with(query: &str) -> String {
     let first = query
         .split(|c: char| c.is_whitespace() || c == '(')
@@ -685,15 +692,123 @@ pub fn query_answer_with(query: &str) -> String {
     } else {
         format!("This query begins with {first}, which is not a Cypher clause.")
     };
+    let fields = match return_columns(query) {
+        Some(columns) => format!(
+            "exactly {} - the column names after RETURN, an AS alias where there is one -",
+            serde_json::to_string(&columns).unwrap_or_default()
+        ),
+        None => "the names after RETURN".to_string(),
+    };
     format!(
         "first hold the query against your instructions. If they refuse it - for instance \
          because it is not valid Cypher - answer send_bolt_failure with the Neo4j code that \
          says why (Neo.ClientError.Statement.SyntaxError for invalid Cypher). {fact} 'mode' \
          is only the access mode the client asked for (cypher-shell asks for write on every \
          query), never a reason to refuse unless your instructions forbid writes. Otherwise \
-         answer send_bolt_records whose fields are the names after RETURN and whose rows are \
-         what your instructions say the graph holds"
+         answer send_bolt_records whose fields are {fields} and whose rows are what your \
+         instructions say the graph holds"
     )
+}
+
+/// The column names a query's final `RETURN` gives its result, as Neo4j names them: an item's
+/// `AS` alias where it has one, otherwise the item's text as written (`p.name`, `count(m)`).
+///
+/// Read off the text the way `CYPHER_LEADING_CLAUSES` reads the first word - a fact the model
+/// is handed, not a parse of Cypher. `None` whenever the answer is not plain: no top-level
+/// `RETURN`, `RETURN *`, an unbalanced bracket or quote, or an item with nothing in it. The
+/// last top-level `RETURN` is the one whose columns the client receives (an earlier one belongs
+/// to a `CALL { ... }` subquery or a `UNION` branch with the same columns).
+pub fn return_columns(query: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = query.chars().collect();
+    // Byte-free scan over chars: depth 0 positions outside strings, comments and backticks.
+    let mut top = vec![false; chars.len()];
+    let mut depth: i32 = 0;
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == '\\' && q != '`' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => quote = Some(c),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            _ => top[i] = depth == 0,
+        }
+        i += 1;
+    }
+    if quote.is_some() || depth != 0 {
+        return None;
+    }
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+    // Top-level keyword occurrences, as char offsets.
+    let keyword_at = |kw: &str, at: usize| -> bool {
+        let n = kw.chars().count();
+        at + n <= chars.len()
+            && (0..n).all(|k| top[at + k])
+            && chars[at..at + n]
+                .iter()
+                .zip(kw.chars())
+                .all(|(a, b)| a.to_ascii_uppercase() == b)
+            && (at == 0 || !is_word_char(chars[at - 1]))
+            && (at + n == chars.len() || !is_word_char(chars[at + n]))
+    };
+    let start = (0..chars.len())
+        .rev()
+        .find(|&at| keyword_at("RETURN", at))?
+        + "RETURN".len();
+    let end = (start..chars.len())
+        .find(|&at| {
+            ["ORDER", "SKIP", "LIMIT", "UNION"]
+                .iter()
+                .any(|kw| keyword_at(kw, at))
+                || (top[at] && chars[at] == ';')
+        })
+        .unwrap_or(chars.len());
+    let mut body_start = start;
+    while body_start < end && chars[body_start].is_whitespace() {
+        body_start += 1;
+    }
+    if keyword_at("DISTINCT", body_start) {
+        body_start += "DISTINCT".len();
+    }
+    let mut columns = Vec::new();
+    let mut item_start = body_start;
+    for at in body_start..=end {
+        if at == end || (top[at] && chars[at] == ',') {
+            let item_end = at;
+            let alias_at = (item_start..item_end).rev().find(|&k| keyword_at("AS", k));
+            let name: String = match alias_at {
+                Some(k) => chars[k + 2..item_end].iter().collect(),
+                None => chars[item_start..item_end].iter().collect(),
+            };
+            let name = name.trim();
+            let name = name
+                .strip_prefix('`')
+                .and_then(|n| n.strip_suffix('`'))
+                .unwrap_or(name);
+            if name.is_empty() || name == "*" {
+                return None;
+            }
+            columns.push(name.to_string());
+            item_start = at + 1;
+        }
+    }
+    (!columns.is_empty()).then_some(columns)
 }
 
 /// RUN: one Cypher query.

@@ -1,0 +1,1 @@
+[["Counters only ever go up between scrapes; keep values consistent with earlier answers if memory holds them.\n", "Counters only ever go up between scrapes; keep values consistent with earlier answers if memory holds them. A histogram bucket counts every observation at or below its le, so no bucket holds less than the one before it and the +Inf bucket equals _count.\n"]]

@@ -1,0 +1,1 @@
+[["Refuse the command with a DICT 5xx status: 550 unknown database, 551 unknown strategy, 552 no match,", "Refuse the command with a DICT 5xx status: 552 no match (a word you have no definition or match for), 550 unknown database (a name not in your list; '*' and '!' are never unknown), 551 unknown strategy (MATCH only),"]]
