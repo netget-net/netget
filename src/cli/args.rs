@@ -119,6 +119,41 @@ fn load_actions_file(path: &str) -> Result<Vec<serde_json::Value>> {
     Ok(actions)
 }
 
+/// The `--help` examples. A `const` rather than an inline literal with `\` continuations,
+/// because a continuation swallows the next line's leading whitespace and the examples lost
+/// their indentation.
+const AFTER_HELP: &str = "EXAMPLES:
+
+  Interactive dashboard:
+    netget
+
+  Ask the model to set something up (needs a model, e.g. Ollama running locally):
+    netget listen on port 8080 via http
+    cat prompt.txt | netget
+    netget -m llama3.2:latest -- start a redis server on port 6380
+
+  A server with no model at all: a static rule answers every request:
+    netget --server http --port 8080 \\
+      --server-handlers '[{\"event_pattern\":\"*\",\"handler\":{\"type\":\"static\",
+        \"actions\":[{\"type\":\"send_http_response\",\"status\":200,\"body\":\"hello\"}]}}]'
+
+  A server answered by the model, on an OS-assigned port, for a test fixture:
+    netget --server redis --port 0 --ready-file /tmp/netget-ready.json --run-for 60
+
+  Connect a client without a model round-trip:
+    netget --client redis --connect 127.0.0.1:6379
+    netget --client tcp --connect 10.0.0.5:9000 log every banner you receive
+    netget --client-list
+
+  Drive NetGet from an MCP client (Claude Code, Claude Desktop):
+    netget --mcp
+    netget --mcp-http 8080      # loopback; any other bind address needs a token
+    NETGET_MCP_TOKEN=$(openssl rand -hex 32) netget --mcp-http 8080 --listen-addr 0.0.0.0
+
+  Replay a saved session:
+    netget --load session.netget
+";
+
 /// NetGet - LLM-Controlled Network Application
 #[derive(Parser, Debug)]
 #[clap(
@@ -128,39 +163,206 @@ fn load_actions_file(path: &str) -> Result<Vec<serde_json::Value>> {
     long_about = "NetGet - LLM-Controlled Network Application\n\n\
                   NetGet is an AI-powered network tool where an LLM controls network protocols.\n\
                   It can operate in interactive mode (with TUI) or non-interactive mode.",
-    after_help = "EXAMPLES:\n\
-                  \n\
-                  Interactive mode (TUI):\n\
-                      netget\n\
-                  \n\
-                  Non-interactive with prompt (no quotes needed):\n\
-                      netget listen on port 80 via http\n\
-                      netget \"listen on port 80 via http\"     # quoted version\n\
-                      cat prompt.txt | netget\n\
-                  \n\
-                  Specify model with prompt after --:\n\
-                      netget -m llama3.2:latest -- listen on port 80\n\
-                      netget --model deepseek-coder:latest show version\n\
-                  \n\
-                  Specify scripting environment:\n\
-                      netget -e python listen on port 80\n\
-                      netget --env javascript -- start http server\n\
-                      netget --env llm show version\n\
-                  \n\
-                  MCP over HTTP (loopback by default; any other bind address needs a token):\n\
-                      netget --mcp-http 8080\n\
-                      NETGET_MCP_TOKEN=$(openssl rand -hex 32) netget --mcp-http 8080 --listen-addr 0.0.0.0\n\
-                  \n\
-                  Connect a client without a model round-trip:\n\
-                      netget --client redis --connect 127.0.0.1:6379\n\
-                      netget --client tcp --connect 10.0.0.5:9000 log every banner you receive\n\
-                      netget --client-list",
+    after_help = AFTER_HELP,
     trailing_var_arg = true,
     allow_hyphen_values = true
 )]
 pub struct Args {
+    /// Load server/client configuration from a .netget file
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "load",
+        value_name = "FILE",
+        help = "Load and execute server/client configurations from a .netget file"
+    )]
+    pub load_file: Option<String>,
+
+    /// Non-interactive only: exit (status 0) once this many network events have been handled
+    /// across every server and client.
+    #[clap(help_heading = "Non-interactive run", 
+        long = "exit-after-events",
+        value_name = "N",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Non-interactive mode: exit with status 0 once N network events have been handled across all servers and clients (each entry in the access log counts once, whatever answered it - handler, model or operator)"
+    )]
+    pub exit_after_events: Option<u64>,
+
+    /// Non-interactive only: exit (status 0) after this many seconds.
+    #[clap(help_heading = "Non-interactive run", 
+        long = "run-for",
+        value_name = "SECS",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Non-interactive mode: run for SECS seconds, then stop everything and exit with status 0"
+    )]
+    pub run_for: Option<u64>,
+
+    /// Non-interactive only: write a JSON readiness report here once every instance started.
+    #[clap(
+        help_heading = "Non-interactive run",
+        long = "ready-file",
+        value_name = "PATH",
+        help = "Non-interactive mode: once every server the run started is listening (and every client is connected), write a JSON report of the bound addresses to PATH — {\"version\":1,\"pid\":…,\"servers\":[{\"id\",\"protocol\",\"host\",\"port\",\"address\"}],\"clients\":[{\"id\",\"protocol\",\"remote_addr\",\"status\"}]}. Written atomically, so the file appearing means it is complete; an existing file at PATH is removed at startup. For test fixtures that start NetGet on port 0."
+    )]
+    pub ready_file: Option<std::path::PathBuf>,
+
+    /// Path to mock LLM configuration file (for testing)
+    #[clap(
+        long = "mock-config-file",
+        value_name = "FILE",
+        help = "Path to JSON file containing mock LLM responses (used by tests)",
+        hide = true  // Hidden from help output - internal testing flag
+    )]
+    pub mock_config_file: Option<std::path::PathBuf>,
+
+    /// Connect a protocol client to a remote server (non-interactive)
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "client",
+        value_name = "PROTOCOL",
+        help = "Connect a client of PROTOCOL to the address given by --connect, without asking the model to do it. Any trailing text is used as the client's instruction. Use --client-list to see available protocols."
+    )]
+    pub client_protocol: Option<String>,
+
+    /// Remote address for --client
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "connect",
+        value_name = "ADDRESS",
+        requires = "client_protocol",
+        help = "Remote address the --client connects to, e.g. 127.0.0.1:6379"
+    )]
+    pub client_addr: Option<String>,
+
+    /// Startup parameters for --client
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "client-params",
+        value_name = "JSON",
+        requires = "client_protocol",
+        help = "JSON object of startup parameters for --client (same keys as the MCP start_client tool's startup_params)"
+    )]
+    pub client_params: Option<String>,
+
+    /// Event handlers for --client
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "client-handlers",
+        value_name = "JSON",
+        requires = "client_protocol",
+        help = "JSON array of event handlers for --client (script or static handlers run in-process with NO LLM call, which is what makes a scripted client deterministic)"
+    )]
+    pub client_handlers: Option<String>,
+
+    /// List available client protocols
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "client-list",
+        help = "List protocols that can be connected as clients with --client"
+    )]
+    pub client_list: bool,
+
+    /// Start a server of PROTOCOL directly, skipping the initial model call
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "server",
+        value_name = "PROTOCOL",
+        conflicts_with = "client_protocol",
+        help = "Start a server of PROTOCOL directly, WITHOUT asking the model which protocol to run — the initial LLM call is skipped. Any trailing text becomes the server's per-request instruction (the general prompt used for every request). Use a base-stack name (e.g. http, dns, redis); run with --docs to see them. Combine with --port and --server-params."
+    )]
+    pub server_protocol: Option<String>,
+
+    /// Listen port for --server
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "port",
+        value_name = "PORT",
+        requires = "server_protocol",
+        help = "Port the --server listens on (default is the protocol's own default)."
+    )]
+    pub server_port: Option<u16>,
+
+    /// Startup parameters for --server
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "server-params",
+        value_name = "JSON",
+        requires = "server_protocol",
+        help = "JSON object of startup parameters for --server (same keys as the MCP start_server tool's startup_params, e.g. request_filter/default_response for http). Not every parameter has a dedicated flag — use this for the rest."
+    )]
+    pub server_params: Option<String>,
+
+    /// Event handlers for --server
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "server-handlers",
+        value_name = "JSON",
+        requires = "server_protocol",
+        help = "JSON array of event handlers for --server, the same shape as the MCP start_server tool's event_handlers: [{\"event_pattern\": \"*\", \"handler\": {\"type\": \"static\", \"actions\": [...]}}]. Static and script handlers answer in-process with NO model call; when a `*` rule answers every event, no model is needed at all."
+    )]
+    pub server_handlers: Option<String>,
+
+    /// Bind address for --server
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "host",
+        value_name = "ADDRESS",
+        requires = "server_protocol",
+        help = "Address the --server binds (default 127.0.0.1). 0.0.0.0 or :: exposes it on every interface."
+    )]
+    pub server_host: Option<String>,
+
+    /// History length for --server / --client
+    #[clap(
+        help_heading = "Start a server or client directly (no model call to set it up)",
+        long = "history",
+        value_name = "ENTRIES",
+        help = "For --server or --client: how many earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the protocol's default (40 for conversational protocols, 0 for independent requests such as DNS and HTTP; --docs names each)."
+    )]
+    pub history: Option<u16>,
+
+    /// Event batching for --server / --client
+    #[clap(help_heading = "Start a server or client directly (no model call to set it up)", 
+        long = "batching",
+        value_name = "true|false",
+        action = clap::ArgAction::Set,
+        help = "For --server or --client: hold events that arrive while the model is still answering and give them to it together afterwards. Omit for the protocol's default; refused where the protocol cannot batch."
+    )]
+    pub batching: Option<bool>,
+
+    /// Restart check for --client (`crate::client::restart_check`)
+    #[clap(help_heading = "Start a server or client directly (no model call to set it up)", 
+        long = "restart-check",
+        value_name = "on|off",
+        requires = "client_protocol",
+        value_parser = parse_on_off,
+        help = "For --client: before the client re-sends, in answer to a server message, the actions its first answer sent, ask the model whether its instruction calls for that, and drop the repeat unless it names a trigger found in both the instruction and the message. On by default. Turn it off for a client whose instruction relies on retries or repeats the model decides on by itself (a retry after an error the instruction does not mention): with it on, those repeats are dropped."
+    )]
+    pub restart_check: Option<bool>,
+
+    /// Record every instance's traffic to pcap files in this directory
+    #[clap(
+        help_heading = "Protocols, handlers and capture",
+        long = "capture",
+        value_name = "DIR",
+        help = "Record every server and client this process starts to a pcap file in DIR (created if missing), named netget-<server|client>-<id>-<protocol>.pcap — open it with `wireshark -r` / `tshark -r`. NetGet owns the sockets, so no capture privilege is needed; the IP/TCP/UDP headers are synthesised from each connection's addresses. Only some protocols feed it (servers: tcp, telnet, http, redis, dns, udp; clients: tcp). DIR is also where `capture: true` and a relative `capture` path on one instance go."
+    )]
+    pub capture: Option<std::path::PathBuf>,
+
+    /// Print documentation for every protocol and exit
+    #[clap(
+        help_heading = "Protocols, handlers and capture",
+        long = "docs",
+        help = "Print documentation for every compiled-in server and client protocol (base stacks, keywords, startup parameters, events, actions, examples) to stdout, then exit."
+    )]
+    pub docs: bool,
+
     /// LLM model to use (e.g., "llama3.2:latest", "deepseek-coder:latest")
-    #[clap(short = 'm', long = "model", value_name = "MODEL")]
+    #[clap(
+        help_heading = "Model",
+        short = 'm',
+        long = "model",
+        value_name = "MODEL"
+    )]
     pub model: Option<String>,
 
     /// Log level (off, error, warn, info, debug, trace)
@@ -176,6 +378,7 @@ pub struct Args {
 
     /// Scripting environment to use (on, off, python, javascript, go, perl)
     #[clap(
+        help_heading = "Protocols, handlers and capture",
         short = 'e',
         long = "env",
         value_name = "ENVIRONMENT",
@@ -185,17 +388,18 @@ pub struct Args {
 
     /// Event handler mode to use (any, script, static, llm)
     #[clap(
+        help_heading = "Protocols, handlers and capture",
         long = "handler",
         value_name = "MODE",
         help = "Event handler mode: any (LLM chooses handler types), script (force script handlers), static (force static responses), llm (force LLM handlers)"
     )]
     pub event_handler_mode: Option<String>,
 
-    /// Bind address for the MCP HTTP control endpoint (default: 127.0.0.1)
-    ///
-    /// Read only by `--mcp-http`. Protocol servers take their bind address from
-    /// each `start_server` / `open_server` call's `host`, not from this flag.
+    // Read only by `--mcp-http`. Protocol servers take their bind address from each
+    // `start_server` / `open_server` call's `host`, not from this flag. (A `//` comment: clap
+    // shows a multi-paragraph doc comment as the `--help` text in place of `help`.)
     #[clap(
+        help_heading = "MCP and agents",
         long = "listen-addr",
         value_name = "ADDRESS",
         help = "IP address the --mcp-http control endpoint binds (default 127.0.0.1). Protocol servers are NOT affected; they bind per start_server 'host'. A non-loopback address requires --mcp-token or NETGET_MCP_TOKEN."
@@ -204,6 +408,7 @@ pub struct Args {
 
     /// Include disabled protocols (for testing honeypot-only protocols like IPSec, OpenVPN)
     #[clap(
+        help_heading = "Protocols, handlers and capture",
         long = "include-disabled-protocols",
         help = "Includes experimental protocols for testing purposes"
     )]
@@ -211,6 +416,7 @@ pub struct Args {
 
     /// Refuse to start any protocol below this maturity level
     #[clap(
+        help_heading = "Protocols, handlers and capture",
         long = "min-stability",
         value_name = "LEVEL",
         help = "Refuse to start any protocol whose declared development state is below LEVEL (incomplete, experimental, beta, stable; case-insensitive). Also filters lower-maturity protocols out of the LLM's base-stack menu so the model is not offered a protocol the operator forbade. Default: no minimum (only Incomplete protocols are hidden from the model)."
@@ -258,6 +464,7 @@ pub struct Args {
 
     /// OpenAI-compatible API base URL (e.g., "https://api.openai.com", "http://localhost:1234")
     #[clap(
+        help_heading = "Model",
         long = "openai-url",
         value_name = "URL",
         help = "Base URL for an OpenAI-compatible API endpoint (e.g., https://api.openai.com, http://localhost:1234 for vLLM/LM Studio). Requires --model and an API key in NETGET_API_KEY or OPENAI_API_KEY (or, less safely, --api-key).",
@@ -267,6 +474,7 @@ pub struct Args {
 
     /// API key for OpenAI-compatible endpoint (prefer the environment variable)
     #[clap(
+        help_heading = "Model",
         long = "api-key",
         value_name = "KEY",
         help = "API key for the OpenAI-compatible endpoint. PREFER the NETGET_API_KEY (or OPENAI_API_KEY) environment variable: an argument is visible to every local user in the process table (`ps`), an environment variable is not. Passing this flag prints a warning."
@@ -274,7 +482,7 @@ pub struct Args {
     pub api_key: Option<String>,
 
     /// Route all LLM calls to the calling MCP agent instead of a model (MCP mode only)
-    #[clap(
+    #[clap(help_heading = "MCP and agents", 
         long = "llm-agent",
         help = "Do not call any model. Queue every LLM request for the calling MCP agent (e.g. Claude Code) to answer via the get_next_llm_request / answer_llm_request tools. Only meaningful with --mcp / --mcp-http; mutually exclusive with --ollama-url / --openai-url.",
         conflicts_with_all = ["ollama_url", "openai_url"]
@@ -283,6 +491,7 @@ pub struct Args {
 
     /// FIFO path for agent-queue push notifications
     #[clap(
+        help_heading = "MCP and agents",
         long = "llm-agent-pipe",
         value_name = "PATH",
         help = "Named pipe (FIFO) that receives the id of each newly queued LLM request, so the agent can block-read it to get woken instead of polling. Created if absent. Requires --llm-agent; the long-poll tool works without it.",
@@ -292,6 +501,7 @@ pub struct Args {
 
     /// Seconds a queued LLM request waits for the agent's answer before erroring
     #[clap(
+        help_heading = "MCP and agents",
         long = "llm-agent-timeout",
         value_name = "SECONDS",
         default_value = "300",
@@ -302,6 +512,7 @@ pub struct Args {
 
     /// Wall-clock bound (seconds) on a single LLM backend call
     #[clap(
+        help_heading = "Model",
         long = "llm-request-timeout",
         value_name = "SECONDS",
         help = "Wall-clock bound (seconds) on a single LLM backend call before it is treated as a transport failure and retried. Default: 300. A locally served 31B reasoning model answering a full prompt with the default tool list was measured at ~79s idle, so the old 120s default failed whenever anything else shared the GPU. Lower it only if you would rather fail fast than wait."
@@ -310,6 +521,7 @@ pub struct Args {
 
     /// Completion-token budget for a single LLM call
     #[clap(
+        help_heading = "Model",
         long = "llm-max-tokens",
         value_name = "TOKENS",
         help = "Completion tokens a single LLM call may produce before it is cut off. This is a runaway guard, not a working budget: the default (32768) sits far above any legitimate answer so it never truncates one, and --llm-request-timeout is the primary backstop. Lower it only to bound a model you expect to ramble."
@@ -318,6 +530,7 @@ pub struct Args {
 
     /// Sampler seed sent to the LLM backend
     #[clap(
+        help_heading = "Model",
         long = "llm-seed",
         value_name = "SEED",
         help = "Sampler seed sent with every LLM request (Ollama `options.seed`, OpenAI `seed`). With a fixed seed an identical prompt draws the same tokens, which is what makes a real-model run repeatable; a prompt that differs (a new port, a new query id) still diverges. Unset, nothing is sent and the model's own default applies."
@@ -325,7 +538,7 @@ pub struct Args {
     pub llm_seed: Option<u64>,
 
     /// Sampling temperature sent to the LLM backend
-    #[clap(
+    #[clap(help_heading = "Model", 
         long = "llm-temperature",
         value_name = "TEMP",
         value_parser = parse_temperature,
@@ -336,6 +549,7 @@ pub struct Args {
     /// Path to embedded GGUF model file (enables embedded LLM inference)
     #[cfg(feature = "embedded-llm")]
     #[clap(
+        help_heading = "Model",
         long = "embedded-model",
         value_name = "PATH",
         help = "Path to GGUF model file for embedded inference (e.g., mistral-7b.Q4_K_M.gguf). When specified, NetGet will use embedded llama.cpp instead of or alongside Ollama."
@@ -345,6 +559,7 @@ pub struct Args {
     /// Force use of embedded LLM backend (skip Ollama)
     #[cfg(feature = "embedded-llm")]
     #[clap(
+        help_heading = "Model",
         long = "use-embedded",
         help = "Use embedded LLM backend exclusively, skipping Ollama health check. Requires --embedded-model to be set or configured in ~/.netget/config.toml"
     )]
@@ -352,6 +567,7 @@ pub struct Args {
 
     /// Terminal color theme (auto, light, dark, neutral)
     #[clap(
+        help_heading = "Dashboard",
         long = "theme",
         value_name = "THEME",
         default_value = "auto",
@@ -359,11 +575,11 @@ pub struct Args {
     )]
     pub theme: String,
 
-    /// Show the generated ASCII art banner on startup (off by default)
-    ///
-    /// `--suppress-art` is kept as a hidden no-op so existing scripts and the
-    /// test harness keep working now that suppressing is the default.
+    // Show the generated ASCII art banner on startup (off by default). `--suppress-art` is
+    // kept as a hidden no-op so existing scripts and the test harness keep working now that
+    // suppressing is the default.
     #[clap(
+        help_heading = "Dashboard",
         long = "show-art",
         help = "Show the Ollama-generated ASCII art banner on startup (costs one model round trip)"
     )]
@@ -374,6 +590,7 @@ pub struct Args {
 
     /// Maximum concurrent LLM requests (default: 1)
     #[clap(
+        help_heading = "Model concurrency and budgets",
         long = "llm-max-concurrent",
         value_name = "NUM",
         help = "Maximum number of LLM requests in flight at once. Default: 1, i.e. sequential processing - additional requests QUEUE and are served in turn (bounded by --llm-queue-timeout and --llm-max-queued), they are not dropped. Increase for higher throughput with local Ollama."
@@ -382,14 +599,16 @@ pub struct Args {
 
     /// How long a network request waits for a concurrency permit
     #[clap(
+        help_heading = "Model concurrency and budgets",
         long = "llm-queue-timeout",
         value_name = "SECONDS",
-        help = "How long a network-triggered LLM request waits for a free slot under --llm-max-concurrent before the protocol answers the peer with an overload error instead. Default: 120 (one backend request timeout). 0 waits forever."
+        help = "How long a network-triggered LLM request waits for a free slot under --llm-max-concurrent before the protocol answers the peer with an overload error instead. Default: 300, the default backend request timeout (a request holding the slot cannot run longer). 0 waits forever."
     )]
     pub llm_queue_timeout: Option<u64>,
 
     /// How many network requests may wait for a concurrency permit at once
     #[clap(
+        help_heading = "Model concurrency and budgets",
         long = "llm-max-queued",
         value_name = "NUM",
         help = "How many network-triggered LLM requests may wait for a free slot at once. Beyond this the protocol answers the peer with an overload error immediately rather than growing the queue. Default: 128. 0 is unbounded."
@@ -398,6 +617,7 @@ pub struct Args {
 
     /// Token limit per time window (optional, for cloud API usage control)
     #[clap(
+        help_heading = "Model concurrency and budgets",
         long = "llm-token-limit",
         value_name = "TOKENS",
         help = "Maximum tokens (input + output) per time window. Use for cloud API rate limiting. No limit by default (suitable for local Ollama)."
@@ -406,6 +626,7 @@ pub struct Args {
 
     /// Token limit time window in seconds (default: 60)
     #[clap(
+        help_heading = "Model concurrency and budgets",
         long = "llm-token-window",
         value_name = "SECONDS",
         default_value = "60",
@@ -421,168 +642,14 @@ pub struct Args {
     )]
     pub no_scripts: bool,
 
-    /// Load server/client configuration from a .netget file
-    #[clap(
-        long = "load",
-        value_name = "FILE",
-        help = "Load and execute server/client configurations from a .netget file"
-    )]
-    pub load_file: Option<String>,
-
-    /// Non-interactive only: exit (status 0) once this many network events have been handled
-    /// across every server and client.
-    #[clap(
-        long = "exit-after-events",
-        value_name = "N",
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "Non-interactive mode: exit with status 0 once N network events have been handled across all servers and clients (each entry in the access log counts once, whatever answered it - handler, model or operator)"
-    )]
-    pub exit_after_events: Option<u64>,
-
-    /// Non-interactive only: exit (status 0) after this many seconds.
-    #[clap(
-        long = "run-for",
-        value_name = "SECS",
-        value_parser = clap::value_parser!(u64).range(1..),
-        help = "Non-interactive mode: run for SECS seconds, then stop everything and exit with status 0"
-    )]
-    pub run_for: Option<u64>,
-
-    /// Non-interactive only: write a JSON readiness report here once every instance started.
-    #[clap(
-        long = "ready-file",
-        value_name = "PATH",
-        help = "Non-interactive mode: once every server the run started is listening (and every client is connected), write a JSON report of the bound addresses to PATH — {\"version\":1,\"pid\":…,\"servers\":[{\"id\",\"protocol\",\"host\",\"port\",\"address\"}],\"clients\":[{\"id\",\"protocol\",\"remote_addr\",\"status\"}]}. Written atomically, so the file appearing means it is complete; an existing file at PATH is removed at startup. For test fixtures that start NetGet on port 0."
-    )]
-    pub ready_file: Option<std::path::PathBuf>,
-
-    /// Path to mock LLM configuration file (for testing)
-    #[clap(
-        long = "mock-config-file",
-        value_name = "FILE",
-        help = "Path to JSON file containing mock LLM responses (used by tests)",
-        hide = true  // Hidden from help output - internal testing flag
-    )]
-    pub mock_config_file: Option<std::path::PathBuf>,
-
-    /// Connect a protocol client to a remote server (non-interactive)
-    #[clap(
-        long = "client",
-        value_name = "PROTOCOL",
-        help = "Connect a client of PROTOCOL to the address given by --connect, without asking the model to do it. Any trailing text is used as the client's instruction. Use --client-list to see available protocols."
-    )]
-    pub client_protocol: Option<String>,
-
-    /// Remote address for --client
-    #[clap(
-        long = "connect",
-        value_name = "ADDRESS",
-        requires = "client_protocol",
-        help = "Remote address the --client connects to, e.g. 127.0.0.1:6379"
-    )]
-    pub client_addr: Option<String>,
-
-    /// Startup parameters for --client
-    #[clap(
-        long = "client-params",
-        value_name = "JSON",
-        requires = "client_protocol",
-        help = "JSON object of startup parameters for --client (same keys as the MCP start_client tool's startup_params)"
-    )]
-    pub client_params: Option<String>,
-
-    /// Event handlers for --client
-    #[clap(
-        long = "client-handlers",
-        value_name = "JSON",
-        requires = "client_protocol",
-        help = "JSON array of event handlers for --client (script or static handlers run in-process with NO LLM call, which is what makes a scripted client deterministic)"
-    )]
-    pub client_handlers: Option<String>,
-
-    /// List available client protocols
-    #[clap(
-        long = "client-list",
-        help = "List protocols that can be connected as clients with --client"
-    )]
-    pub client_list: bool,
-
-    /// Start a server of PROTOCOL directly, skipping the initial model call
-    #[clap(
-        long = "server",
-        value_name = "PROTOCOL",
-        conflicts_with = "client_protocol",
-        help = "Start a server of PROTOCOL directly, WITHOUT asking the model which protocol to run — the initial LLM call is skipped. Any trailing text becomes the server's per-request instruction (the general prompt used for every request). Use a base-stack name (e.g. http, dns, redis); run with --docs to see them. Combine with --port and --server-params."
-    )]
-    pub server_protocol: Option<String>,
-
-    /// Listen port for --server
-    #[clap(
-        long = "port",
-        value_name = "PORT",
-        requires = "server_protocol",
-        help = "Port the --server listens on (default is the protocol's own default)."
-    )]
-    pub server_port: Option<u16>,
-
-    /// Startup parameters for --server
-    #[clap(
-        long = "server-params",
-        value_name = "JSON",
-        requires = "server_protocol",
-        help = "JSON object of startup parameters for --server (same keys as the MCP start_server tool's startup_params, e.g. request_filter/default_response for http). Not every parameter has a dedicated flag — use this for the rest."
-    )]
-    pub server_params: Option<String>,
-
-    /// History length for --server / --client
-    #[clap(
-        long = "history",
-        value_name = "ENTRIES",
-        help = "For --server or --client: how many earlier exchanges on the same connection the model is shown with each event; 0 turns it off. Omit for the protocol's default (40 for conversational protocols, 0 for independent requests such as DNS and HTTP; --docs names each)."
-    )]
-    pub history: Option<u16>,
-
-    /// Event batching for --server / --client
-    #[clap(
-        long = "batching",
-        value_name = "true|false",
-        action = clap::ArgAction::Set,
-        help = "For --server or --client: hold events that arrive while the model is still answering and give them to it together afterwards. Omit for the protocol's default; refused where the protocol cannot batch."
-    )]
-    pub batching: Option<bool>,
-
-    /// Restart check for --client (`crate::client::restart_check`)
-    #[clap(
-        long = "restart-check",
-        value_name = "on|off",
-        requires = "client_protocol",
-        value_parser = parse_on_off,
-        help = "For --client: before the client re-sends, in answer to a server message, the actions its first answer sent, ask the model whether its instruction calls for that, and drop the repeat unless it names a trigger found in both the instruction and the message. On by default. Turn it off for a client whose instruction relies on retries or repeats the model decides on by itself (a retry after an error the instruction does not mention): with it on, those repeats are dropped."
-    )]
-    pub restart_check: Option<bool>,
-
-    /// Record every instance's traffic to pcap files in this directory
-    #[clap(
-        long = "capture",
-        value_name = "DIR",
-        help = "Record every server and client this process starts to a pcap file in DIR (created if missing), named netget-<server|client>-<id>-<protocol>.pcap — open it with `wireshark -r` / `tshark -r`. NetGet owns the sockets, so no capture privilege is needed; the IP/TCP/UDP headers are synthesised from each connection's addresses. Only some protocols feed it (servers: tcp, telnet, http, redis, dns, udp; clients: tcp). DIR is also where `capture: true` and a relative `capture` path on one instance go."
-    )]
-    pub capture: Option<std::path::PathBuf>,
-
-    /// Print documentation for every protocol and exit
-    #[clap(
-        long = "docs",
-        help = "Print documentation for every compiled-in server and client protocol (base stacks, keywords, startup parameters, events, actions, examples) to stdout, then exit."
-    )]
-    pub docs: bool,
-
     /// Connect an agent to a running --mcp-http --llm-agent process. Emits compact
     /// requests as JSON lines on stdout and reads answers as JSON lines on stdin.
-    #[clap(long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "load_file", "llm_agent"])]
+    #[clap(help_heading = "MCP and agents", long = "agent-connect", value_name = "MCP_URL", conflicts_with_all = ["mcp_stdio", "mcp_http", "server_protocol", "client_protocol", "load_file", "llm_agent"])]
     pub agent_connect: Option<String>,
 
     /// Run as MCP STDIO server (for Claude Desktop/Code integration)
     #[clap(
+        help_heading = "MCP and agents",
         long = "mcp",
         alias = "mcp-stdio",
         help = "Run as an MCP server over stdin/stdout for integration with MCP clients like Claude Desktop"
@@ -591,6 +658,7 @@ pub struct Args {
 
     /// Run as an MCP server over HTTP/SSE on the given port (for remote/web MCP clients)
     #[clap(
+        help_heading = "MCP and agents",
         long = "mcp-http",
         value_name = "PORT",
         conflicts_with = "mcp_stdio",
@@ -600,6 +668,7 @@ pub struct Args {
 
     /// Bearer token every --mcp-http request must carry
     #[clap(
+        help_heading = "MCP and agents",
         long = "mcp-token",
         value_name = "TOKEN",
         help = "Require 'Authorization: Bearer <TOKEN>' on every --mcp-http request. PREFER the NETGET_MCP_TOKEN environment variable: an argument is visible to every local user in the process table. Required to bind --listen-addr to anything but a loopback address; without it the endpoint admits loopback Host/Origin only."
@@ -946,19 +1015,13 @@ impl Args {
 
     /// Parse `--client-handlers` into a list of event handler definitions
     pub fn parse_client_handlers(&self) -> Result<Option<Vec<serde_json::Value>>> {
-        match &self.client_handlers {
-            None => Ok(None),
-            Some(raw) => {
-                let value: serde_json::Value = serde_json::from_str(raw)
-                    .map_err(|e| anyhow::anyhow!("--client-handlers is not valid JSON: {}", e))?;
-                match value {
-                    serde_json::Value::Array(handlers) => Ok(Some(handlers)),
-                    _ => anyhow::bail!(
-                        "--client-handlers must be a JSON array of handler objects, e.g. '[{{\"event\": \"redis_response_received\", \"handler_type\": \"static\", \"response\": []}}]'"
-                    ),
-                }
-            }
-        }
+        parse_handlers_flag("--client-handlers", self.client_handlers.as_deref())
+    }
+
+    /// Parse `--server-handlers` into handler objects (validated against the protocol when
+    /// the server starts).
+    pub fn parse_server_handlers(&self) -> Result<Option<Vec<serde_json::Value>>> {
+        parse_handlers_flag("--server-handlers", self.server_handlers.as_deref())
     }
 
     /// Parse `--min-stability` into a [`DevelopmentState`].
@@ -995,6 +1058,24 @@ impl Args {
                 .llm_max_queued
                 .unwrap_or(crate::llm::DEFAULT_MAX_QUEUED),
         }
+    }
+}
+
+/// A `--client-handlers` / `--server-handlers` value: a JSON array of handler objects, the
+/// shape MCP's `event_handlers` takes. Each entry is validated against the protocol by the
+/// start itself.
+fn parse_handlers_flag(flag: &str, raw: Option<&str>) -> Result<Option<Vec<serde_json::Value>>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| anyhow::anyhow!("{flag} is not valid JSON: {e}"))?;
+    match value {
+        serde_json::Value::Array(handlers) => Ok(Some(handlers)),
+        _ => anyhow::bail!(
+            "{flag} must be a JSON array of handler objects, e.g. \
+             '[{{\"event_pattern\": \"*\", \"handler\": {{\"type\": \"static\", \"actions\": []}}}}]'"
+        ),
     }
 }
 

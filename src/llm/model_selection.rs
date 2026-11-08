@@ -136,6 +136,13 @@ pub async fn select_or_validate_model(
     interactive: bool,
     ollama_url: &str,
 ) -> Result<Option<String>> {
+    // How the person reading this picks a model: the dashboard has `/model`; a command line
+    // has `--model`, and nothing else it can type means anything.
+    let choose = if interactive {
+        "Use `/model` to list and select a model"
+    } else {
+        "Choose one with --model <name>"
+    };
     // Query Ollama for available models
     let models = match check_ollama_availability(ollama_url).await {
         Ok(models) => models,
@@ -145,8 +152,8 @@ pub async fn select_or_validate_model(
             // asked a *different* host than the operator configured, and a message that
             // omits the host cannot show that.
             let error_msg = format!(
-                "✗  Ollama is not available at {}: {}\n   Please ensure Ollama is running there: https://ollama.ai\n   Use `/model` to list and select a model once Ollama is running.",
-                ollama_url, e
+                "✗  Ollama is not available at {}: {}\n   Please ensure Ollama is running there: https://ollama.ai\n   {} once Ollama is running.",
+                ollama_url, e, choose
             );
 
             if interactive {
@@ -161,7 +168,10 @@ pub async fn select_or_validate_model(
     };
 
     if models.is_empty() {
-        let error_msg = "✗  No models available in Ollama.\n   Please pull a model first: ollama pull qwen2.5-coder:32b\n   Use `/model` to list and select a model.";
+        let error_msg = format!(
+            "✗  No models available in Ollama at {}.\n   Please pull a model first: ollama pull qwen2.5-coder:32b\n   {}.",
+            ollama_url, choose
+        );
 
         if interactive {
             warn!("{}", error_msg);
@@ -184,8 +194,8 @@ pub async fn select_or_validate_model(
                 .join(", ");
 
             let error_msg = format!(
-                "✗  Configured model '{}' is not installed at Ollama {}.\n   Installed models: {}\n   Use `/model` to select a different model.",
-                model_name, ollama_url, available_models
+                "✗  Configured model '{}' is not installed at Ollama {}.\n   Installed models: {}\n   {}.",
+                model_name, ollama_url, available_models, choose
             );
 
             if interactive {
@@ -268,7 +278,7 @@ pub async fn ensure_model_selected(
         }
         Ok(None) => {
             anyhow::bail!(
-                "✗  No model available at {}.\n   Please:\n   1. Ensure Ollama is running there: https://ollama.ai\n   2. Pull a model: ollama pull qwen2.5-coder:32b\n   3. Use `/model` to select a model",
+                "✗  No model available at {}.\n   Please:\n   1. Ensure Ollama is running there: https://ollama.ai\n   2. Pull a model: ollama pull qwen2.5-coder:32b\n   3. Choose it: --model <name>, MCP set_model, or /model in the dashboard",
                 llm_endpoint
             )
         }

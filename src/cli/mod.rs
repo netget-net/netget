@@ -597,6 +597,18 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
     let to_stderr = non_interactive::protocol_owns_stdout(&canonical);
 
     let startup_params = args.parse_server_params()?;
+    let event_handlers = args.parse_server_handlers()?;
+    // Whether any event can reach the model. Parsed here only to answer that; the start
+    // validates the handlers against the protocol and reports a bad one itself.
+    let needs_model = match &event_handlers {
+        None => true,
+        Some(handlers) => crate::events::handler::EventHandler::parse_event_handlers_for(
+            handlers.clone(),
+            crate::events::handler::HandlerOwner::Server(&canonical),
+        )
+        .map(|config| config.may_reach_model())
+        .unwrap_or(true),
+    };
     let instruction = args.server_instruction(&canonical);
     let settings = Settings::load();
 
@@ -618,26 +630,47 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
     // pick an available one from Ollama rather than sending an unvalidated name
     // (a stale settings default like a model that was never pulled) that fails on
     // the first request with an unhelpful "LLM failed to generate valid response".
+    //
+    // A server whose handlers answer every event never asks the model, so — like a scripted
+    // --client — it starts without one being reachable, and takes the configured model as
+    // given in case a rule hands an event to it.
     let configured_model = args.model.clone().or_else(|| settings.model.clone());
-    let selected_model = if args.openai_url.is_some() {
-        configured_model
-            .ok_or_else(|| anyhow::anyhow!("--model is required when using --openai-url"))?
+    if !needs_model {
+        non_interactive::emit_status_line(
+            "[SERVER] Every event is answered by --server-handlers; no model is needed.",
+            to_stderr,
+        );
+        if let Some(model) = configured_model {
+            state.set_ollama_model(Some(model)).await;
+        }
     } else {
-        let ollama_url = args
-            .ollama_url
-            .as_deref()
-            .unwrap_or("http://localhost:11434");
-        crate::llm::select_or_validate_model(configured_model, false, ollama_url)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("No model available — pull one in Ollama or pass --model")
-            })?
-    };
-    non_interactive::emit_status_line(
-        &format!("[SERVER] Using model: {}", selected_model),
-        to_stderr,
-    );
-    state.set_ollama_model(Some(selected_model)).await;
+        let selected_model = if args.openai_url.is_some() {
+            configured_model
+                .ok_or_else(|| anyhow::anyhow!("--model is required when using --openai-url"))?
+        } else {
+            let ollama_url = args
+                .ollama_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
+            crate::llm::select_or_validate_model(configured_model, false, ollama_url)
+                .await
+                .map_err(|e| {
+                    e.context(
+                        "--server sends every event no --server-handlers rule answers to the \
+                         model; answer them all without one by ending --server-handlers with a \
+                         \"*\" static or script rule",
+                    )
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("No model available — pull one in Ollama or pass --model")
+                })?
+        };
+        non_interactive::emit_status_line(
+            &format!("[SERVER] Using model: {}", selected_model),
+            to_stderr,
+        );
+        state.set_ollama_model(Some(selected_model)).await;
+    }
 
     if let Some(mode) = args
         .parse_scripting_mode()?
@@ -691,16 +724,16 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
 
     let server_id = crate::cli::server_startup::start_server_from_action(
         &state,
-        None, // mac_address
-        None, // interface
-        None, // host (defaults to 127.0.0.1)
+        None,                     // mac_address
+        None,                     // interface
+        args.server_host.clone(), // host (defaults to 127.0.0.1)
         args.server_port,
         &canonical,
         false, // send_first
         None,  // initial_memory
         instruction,
         startup_params,
-        None, // event_handlers
+        event_handlers,
         None, // scheduled_tasks
         None, // feedback_instructions
         crate::protocol::metadata::ConversationOverrides {
