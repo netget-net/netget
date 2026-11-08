@@ -1,0 +1,41 @@
+seed   1 fail [{"type": "send_dict_definitions", "word": "quadruplet", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadruplet\n    n 1: a set of four points that are equally spaced around a circle"}]}]
+seed   2 PASS 
+seed   3 fail [{"type": "send_dict_definitions", "word": "quadrature", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadrature\n    n 1: the quality of having four angles"}]}]
+seed   4 PASS 
+seed   5 PASS 
+seed   6 fail [{"type": "send_dict_definitions", "word": "quarantine", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quarantine\n    n 1: a period of time spent in quarantine"}]}]
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 PASS 
+seed  11 PASS 
+seed  12 fail [{"type": "send_dict_definitions", "word": "quadrant", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadrant\n    n 1: a part of a surface laid out in squares"}]}, {"type": "close_connection"}]
+seed  13 PASS 
+seed  14 fail [{"type": "send_dict_definitions", "word": "quadruplet", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadruplet\n    n 1: a group of four"}]}]
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+seed  21 fail [{"type": "send_dict_definitions", "word": "quokka", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quokka\n    n 1: a small wallaby native to Western Australia"}]}]
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 fail [{"type": "send_dict_definitions", "word": "quokka", "definitions": [{"database": "qdb", "database_description": "Quokka database", "text": "quokka\n    n 1: a happy animal\n    v 1: to be happy"}]}, {"type": "close_connection"}]
+seed  26 fail [{"type": "send_dict_definitions", "word": "quintessence", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quintessence\n    n 1: the most essential part of something"}]}]
+seed  27 PASS 
+seed  28 PASS 
+seed  29 PASS 
+seed  30 PASS 
+seed  31 PASS 
+seed  32 fail [{"type": "send_dict_definitions", "word": "quantum", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quantum\n    n 1: a discrete amount of something distinct individual items"}, {"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quantum\n 
+seed  33 PASS 
+seed  34 PASS 
+seed  35 PASS 
+seed  36 PASS 
+seed  37 PASS 
+seed  38 PASS 
+seed  39 PASS 
+seed  40 fail [{"type": "send_dict_definitions", "word": "quadruplet", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadruplet\n    n 1: one of four children born at the same time"}]}]
+TALLY v3.txt dict_nomatch_strict 30/40

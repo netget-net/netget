@@ -1,0 +1,21 @@
+seed   1 fail NOJSON ### Network Event 1: bolt_query ### Context Data ```json {   "query": "MATCH (p:Person) RETURN p.name AS name",   "parameters": {},   "mode": "write",   "in_transaction": false,   "answer_with": "firs
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 fail NOJSON **Event to answer**  The client ran a Cypher query against the graph database. The query is: `MATCH (p:Person) RETURN p.name AS name`. We need to follow the server's instruction to act as a Neo4j grap
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+TALLY query-people-q1.txt bolt_people 18/20

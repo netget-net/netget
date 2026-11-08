@@ -1,0 +1,21 @@
+seed   1 fail NOJSON ### Network Event 1: bolt_query - **Event ID**: #2 - **Context Data**:  ```json {   "query": "MATCH (m:Movie) RETURN count(m) AS movies",   "parameters": {},   "database": "neo4j",   "mode": "write", 
+seed   2 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {"nodes_updated": 0, "properties_set": 0}}]
+seed   3 fail [{"type": "send_bolt_records", "fields": ["count"], "records": [[{"movies": 42}]], "stats": {"nodes_read": 42, "relationships_read": 0}, "query_type": "r"}]
+seed   4 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed   5 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [[{"movies": 42}]]}]
+seed   6 fail NOJSON **Event to answer**  The client ran a Cypher query against the graph database. The query is:  `MATCH (m:Movie) RETURN count(m) AS movies`  According to the server's instructions, it holds exactly 42 M
+seed   7 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {"nodes_created": 0, "nodes_deleted": 0, "relationships_created": 0, "relationships_deleted": 0, "properties_set": 0, "labels_added": 0, "labels_removed": 0, "indexes_added": 0, "indexes_removed": 0, "constraints_adde
+seed   8 PASS 
+seed   9 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [[42]], "stats": null, "query_type": "r"}]
+seed  10 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  11 fail [{"type": "send_bolt_records", "fields": ["count"], "records": [["42"]], "stats": {"nodes_created": 0, "nodes_deleted": 0, "relationships_created": 0, "relationships_deleted": 0}, "query_type": "r"}]
+seed  12 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [{"movies": 42}], "stats": {}, "query_type": "r"}]
+seed  13 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  14 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  15 PASS 
+seed  16 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [[42]]}]
+seed  17 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  18 PASS 
+seed  19 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  20 fail [{"type": "send_bolt_records", "fields": ["count(m)"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+TALLY query-master.txt bolt_count 3/20

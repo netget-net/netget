@@ -1,0 +1,3 @@
+[["  - password_configured (boolean): True when the server has a password and the client's matched it\n", ""],
+ ["  \"password_configured\": false,\n", ""],
+ ["(scheme basic, a credential) may log in.", "(scheme basic, a credential) may log in. This server has no password configured, so no password is checked and none is wrong: that is never a reason to refuse."]]

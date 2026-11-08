@@ -1,0 +1,21 @@
+seed   1 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed   2 PASS 
+seed   3 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed   4 PASS 
+seed   5 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed   6 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed   7 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}, {"type": "append_to_log", "output_name": "access_logs", "content": "127.0.0.1 - - [29/Oct/2025:12:34:56 +0000] \"PASS eval@example.com\" 331 User anonymous OK. Please supply password"}]
+seed   8 PASS 
+seed   9 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed  15 PASS 
+seed  16 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed  17 PASS 
+seed  18 PASS 
+seed  19 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous OK. Please supply password"}]
+seed  20 PASS 
+TALLY pass46-master.txt ftp_pass_230 11/20

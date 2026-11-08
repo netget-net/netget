@@ -1,0 +1,21 @@
+seed   1 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed   9 PASS 
+seed  10 PASS 
+seed  11 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": null, "query_type": "r"}]
+seed  12 PASS 
+seed  13 PASS 
+seed  14 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}}, {"type": "append_memory", "value": "movie_count: 42"}]
+seed  15 PASS 
+seed  16 PASS 
+seed  17 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}}]
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+TALLY query-q1.txt bolt_count 15/20
