@@ -32,3 +32,16 @@ fn test_format_available_none() {
     };
     assert_eq!(env.format_available(), "None");
 }
+
+/// `perl --version` is a blank line and a copyright notice, which used to reach the startup
+/// log and every prompt listing the runtimes.
+#[test]
+fn perl_is_reported_by_its_version_alone() {
+    let env = ScriptingEnvironment::detect();
+    if let Some(perl) = env.perl {
+        assert!(
+            !perl.contains('\n') && !perl.contains("Larry Wall"),
+            "one line, no copyright notice: {perl:?}"
+        );
+    }
+}
