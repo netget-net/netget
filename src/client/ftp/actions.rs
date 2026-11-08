@@ -231,6 +231,18 @@ impl Protocol for FtpClientProtocol {
     }
 }
 
+/// The bytes `send_ftp_command` puts on the wire: the command with exactly one CRLF.
+///
+/// RFC 959 ends every command with CRLF (Telnet end-of-line). Whatever line ending the model
+/// wrote — none, `\n`, `\r\n`, or a stray `\r` — is removed and CRLF is written once. Swapping
+/// a trailing `\n` for a lone `\r` would put a command on the wire that never ends: a server
+/// reading to the newline waits for the rest of the line and the session stalls.
+pub fn ftp_command_line(command: &str) -> Vec<u8> {
+    let mut line = command.trim_end_matches(['\r', '\n']).to_string();
+    line.push_str("\r\n");
+    line.into_bytes()
+}
+
 // Implement Client trait (client-specific functionality)
 impl Client for FtpClientProtocol {
     fn connect(
@@ -265,16 +277,7 @@ impl Client for FtpClientProtocol {
                     .and_then(|v| v.as_str())
                     .context("Missing 'command' parameter in send_ftp_command action")?;
 
-                // FTP commands must end with CRLF
-                let data = if command.ends_with("\r\n") {
-                    command.as_bytes().to_vec()
-                } else if command.ends_with('\n') {
-                    format!("{}\r", command.trim_end_matches('\n')).into_bytes()
-                } else {
-                    format!("{}\r\n", command).into_bytes()
-                };
-
-                Ok(ClientActionResult::SendData(data))
+                Ok(ClientActionResult::SendData(ftp_command_line(command)))
             }
             "disconnect" => Ok(ClientActionResult::Disconnect),
             "wait_for_more" => Ok(ClientActionResult::WaitForMore),

@@ -45,6 +45,12 @@ This implementation handles FTP control channel communication:
 | `wait_for_more` | Wait for more data | - |
 | `disconnect` | Close connection | - |
 
+`send_ftp_command` writes the command with exactly one CRLF (`ftp_command_line` in
+`actions.rs`): whatever ending the model gave it — none, `\n`, `\r\n` or a stray `\r` — is
+removed first. A `\n` swapped for a lone `\r` would leave a command no server can see the end
+of. `tests/client/ftp/line_ending_test.rs` reads the bytes off a plain `TcpListener` for each
+of the four endings.
+
 ### Common FTP Commands
 
 - `USER <username>` - Set username
