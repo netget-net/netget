@@ -16,7 +16,7 @@ use crate::tui::app::{DashboardApp, Focus, UiKey};
 use crate::tui::cards::{Activate, InstanceAction, Row};
 use crate::tui::hit::{HitTarget, SegmentId};
 use crate::tui::modal::Modal;
-use crate::tui::uimsg::{ActionOrigin, UiMsg};
+use crate::tui::uimsg::UiMsg;
 
 /// What the event loop should do after handling an event.
 pub enum Outcome {
@@ -656,12 +656,18 @@ pub async fn handle_mouse(app: &mut DashboardApp, event: MouseEvent, state: &App
     Outcome::Continue
 }
 
-/// Fold the result of a spawned action back into the UI: on success the
-/// originating modal closes and the summary goes to the stream; on failure
-/// the modal stays open showing the error, so the user can fix and retry.
+/// Fold the result of a spawned action back into the UI.
+///
+/// The result goes to the modal holding its ticket — wherever that modal is
+/// in the stack, and only that one: on success it closes and the summary goes
+/// to the stream; on failure it stays open showing the error, so the user can
+/// fix and retry. When no modal holds the ticket (the action was started with
+/// none, or its modal was closed meanwhile) both go to the stream. Matching on
+/// the modal's *type* instead let a slow `c` connect close, or write its error
+/// into, an unrelated form opened while it was in flight.
 pub fn handle_ui_msg(app: &mut DashboardApp, msg: UiMsg) {
     app.dirty = true;
-    let (origin, result) = match msg {
+    let (ticket, result) = match msg {
         UiMsg::OpenForm(model) => {
             app.modals.push(Modal::Form(model));
             return;
@@ -670,40 +676,48 @@ pub fn handle_ui_msg(app: &mut DashboardApp, msg: UiMsg) {
             app.push_system(text);
             return;
         }
-        UiMsg::ActionDone { origin, result } => (origin, result),
+        UiMsg::ActionDone { ticket, result } => (ticket, result),
     };
 
-    let matches_origin = matches!(
-        (origin, app.modal()),
-        (ActionOrigin::Form, Some(Modal::Form(_)))
-            | (ActionOrigin::Routing, Some(Modal::Routing(_)))
-    );
+    let holder = app.modals.iter().position(|modal| match modal {
+        Modal::Form(form) => form.pending == Some(ticket),
+        Modal::Routing(model) => model.pending == Some(ticket),
+        _ => false,
+    });
+    let Some(index) = holder else {
+        match result {
+            Ok(summary) => app.push_system(summary),
+            Err(error) => app.push_error(error),
+        }
+        return;
+    };
 
     match result {
         Ok(summary) => {
-            if matches_origin {
-                app.modals.pop();
+            app.modals.remove(index);
+            // A text editor opened from it writes back into the modal beneath
+            // itself, which is no longer the one that opened it.
+            if matches!(app.modals.get(index), Some(Modal::TextEditor { .. })) {
+                app.modals.remove(index);
             }
             app.push_system(summary);
         }
         Err(error) => {
-            if matches_origin {
-                match app.modals.last_mut() {
-                    Some(Modal::Form(form)) => {
-                        form.busy = false;
-                        form.error = Some(error);
-                    }
-                    Some(Modal::Routing(model)) => {
-                        model.busy = false;
-                        model.error = Some(error);
-                    }
-                    Some(Modal::Composer(composer)) => {
-                        composer.busy = false;
-                        composer.error = Some(error);
-                    }
-                    _ => {}
+            let unshown = match &mut app.modals[index] {
+                Modal::Form(form) => {
+                    form.pending = None;
+                    form.error = Some(error);
+                    None
                 }
-            } else {
+                Modal::Routing(model) => {
+                    model.pending = None;
+                    model.error = Some(error);
+                    None
+                }
+                // Only a form or a routing editor holds a ticket.
+                _ => Some(error),
+            };
+            if let Some(error) = unshown {
                 app.push_error(error);
             }
         }

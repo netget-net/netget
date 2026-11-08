@@ -146,8 +146,13 @@ by `actions::run`, whatever produced it — a letter, a menu entry, Enter on an 
 
 Creating a server, connecting a client, sending through one, applying a routing change: all
 network I/O, all spawned, all reporting back through `uimsg::UiMsg`. Awaiting one inline
-froze the whole dashboard for the kernel's SYN-retry window once. `handle_ui_msg` closes the
-originating modal on success and leaves it open showing the error on failure.
+froze the whole dashboard for the kernel's SYN-retry window once. Each spawned action carries
+a `uimsg::ActionTicket`; a form or routing editor that submits holds its ticket while the work
+is in flight, and `handle_ui_msg` routes the result to the modal holding it — wherever it sits
+in the stack — closing it on success and leaving it open showing the error on failure. A result
+no modal holds (`c` connecting a client, a protocol started on defaults from the picker, a
+modal closed meanwhile) goes to the stream, so it can never close or annotate a form opened for
+something else while it was in flight.
 
 ## Peer text is made terminal-safe at ingestion, not per renderer
 
@@ -244,6 +249,3 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   and the routing draft still render through ratatui's `Wrap` with no scroll, so a verb with
   more parameters than the box holds clips the last ones (and the error below them) the way
   the form did; `wrap.rs` plus an explicit scroll is the shape the form now uses.
-- A result from a spawned action closes or annotates *whichever* modal of its kind is on top
-  (`keymap::handle_ui_msg` matches on the modal's type, not its identity): a slow `c` connect
-  that finishes while an edit form for another instance is open lands in that form.

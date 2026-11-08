@@ -357,12 +357,17 @@ pub struct RoutingModel {
     draft_is_new: bool,
     pub error: Option<String>,
     pub dirty: bool,
-    /// An apply is in flight (spawned; see `crate::tui::uimsg`).
-    pub busy: bool,
+    /// The apply in flight, if any (spawned; see `crate::tui::uimsg`).
+    pub pending: Option<crate::tui::uimsg::ActionTicket>,
     pub focus: RoutingFocus,
 }
 
 impl RoutingModel {
+    /// Whether an apply is in flight.
+    pub fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub fn new(
         key: UiKey,
         protocol: &str,
@@ -381,7 +386,7 @@ impl RoutingModel {
             draft_is_new: false,
             error: None,
             dirty: false,
-            busy: false,
+            pending: None,
             focus: RoutingFocus::List,
         }
     }

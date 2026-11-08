@@ -1230,3 +1230,101 @@ fn help_describes_the_stream_as_it_is() {
         "how to reach the stream's lines is listed:\n{text}"
     );
 }
+
+/// A spawned action's result reaches the modal that started it and no other.
+/// `c` on a server connects a client with no modal open; if the connect is slow
+/// and the user opens another instance's edit form meanwhile, the result must
+/// go to the stream, not close that form or write its error into it.
+#[test]
+fn a_spawned_result_lands_only_in_the_modal_that_started_it() {
+    use netget::tui::keymap::handle_ui_msg;
+    use netget::tui::modal::form::FormModel;
+    use netget::tui::modal::Modal;
+    use netget::tui::uimsg::{ActionTicket, UiMsg};
+
+    let mut app = app();
+    let snapshot = populated();
+    let server = snapshot.servers[0].clone();
+    app.absorb_snapshot(snapshot);
+
+    // The user's edit form, opened while a `c` connect (ticket nobody holds) runs.
+    app.modals
+        .push(Modal::Form(Box::new(FormModel::for_edit_server(&server))));
+    let connect = ActionTicket::next();
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket: connect,
+            result: Err("connect to 127.0.0.1:8080: Connection refused".into()),
+        },
+    );
+    let Some(Modal::Form(form)) = app.modals.last() else {
+        panic!("the unrelated edit form stays open after a failed connect");
+    };
+    assert!(
+        form.error.is_none(),
+        "the connect's error is not written into it: {:?}",
+        form.error
+    );
+    assert!(
+        app.activity
+            .entries
+            .iter()
+            .any(|e| e.event.text.contains("Connection refused")),
+        "the connect's error goes to the stream"
+    );
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket: ActionTicket::next(),
+            result: Ok("client #3 connected to 127.0.0.1:8080".into()),
+        },
+    );
+    assert!(
+        matches!(app.modals.last(), Some(Modal::Form(_))),
+        "a successful connect does not close the unrelated form"
+    );
+
+    // The form's own apply: its ticket, its error, wherever it sits in the stack.
+    let ticket = ActionTicket::next();
+    if let Some(Modal::Form(form)) = app.modals.last_mut() {
+        form.pending = Some(ticket);
+    }
+    app.modals.push(Modal::Help { scroll: 0 });
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket,
+            result: Err("bind 127.0.0.1:23: Address already in use".into()),
+        },
+    );
+    assert!(matches!(app.modals.last(), Some(Modal::Help { .. })));
+    let Some(Modal::Form(form)) = app.modals.first() else {
+        panic!("the form is still there");
+    };
+    assert_eq!(
+        form.error.as_deref(),
+        Some("bind 127.0.0.1:23: Address already in use"),
+        "its own failure is shown in it"
+    );
+    assert!(!form.busy(), "and it can be submitted again");
+
+    let ticket = ActionTicket::next();
+    if let Some(Modal::Form(form)) = app.modals.first_mut() {
+        form.pending = Some(ticket);
+    }
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket,
+            result: Ok("server #1 updated".into()),
+        },
+    );
+    assert!(
+        !app.modals.iter().any(|m| matches!(m, Modal::Form(_))),
+        "its own success closes it"
+    );
+    assert!(matches!(app.modals.last(), Some(Modal::Help { .. })));
+}
