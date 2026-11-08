@@ -148,10 +148,7 @@ async fn test_smtp_ehlo() -> E2EResult<()> {
         read_reply_line(&mut reader).await,
         "250-mail.test greets client.test\r\n"
     );
-    assert_eq!(
-        read_reply_line(&mut reader).await,
-        "250-SIZE 10485760\r\n"
-    );
+    assert_eq!(read_reply_line(&mut reader).await, "250-SIZE 10485760\r\n");
     assert_eq!(read_reply_line(&mut reader).await, "250 8BITMIME\r\n");
 
     // HELO is the single-line form, and neither advertises what this server cannot do.
