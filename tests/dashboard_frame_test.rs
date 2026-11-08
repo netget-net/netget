@@ -1188,3 +1188,27 @@ fn the_answer_modal_draws_all_three_buttons_at_80_columns() {
         );
     }
 }
+
+#[test]
+fn an_llm_driven_instance_with_no_model_says_its_events_fail_closed() {
+    let mut app = app();
+    let mut snapshot = populated();
+    // The telnet client has no rules: its driver is LLM.
+    snapshot.no_model = true;
+    app.absorb_snapshot(snapshot.clone());
+    let text = dump(&frame(&mut app, 140, 60));
+    println!("{text}");
+    assert!(
+        text.contains("No model is selected"),
+        "the LLM driver row warns:\n{text}"
+    );
+
+    snapshot.no_model = false;
+    app.absorb_snapshot(snapshot);
+    let text = dump(&frame(&mut app, 140, 60));
+    assert!(
+        !text.contains("No model is selected"),
+        "and only when there is no model:\n{text}"
+    );
+    assert!(text.contains("the model answers"), "{text}");
+}

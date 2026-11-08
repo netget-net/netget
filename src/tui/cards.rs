@@ -650,8 +650,24 @@ fn traffic_text(rx: u64, tx: u64, metrics: Option<&Throughput>) -> String {
     text
 }
 
-fn driver_row(instance: InstanceRef<'_>) -> Row {
+fn driver_rows(instance: InstanceRef<'_>, no_model: bool, width: usize, rows: &mut Vec<Row>) {
     let driver = driver_of(instance.routing());
+    if driver == crate::tui::driver::Driver::Llm && no_model {
+        // "The model answers" is false when there is no model: every event the
+        // instance gets fails closed. Say so where the driver is shown, whole —
+        // it is a warning, so it wraps rather than losing its end.
+        let mut row = Row::new(Some(instance.key()), 1);
+        row.spans = vec![
+            ("driver ".to_string(), Tone::Dim),
+            (driver.label().to_string(), driver.tone()),
+        ];
+        rows.push(row);
+        for text in crate::tui::wrap::wrap(NO_MODEL_FOR_LLM_DRIVER, width.saturating_sub(4).max(12))
+        {
+            rows.push(Row::note(instance.key(), 1, text, Tone::Bad));
+        }
+        return;
+    }
     let specific = specific_rule_count(instance.routing());
     let suffix = match specific {
         0 => String::new(),
@@ -664,7 +680,7 @@ fn driver_row(instance: InstanceRef<'_>) -> Row {
         (driver.label().to_string(), driver.tone()),
         (format!(" — {}{suffix}", driver.describe()), Tone::Dim),
     ];
-    row
+    rows.push(row);
 }
 
 fn rule_rows(instance: InstanceRef<'_>, state: &CardState, rows: &mut Vec<Row>) {
@@ -884,6 +900,7 @@ fn server_rows(
     metrics: Option<&Throughput>,
     width: usize,
     activity: &[&LlmActivity],
+    no_model: bool,
 ) -> Vec<Row> {
     let key = UiKey::Server(row.id);
     let instance = InstanceRef::Server(row);
@@ -930,7 +947,7 @@ fn server_rows(
     if let ServerStatus::Error(e) = &row.status {
         error_rows(key, e, width, &mut rows);
     }
-    rows.push(driver_row(instance));
+    driver_rows(instance, no_model, width, &mut rows);
 
     rows.extend(button_rows(key, 1, instance_buttons(instance), width));
 
@@ -1145,6 +1162,7 @@ fn client_rows(
     metrics: Option<&Throughput>,
     width: usize,
     activity: &[&LlmActivity],
+    no_model: bool,
 ) -> Vec<Row> {
     let key = UiKey::Client(row.id);
     let instance = InstanceRef::Client(row);
@@ -1192,7 +1210,7 @@ fn client_rows(
     if let ClientStatus::Error(e) = &row.status {
         error_rows(key, e, width, &mut rows);
     }
-    rows.push(driver_row(instance));
+    driver_rows(instance, no_model, width, &mut rows);
 
     rows.extend(button_rows(key, 1, instance_buttons(instance), width));
 
@@ -1400,6 +1418,7 @@ pub fn rows(
             metrics.get(&UiKey::Server(server.id)),
             width,
             &activity,
+            snapshot.no_model,
         ));
     }
     for client in &snapshot.clients {
@@ -1414,6 +1433,7 @@ pub fn rows(
             metrics.get(&UiKey::Client(client.id)),
             width,
             &activity,
+            snapshot.no_model,
         ));
     }
     let mut new = Row::new(None, 0);
@@ -1433,6 +1453,10 @@ pub fn rows(
     }
     rows
 }
+
+/// The driver row of an LLM-driven instance when no model is selected.
+pub const NO_MODEL_FOR_LLM_DRIVER: &str =
+    "No model is selected: every event fails closed until /model picks one.";
 
 /// What the canvas says when nothing is running, one paragraph per entry.
 const EMPTY_STATE: [&str; 6] = [

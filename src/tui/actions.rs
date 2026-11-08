@@ -364,6 +364,13 @@ fn cycle_driver(app: &mut DashboardApp, key: UiKey, state: &AppState) {
         next.label(),
         next.describe()
     ));
+    if next == crate::tui::driver::Driver::Llm && app.snapshot.no_model {
+        app.push_error(format!(
+            "{}: driver LLM — {}",
+            key.describe(),
+            crate::tui::cards::NO_MODEL_FOR_LLM_DRIVER
+        ));
+    }
 
     let llm = app.llm_client.clone();
     let status_tx = app.status_tx.clone();
