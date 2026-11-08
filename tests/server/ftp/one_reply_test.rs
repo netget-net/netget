@@ -93,3 +93,16 @@ async fn replies_after_the_completion_reply_are_dropped_not_sent() -> E2EResult<
     server.stop().await?;
     Ok(())
 }
+
+/// After a `331` for USER, llama3.1:8b answered PASS with that same 331, word for word, on 15
+/// replayed seeds in 40 (so the client never logged in); with the PASS hint saying the answer
+/// is not the 331 that answered USER, on 5. A PASS hint without that clause is the regression.
+#[test]
+fn the_pass_hint_rules_out_repeating_the_user_reply() {
+    use netget::server::ftp::actions::answer_with_for_command;
+    let pass = answer_with_for_command("PASS eval@example.com").expect("PASS is classified");
+    assert!(pass.contains("230 if the login succeeds"), "{pass}");
+    assert!(pass.contains("not the 331 that answered USER"), "{pass}");
+    let user = answer_with_for_command("USER anonymous").expect("USER is classified");
+    assert!(user.contains("331 to ask for a password"), "{user}");
+}
