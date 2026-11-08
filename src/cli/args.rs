@@ -534,6 +534,24 @@ pub struct Args {
     )]
     pub server_params: Option<String>,
 
+    /// Event handlers for --server
+    #[clap(
+        long = "server-handlers",
+        value_name = "JSON",
+        requires = "server_protocol",
+        help = "JSON array of event handlers for --server, the same shape as the MCP start_server tool's event_handlers: [{\"event_pattern\": \"*\", \"handler\": {\"type\": \"static\", \"actions\": [...]}}]. Static and script handlers answer in-process with NO model call; when a `*` rule answers every event, no model is needed at all."
+    )]
+    pub server_handlers: Option<String>,
+
+    /// Bind address for --server
+    #[clap(
+        long = "host",
+        value_name = "ADDRESS",
+        requires = "server_protocol",
+        help = "Address the --server binds (default 127.0.0.1). 0.0.0.0 or :: exposes it on every interface."
+    )]
+    pub server_host: Option<String>,
+
     /// History length for --server / --client
     #[clap(
         long = "history",
@@ -946,19 +964,13 @@ impl Args {
 
     /// Parse `--client-handlers` into a list of event handler definitions
     pub fn parse_client_handlers(&self) -> Result<Option<Vec<serde_json::Value>>> {
-        match &self.client_handlers {
-            None => Ok(None),
-            Some(raw) => {
-                let value: serde_json::Value = serde_json::from_str(raw)
-                    .map_err(|e| anyhow::anyhow!("--client-handlers is not valid JSON: {}", e))?;
-                match value {
-                    serde_json::Value::Array(handlers) => Ok(Some(handlers)),
-                    _ => anyhow::bail!(
-                        "--client-handlers must be a JSON array of handler objects, e.g. '[{{\"event\": \"redis_response_received\", \"handler_type\": \"static\", \"response\": []}}]'"
-                    ),
-                }
-            }
-        }
+        parse_handlers_flag("--client-handlers", self.client_handlers.as_deref())
+    }
+
+    /// Parse `--server-handlers` into handler objects (validated against the protocol when
+    /// the server starts).
+    pub fn parse_server_handlers(&self) -> Result<Option<Vec<serde_json::Value>>> {
+        parse_handlers_flag("--server-handlers", self.server_handlers.as_deref())
     }
 
     /// Parse `--min-stability` into a [`DevelopmentState`].
@@ -995,6 +1007,24 @@ impl Args {
                 .llm_max_queued
                 .unwrap_or(crate::llm::DEFAULT_MAX_QUEUED),
         }
+    }
+}
+
+/// A `--client-handlers` / `--server-handlers` value: a JSON array of handler objects, the
+/// shape MCP's `event_handlers` takes. Each entry is validated against the protocol by the
+/// start itself.
+fn parse_handlers_flag(flag: &str, raw: Option<&str>) -> Result<Option<Vec<serde_json::Value>>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| anyhow::anyhow!("{flag} is not valid JSON: {e}"))?;
+    match value {
+        serde_json::Value::Array(handlers) => Ok(Some(handlers)),
+        _ => anyhow::bail!(
+            "{flag} must be a JSON array of handler objects, e.g. \
+             '[{{\"event_pattern\": \"*\", \"handler\": {{\"type\": \"static\", \"actions\": []}}}}]'"
+        ),
     }
 }
 

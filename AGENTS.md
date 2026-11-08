@@ -17,7 +17,10 @@ instance whoever answered it. `--ready-file <PATH>` writes a JSON report of ever
 address (and every client's target and status) once all of them have started — atomically, and
 after removing any stale file at the path, so its appearance is the readiness signal for a
 process started on port 0; a run that fails to start never writes it, and MCP and the TUI
-refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. `--server <p>`
+takes `--port`, `--host`, `--server-params` and `--server-handlers` (MCP's `event_handlers`
+shape, as `--client-handlers` is for `--client`); when a `*` rule answers every event the run
+asks no model and needs none (`tests/cli_server_direct_test.rs`). The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.
