@@ -907,12 +907,7 @@ fn server_rows(
     ];
     rows.push(facts);
     if let ServerStatus::Error(e) = &row.status {
-        rows.push(Row::note(
-            key,
-            1,
-            fit(e, width.saturating_sub(4)),
-            Tone::Bad,
-        ));
+        error_rows(key, e, width, &mut rows);
     }
     rows.push(driver_row(instance));
 
@@ -1174,12 +1169,7 @@ fn client_rows(
     ];
     rows.push(facts);
     if let ClientStatus::Error(e) = &row.status {
-        rows.push(Row::note(
-            key,
-            1,
-            fit(e, width.saturating_sub(4)),
-            Tone::Bad,
-        ));
+        error_rows(key, e, width, &mut rows);
     }
     rows.push(driver_row(instance));
 
@@ -1410,25 +1400,38 @@ pub fn rows(
     new.on_enter = Activate::NewInstance;
     rows.push(new);
     if snapshot.servers.is_empty() && snapshot.clients.is_empty() {
-        for text in [
-            "",
-            "Nothing is running yet.",
-            "",
-            "That row, or a, picks a protocol",
-            "and starts it. The instance shows",
-            "up here with its buttons, peers,",
-            "rules and config, and stays.",
-            "↑↓ walk the rows, ←→ the buttons.",
-            "",
-            "Or ask the model in the chat:",
-            "“start an http server on 8080”.",
-        ] {
-            let mut note = Row::new(None, 0);
-            note.spans = vec![(format!("  {text}"), Tone::Dim)];
-            rows.push(note);
+        // Wrapped to the column, not to a width someone guessed: at 80×24 the
+        // canvas is 36 cells wide, and a hard-wrapped line cut there loses its end.
+        for paragraph in EMPTY_STATE {
+            for text in crate::tui::wrap::wrap(paragraph, width.saturating_sub(4).max(12)) {
+                let mut note = Row::new(None, 0);
+                note.spans = vec![(format!("  {text}"), Tone::Dim)];
+                rows.push(note);
+            }
         }
     }
     rows
+}
+
+/// What the canvas says when nothing is running, one paragraph per entry.
+const EMPTY_STATE: [&str; 6] = [
+    "",
+    "Nothing is running yet.",
+    "",
+    "That row, or a, picks a protocol and starts it. The instance shows up here with its \
+     buttons, peers, rules and config, and stays. ↑↓ walk the rows, ←→ the buttons.",
+    "",
+    "Or ask the model in the chat: “start an http server on 8080”.",
+];
+
+/// An instance's error, whole: wrapped under the facts row rather than cut to
+/// one line. It is usually why the instance is not doing anything — a port in
+/// use, a privilege missing — and the end of the sentence is the useful part.
+fn error_rows(key: UiKey, error: &str, width: usize, rows: &mut Vec<Row>) {
+    // Depth 1: two cells of indent and two of marker.
+    for text in crate::tui::wrap::wrap(error, width.saturating_sub(4).max(12)) {
+        rows.push(Row::note(key, 1, text, Tone::Bad));
+    }
 }
 
 /// The index of `key`'s header row.

@@ -704,7 +704,7 @@ pub fn handle_ui_msg(app: &mut DashboardApp, msg: UiMsg) {
                     _ => {}
                 }
             } else {
-                app.push_error(format!("✗ {error}"));
+                app.push_error(error);
             }
         }
     }

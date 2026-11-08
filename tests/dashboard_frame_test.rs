@@ -1010,3 +1010,78 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
         }
     }
 }
+
+/// The left column of a frame at `width`, where the canvas sits.
+fn left_column(lines: &[String], width: usize) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| l.chars().take(width).collect())
+        .collect()
+}
+
+#[test]
+fn a_failure_in_the_stream_is_shown_whole_at_80_columns() {
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    // What a picker start that cannot bind leaves behind: the log line and
+    // the returned error, both about one sentence long.
+    app.push_chat(
+        netget::tui::chat::EntryKind::Log(netget::ui::app::LogLevel::Error),
+        "Server #1 (redis) failed to start: bind 127.0.0.1:6379: Address already in use (os error 48)",
+    );
+    app.push_error("✗ could not start redis: port 6379 needs a different owner (wrapped tail)");
+    // The first-launch message, which used to break inside words.
+    app.push_system("✗  Ollama is not available or no models found.");
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        text.contains("48)"),
+        "the end of the bind error is on screen:\n{text}"
+    );
+    assert!(
+        text.contains("tail)"),
+        "the end of the UI error is on screen:\n{text}"
+    );
+    assert!(
+        text.contains("models found"),
+        "a conversation entry wraps between words, not inside them:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}
+
+#[test]
+fn an_empty_dashboard_at_80_columns_cuts_none_of_its_guidance() {
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let lines = frame(&mut app, 80, 24);
+    let left = left_column(&lines, 40);
+    let text = left.join("\n");
+    println!("{text}");
+    assert!(
+        !text.contains('…'),
+        "nothing in the empty state is cut:\n{text}"
+    );
+    assert!(text.contains("buttons."), "{text}");
+    assert!(text.contains("8080”."), "{text}");
+}
+
+#[test]
+fn an_instance_error_is_shown_whole_on_its_card() {
+    let mut app = app();
+    let mut snapshot = populated();
+    snapshot.servers.remove(0);
+    snapshot.clients.clear();
+    snapshot.servers[0].status = ServerStatus::Error(
+        "bind 0.0.0.0:53: Permission denied (os error 13); port 53 needs root".into(),
+    );
+    app.absorb_snapshot(snapshot);
+    app.focus = Focus::Cards;
+    let lines = frame(&mut app, 80, 24);
+    let text = left_column(&lines, 40).join("\n");
+    println!("{text}");
+    assert!(
+        text.contains("needs root"),
+        "the end of the error is on the card:\n{text}"
+    );
+}
