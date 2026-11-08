@@ -185,6 +185,40 @@ fn a_name_for_an_id_a_stopped_state_and_a_codeless_exit_status_render_as_docker_
     assert_eq!(up[0]["Status"], "Up 2 hours");
 }
 
+/// What llama3.1:8b wrote for `docker ps -a` in the eval (`docker/ps-all-includes-stopped`,
+/// seeds 42 and 44): every field of the action example filled in, most of them blank. A blank
+/// `created` and a blank `id` mean the field was not given, so the listing renders rather than
+/// failing the whole request over a field the instruction never mentioned.
+#[test]
+fn blank_created_and_id_fields_are_treated_as_left_out() {
+    let list = render_container_list(&json!([
+        {"id": "", "names": ["eval-api"], "image": "api:2", "command": "", "state": "running",
+         "status": "", "exit_code": null, "created": "", "ports": [], "labels": {}, "env": [],
+         "ip": ""},
+        {"id": "eval-migrate", "names": ["eval-migrate"], "image": "api:2", "state": "exited",
+         "status": "", "exit_code": 0, "created": "  ", "ports": [], "labels": {}, "env": [],
+         "ip": ""}
+    ]))
+    .unwrap();
+    let omitted = render_container_list(&json!([
+        {"names": ["eval-api"], "image": "api:2"},
+        {"names": ["eval-migrate"], "image": "api:2", "state": "exited"}
+    ]))
+    .unwrap();
+    for (i, c) in list.as_array().unwrap().iter().enumerate() {
+        assert_eq!(c["Id"], omitted[i]["Id"], "{c}");
+        let created = c["Created"].as_i64().unwrap();
+        assert!(created > 1_700_000_000, "{c}");
+    }
+    assert_eq!(list[1]["Status"], "Exited (0)");
+    // A creation time that is given but is not a time is still refused.
+    let reason = render_container_list(&json!([
+        {"names": ["web"], "image": "nginx", "created": "yesterday"}
+    ]))
+    .expect_err("a non-time created");
+    assert!(reason.contains("RFC 3339"), "{reason}");
+}
+
 /// `answer_with` names the action for the route, and for an inspect the 404 with Docker's
 /// own message — the one thing the eval's missing-container case needed and the model missed.
 #[test]
