@@ -965,6 +965,7 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
                 description: format!("line {HOSTILE}"),
                 event_data: Some(payload.clone()),
                 vocabulary: Vec::new(),
+                deadline_unix_ms: None,
                 error: None,
                 focused: 0,
             },
@@ -1009,4 +1010,223 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
             }
         }
     }
+}
+
+/// The left column of a frame at `width`, where the canvas sits.
+fn left_column(lines: &[String], width: usize) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| l.chars().take(width).collect())
+        .collect()
+}
+
+#[test]
+fn a_failure_in_the_stream_is_shown_whole_at_80_columns() {
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    // What a picker start that cannot bind leaves behind: the log line and
+    // the returned error, both about one sentence long.
+    app.push_chat(
+        netget::tui::chat::EntryKind::Log(netget::ui::app::LogLevel::Error),
+        "Server #1 (redis) failed to start: bind 127.0.0.1:6379: Address already in use (os error 48)",
+    );
+    app.push_error("✗ could not start redis: port 6379 needs a different owner (wrapped tail)");
+    // The first-launch message, which used to break inside words.
+    app.push_system("✗  Ollama is not available or no models found.");
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        text.contains("48)"),
+        "the end of the bind error is on screen:\n{text}"
+    );
+    assert!(
+        text.contains("tail)"),
+        "the end of the UI error is on screen:\n{text}"
+    );
+    assert!(
+        text.contains("models found"),
+        "a conversation entry wraps between words, not inside them:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}
+
+#[test]
+fn an_empty_dashboard_at_80_columns_cuts_none_of_its_guidance() {
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let lines = frame(&mut app, 80, 24);
+    let left = left_column(&lines, 40);
+    let text = left.join("\n");
+    println!("{text}");
+    assert!(
+        !text.contains('…'),
+        "nothing in the empty state is cut:\n{text}"
+    );
+    assert!(text.contains("buttons."), "{text}");
+    assert!(text.contains("8080”."), "{text}");
+}
+
+#[test]
+fn an_instance_error_is_shown_whole_on_its_card() {
+    let mut app = app();
+    let mut snapshot = populated();
+    snapshot.servers.remove(0);
+    snapshot.clients.clear();
+    snapshot.servers[0].status = ServerStatus::Error(
+        "bind 0.0.0.0:53: Permission denied (os error 13); port 53 needs root".into(),
+    );
+    app.absorb_snapshot(snapshot);
+    app.focus = Focus::Cards;
+    let lines = frame(&mut app, 80, 24);
+    let text = left_column(&lines, 40).join("\n");
+    println!("{text}");
+    assert!(
+        text.contains("needs root"),
+        "the end of the error is on the card:\n{text}"
+    );
+}
+
+#[test]
+fn a_long_create_form_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::tui::app::Section;
+    use netget::tui::modal::form::FormModel;
+    use netget::tui::modal::Modal;
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let mut form = FormModel::for_create(Section::Servers, "telnet", Some(23));
+    form.error = Some("bind 127.0.0.1:2323: Address already in use (os error 48)".into());
+    let last = form.fields.last().expect("fields").label.clone();
+    let count = form.fields.len();
+    form.move_selection(count as isize - 1);
+    app.modals.push(Modal::Form(Box::new(form)));
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains(&format!("▸ {last}"))),
+        "the selected field ({last}, the last of {count}) is in view:\n{text}"
+    );
+    assert!(
+        text.contains("Address already in use"),
+        "the error from [ Apply ] is in view:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(text.contains("Apply"), "the buttons stay:\n{text}");
+}
+
+#[test]
+fn a_parked_request_says_when_it_fails_closed() {
+    let mut app = app();
+    let mut snapshot = populated();
+    snapshot.servers[0].intercepts[0].created_unix_ms =
+        netget::state::intercepts::now_unix_ms() - 100_000;
+    snapshot.servers[0].intercepts[0].timeout_secs = 300;
+    app.absorb_snapshot(snapshot);
+    let text = dump(&frame(&mut app, 140, 60));
+    println!("{text}");
+    assert!(
+        text.contains("from :53121 · 3m") && text.contains("s left"),
+        "the card's waiting row carries the deadline:\n{text}"
+    );
+
+    app.modals
+        .push(netget::tui::modal::Modal::Intercept(Box::new(
+            netget::tui::modal::intercept::InterceptModel {
+                id: 4,
+                owner: UiKey::Server(ServerId::new(1)),
+                protocol: "HTTP".into(),
+                event_type: "http_request".into(),
+                description: "GET /admin".into(),
+                event_data: Some(serde_json::json!({
+                    "method": "GET", "path": "/admin", "headers": {"host": "x", "accept": "*/*"},
+                    "connection_id": "conn-7"
+                })),
+                vocabulary: Vec::new(),
+                deadline_unix_ms: Some(netget::state::intercepts::now_unix_ms() + 200_500),
+                error: None,
+                focused: 0,
+            },
+        )));
+    let text = dump(&frame(&mut app, 80, 24));
+    println!("{text}");
+    assert!(
+        text.contains("fails closed in 3m"),
+        "the answer modal carries it too, at 80×24 with a payload:\n{text}"
+    );
+}
+
+#[test]
+fn the_answer_modal_draws_all_three_buttons_at_80_columns() {
+    let mut app = app();
+    app.absorb_snapshot(populated());
+    app.modals
+        .push(netget::tui::modal::Modal::Intercept(Box::new(
+            netget::tui::modal::intercept::InterceptModel {
+                id: 4,
+                owner: UiKey::Server(ServerId::new(1)),
+                protocol: "HTTP".into(),
+                event_type: "http_request".into(),
+                description: "GET /admin".into(),
+                event_data: Some(serde_json::json!({"method": "GET", "path": "/admin"})),
+                vocabulary: Vec::new(),
+                deadline_unix_ms: None,
+                error: None,
+                focused: 2,
+            },
+        )));
+    let text = dump(&frame(&mut app, 80, 24));
+    println!("{text}");
+    for button in [
+        "[ Compose answer… ]",
+        "[ Answer with nothing ]",
+        "[ Fail closed ]",
+    ] {
+        assert!(
+            text.contains(button),
+            "{button} is drawn (Tab can focus it):\n{text}"
+        );
+    }
+}
+
+#[test]
+fn an_llm_driven_instance_with_no_model_says_its_events_fail_closed() {
+    let mut app = app();
+    let mut snapshot = populated();
+    // The telnet client has no rules: its driver is LLM.
+    snapshot.no_model = true;
+    app.absorb_snapshot(snapshot.clone());
+    let text = dump(&frame(&mut app, 140, 60));
+    println!("{text}");
+    assert!(
+        text.contains("No model is selected"),
+        "the LLM driver row warns:\n{text}"
+    );
+
+    snapshot.no_model = false;
+    app.absorb_snapshot(snapshot);
+    let text = dump(&frame(&mut app, 140, 60));
+    assert!(
+        !text.contains("No model is selected"),
+        "and only when there is no model:\n{text}"
+    );
+    assert!(text.contains("the model answers"), "{text}");
+}
+
+#[test]
+fn help_describes_the_stream_as_it_is() {
+    let lines = netget::tui::modal::help::help_lines();
+    let text: Vec<String> = lines
+        .iter()
+        .map(|(k, t)| format!("{} {t}", k.unwrap_or("")))
+        .collect();
+    let text = text.join("\n");
+    assert!(
+        !text.contains("Activity (top right)"),
+        "there is no separate activity pane:\n{text}"
+    );
+    assert!(
+        text.contains("PageUp"),
+        "how to reach the stream's lines is listed:\n{text}"
+    );
 }

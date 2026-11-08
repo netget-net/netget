@@ -612,9 +612,30 @@ fn waiting_rows(instance: InstanceRef<'_>, rows: &mut Vec<Row>) {
         row.spans = vec![
             ("⚠ YOUR answer needed".to_string(), Tone::Bad),
             (format!(" · {}{peer}", view.event_type), Tone::Normal),
+            (
+                format!(" · {}", time_left(view)),
+                if view.seconds_until_fail_closed(crate::state::intercepts::now_unix_ms()) < 60 {
+                    Tone::Bad
+                } else {
+                    Tone::Dim
+                },
+            ),
         ];
         row.on_enter = Activate::Action(InstanceAction::Answer(view.id));
         rows.push(row);
+    }
+}
+
+/// How long a parked request has before nobody answering becomes a refusal:
+/// "4m12s left". The dispatcher's deadline, from the rule's `timeout_secs`,
+/// which the operator otherwise has no way to see; the answer modal spells out
+/// what happens then.
+pub fn time_left(view: &crate::state::intercepts::InterceptView) -> String {
+    let left = view.seconds_until_fail_closed(crate::state::intercepts::now_unix_ms());
+    if left == 0 {
+        "failing closed now".to_string()
+    } else {
+        format!("{} left", human_duration(left))
     }
 }
 
@@ -629,8 +650,24 @@ fn traffic_text(rx: u64, tx: u64, metrics: Option<&Throughput>) -> String {
     text
 }
 
-fn driver_row(instance: InstanceRef<'_>) -> Row {
+fn driver_rows(instance: InstanceRef<'_>, no_model: bool, width: usize, rows: &mut Vec<Row>) {
     let driver = driver_of(instance.routing());
+    if driver == crate::tui::driver::Driver::Llm && no_model {
+        // "The model answers" is false when there is no model: every event the
+        // instance gets fails closed. Say so where the driver is shown, whole —
+        // it is a warning, so it wraps rather than losing its end.
+        let mut row = Row::new(Some(instance.key()), 1);
+        row.spans = vec![
+            ("driver ".to_string(), Tone::Dim),
+            (driver.label().to_string(), driver.tone()),
+        ];
+        rows.push(row);
+        for text in crate::tui::wrap::wrap(NO_MODEL_FOR_LLM_DRIVER, width.saturating_sub(4).max(12))
+        {
+            rows.push(Row::note(instance.key(), 1, text, Tone::Bad));
+        }
+        return;
+    }
     let specific = specific_rule_count(instance.routing());
     let suffix = match specific {
         0 => String::new(),
@@ -643,7 +680,7 @@ fn driver_row(instance: InstanceRef<'_>) -> Row {
         (driver.label().to_string(), driver.tone()),
         (format!(" — {}{suffix}", driver.describe()), Tone::Dim),
     ];
-    row
+    rows.push(row);
 }
 
 fn rule_rows(instance: InstanceRef<'_>, state: &CardState, rows: &mut Vec<Row>) {
@@ -863,6 +900,7 @@ fn server_rows(
     metrics: Option<&Throughput>,
     width: usize,
     activity: &[&LlmActivity],
+    no_model: bool,
 ) -> Vec<Row> {
     let key = UiKey::Server(row.id);
     let instance = InstanceRef::Server(row);
@@ -907,14 +945,9 @@ fn server_rows(
     ];
     rows.push(facts);
     if let ServerStatus::Error(e) = &row.status {
-        rows.push(Row::note(
-            key,
-            1,
-            fit(e, width.saturating_sub(4)),
-            Tone::Bad,
-        ));
+        error_rows(key, e, width, &mut rows);
     }
-    rows.push(driver_row(instance));
+    driver_rows(instance, no_model, width, &mut rows);
 
     rows.extend(button_rows(key, 1, instance_buttons(instance), width));
 
@@ -1129,6 +1162,7 @@ fn client_rows(
     metrics: Option<&Throughput>,
     width: usize,
     activity: &[&LlmActivity],
+    no_model: bool,
 ) -> Vec<Row> {
     let key = UiKey::Client(row.id);
     let instance = InstanceRef::Client(row);
@@ -1174,14 +1208,9 @@ fn client_rows(
     ];
     rows.push(facts);
     if let ClientStatus::Error(e) = &row.status {
-        rows.push(Row::note(
-            key,
-            1,
-            fit(e, width.saturating_sub(4)),
-            Tone::Bad,
-        ));
+        error_rows(key, e, width, &mut rows);
     }
-    rows.push(driver_row(instance));
+    driver_rows(instance, no_model, width, &mut rows);
 
     rows.extend(button_rows(key, 1, instance_buttons(instance), width));
 
@@ -1389,6 +1418,7 @@ pub fn rows(
             metrics.get(&UiKey::Server(server.id)),
             width,
             &activity,
+            snapshot.no_model,
         ));
     }
     for client in &snapshot.clients {
@@ -1403,6 +1433,7 @@ pub fn rows(
             metrics.get(&UiKey::Client(client.id)),
             width,
             &activity,
+            snapshot.no_model,
         ));
     }
     let mut new = Row::new(None, 0);
@@ -1410,25 +1441,42 @@ pub fn rows(
     new.on_enter = Activate::NewInstance;
     rows.push(new);
     if snapshot.servers.is_empty() && snapshot.clients.is_empty() {
-        for text in [
-            "",
-            "Nothing is running yet.",
-            "",
-            "That row, or a, picks a protocol",
-            "and starts it. The instance shows",
-            "up here with its buttons, peers,",
-            "rules and config, and stays.",
-            "↑↓ walk the rows, ←→ the buttons.",
-            "",
-            "Or ask the model in the chat:",
-            "“start an http server on 8080”.",
-        ] {
-            let mut note = Row::new(None, 0);
-            note.spans = vec![(format!("  {text}"), Tone::Dim)];
-            rows.push(note);
+        // Wrapped to the column, not to a width someone guessed: at 80×24 the
+        // canvas is 36 cells wide, and a hard-wrapped line cut there loses its end.
+        for paragraph in EMPTY_STATE {
+            for text in crate::tui::wrap::wrap(paragraph, width.saturating_sub(4).max(12)) {
+                let mut note = Row::new(None, 0);
+                note.spans = vec![(format!("  {text}"), Tone::Dim)];
+                rows.push(note);
+            }
         }
     }
     rows
+}
+
+/// The driver row of an LLM-driven instance when no model is selected.
+pub const NO_MODEL_FOR_LLM_DRIVER: &str =
+    "No model is selected: every event fails closed until /model picks one.";
+
+/// What the canvas says when nothing is running, one paragraph per entry.
+const EMPTY_STATE: [&str; 6] = [
+    "",
+    "Nothing is running yet.",
+    "",
+    "That row, or a, picks a protocol and starts it. The instance shows up here with its \
+     buttons, peers, rules and config, and stays. ↑↓ walk the rows, ←→ the buttons.",
+    "",
+    "Or ask the model in the chat: “start an http server on 8080”.",
+];
+
+/// An instance's error, whole: wrapped under the facts row rather than cut to
+/// one line. It is usually why the instance is not doing anything — a port in
+/// use, a privilege missing — and the end of the sentence is the useful part.
+fn error_rows(key: UiKey, error: &str, width: usize, rows: &mut Vec<Row>) {
+    // Depth 1: two cells of indent and two of marker.
+    for text in crate::tui::wrap::wrap(error, width.saturating_sub(4).max(12)) {
+        rows.push(Row::note(key, 1, text, Tone::Bad));
+    }
 }
 
 /// The index of `key`'s header row.

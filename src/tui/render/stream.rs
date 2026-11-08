@@ -4,7 +4,8 @@
 //! lines) and the conversation (what you typed, what the model reasoned and
 //! answered, command output) are one timeline. Conversation entries wrap;
 //! event lines are one row each and truncate, since Enter opens what they
-//! point at.
+//! point at — except failures, errors and warnings, which wrap: they usually
+//! point at nothing, and their text is the explanation.
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -261,8 +262,10 @@ fn kind_glyph_and_style(app: &DashboardApp, kind: ActivityKind) -> (&'static str
     }
 }
 
-/// One entry's rows: an event is one truncated row; a conversation entry
-/// is hard-wrapped with a hanging indent, so nothing it says is lost.
+/// One entry's rows: an event is one truncated row, except a failure, an
+/// error or a warning, which wraps under its own text; a conversation entry
+/// is word-wrapped with a hanging indent. Nothing that explains a failure is
+/// cut off.
 fn entry_lines<'a>(
     app: &DashboardApp,
     entry: &ActivityEntry,
@@ -275,36 +278,23 @@ fn entry_lines<'a>(
     if let ActivityKind::Chat(_) = entry.event.kind {
         let body_width = width.saturating_sub(2).max(1);
         let mut rows = Vec::new();
-        for (i, text_line) in entry.event.text.split('\n').enumerate() {
-            let span = Span::raw(text_line);
-            let mut chunks = Vec::new();
-            let mut chunk = String::new();
-            let mut cells = 0;
-            for grapheme in span.styled_graphemes(Style::default()) {
-                let glyph_width = Span::raw(grapheme.symbol).width();
-                if cells + glyph_width > body_width && !chunk.is_empty() {
-                    chunks.push(std::mem::take(&mut chunk));
-                    cells = 0;
-                }
-                chunk.push_str(grapheme.symbol);
-                cells += glyph_width;
+        for (j, chunk) in crate::tui::wrap::wrap(&entry.event.text, body_width)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = if j == 0 { glyph } else { "  " };
+            let filled = 2 + crate::tui::wrap::cells(&chunk);
+            let mut spans = vec![
+                Span::styled(prefix, sel(style)),
+                Span::styled(chunk, sel(style)),
+            ];
+            if cursor && filled < width {
+                spans.push(Span::styled(
+                    " ".repeat(width - filled),
+                    app.styles.selected,
+                ));
             }
-            chunks.push(chunk);
-            for (j, chunk) in chunks.into_iter().enumerate() {
-                let prefix = if i == 0 && j == 0 { glyph } else { "  " };
-                let mut spans = vec![
-                    Span::styled(prefix, sel(style)),
-                    Span::styled(chunk.clone(), sel(style)),
-                ];
-                let filled = 2 + Span::raw(chunk.as_str()).width();
-                if cursor && filled < width {
-                    spans.push(Span::styled(
-                        " ".repeat(width - filled),
-                        app.styles.selected,
-                    ));
-                }
-                rows.push(Line::from(spans));
-            }
+            rows.push(Line::from(spans));
         }
         return rows;
     }
@@ -320,20 +310,43 @@ fn entry_lines<'a>(
     } else {
         format!("{:<9}", fit(&entry.event.tag, 9))
     };
+    use crate::ui::app::LogLevel;
     let used = time.chars().count() + tag.chars().count() + glyph.chars().count();
-    let text = fit(&entry.event.text, width.saturating_sub(used));
-    let mut spans = vec![
-        Span::styled(time, sel(app.styles.dimmed)),
-        Span::styled(tag, sel(tag_style)),
-        Span::styled(glyph, sel(style)),
-        Span::styled(text.clone(), sel(style)),
-    ];
-    let filled = used + text.chars().count();
-    if cursor && filled < width {
-        spans.push(Span::styled(
-            " ".repeat(width - filled),
-            app.styles.selected,
-        ));
+    let room = width.saturating_sub(used);
+    // An event is one row — except a failure, which wraps under its own text:
+    // the reason a server would not start is the one line the operator has to
+    // read whole, and at 80 columns a single row holds about 25 characters of it.
+    let wraps = matches!(
+        entry.event.kind,
+        ActivityKind::Failure
+            | ActivityKind::Log(LogLevel::Error)
+            | ActivityKind::Log(LogLevel::Warn)
+    );
+    let texts = if wraps && room > 0 {
+        crate::tui::wrap::wrap(&entry.event.text, room)
+    } else {
+        vec![fit(&entry.event.text, room)]
+    };
+    let mut lines = Vec::with_capacity(texts.len());
+    for (index, text) in texts.into_iter().enumerate() {
+        let filled = used + crate::tui::wrap::cells(&text);
+        let mut spans = if index == 0 {
+            vec![
+                Span::styled(time.clone(), sel(app.styles.dimmed)),
+                Span::styled(tag.clone(), sel(tag_style)),
+                Span::styled(glyph, sel(style)),
+            ]
+        } else {
+            vec![Span::styled(" ".repeat(used), sel(style))]
+        };
+        spans.push(Span::styled(text, sel(style)));
+        if cursor && filled < width {
+            spans.push(Span::styled(
+                " ".repeat(width - filled),
+                app.styles.selected,
+            ));
+        }
+        lines.push(Line::from(spans));
     }
-    vec![Line::from(spans)]
+    lines
 }

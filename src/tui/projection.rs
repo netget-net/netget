@@ -125,6 +125,9 @@ pub struct RailSnapshot {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_llm_calls: u64,
+    /// No model is selected, so an instance the model drives fails every event
+    /// closed (`false` when unknown, as in a hand-built snapshot).
+    pub no_model: bool,
 }
 
 /// Requests kept per band (the full scoped log stays reachable via drill-in).
@@ -334,5 +337,6 @@ pub async fn build_snapshot(state: &AppState) -> RailSnapshot {
         total_input_tokens,
         total_output_tokens,
         total_llm_calls,
+        no_model: state.get_ollama_model().await.is_none(),
     }
 }

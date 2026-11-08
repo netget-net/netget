@@ -27,6 +27,7 @@ pub mod render;
 pub mod theme;
 pub mod uimsg;
 pub mod wireshark;
+pub mod wrap;
 
 use std::sync::Arc;
 
