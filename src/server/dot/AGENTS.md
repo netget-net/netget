@@ -5,19 +5,19 @@
 DNS-over-TLS server implementing RFC 7858 for secure DNS queries over TLS transport. The LLM controls DNS responses
 while NetGet handles TLS encryption and connection management.
 
-**Status**: Beta (Core Protocol)
+**Status**: **Stable**, set November 2026. See "Maturity: the six conditions" at the foot of
+this file for what was checked and what the rating does *not* cover.
 **RFC**: RFC 7858 (DNS over TLS), RFC 1035 (DNS), RFC 5246 (TLS 1.2)
 **Port**: 853 (TCP with TLS), declared as `PrivilegeRequirement::PrivilegedPort(853)`
 
-### What "Beta" covers here
+### What "Stable" covers here
 
-DoT contributes the TLS transport and TCP framing; every DNS semantic - the
-action set, action execution, response construction - is the DNS protocol's,
-reached through delegation (see below). So DoT is as mature as DNS on the wire
-format, plus a TLS layer that is exercised by `tests/server/dot/e2e_test.rs`
-against a real rustls client. Not covered: CA-signed or custom certificates,
-mutual TLS and EDNS0. Connection bounds and partial-frame timeout cleanup are covered
-separately by `tests/server/dot/connection_bounds_test.rs`.
+DoT contributes the TLS transport and the RFC 7858 framing; every DNS semantic — the action
+set, action execution, and what is sent after the model answers — is the DNS server's, reached
+through delegation and `dns::StreamQuery` (see below). Two independent resolvers, kdig and dig,
+complete sessions and read every record type the actions write; every bound has a test
+(`tests/server/dot/bounds_test.rs`, `connection_bounds_test.rs`). Not covered: CA-signed or
+custom certificates, mutual TLS, EDNS padding.
 
 ## Library Choices
 
@@ -419,25 +419,55 @@ quietly stale.
 
 ## Verified
 
-**State: Beta**, on **two** independent peers as of September 2026:
-
 | test | peer | what it proves |
 |---|---|---|
-| `tests/server/dot/real_client_test.rs` | `kdig` (Knot DNS 3.6, C) | a third-party resolver completes a `+tls` session and renders our answer |
-| `tests/server/dot/e2e_test.rs` | `rustls` | the TLS handshake and RFC 7858 framing, over a reused connection |
+| `tests/server/dot/real_client_test.rs` | `kdig` (Knot DNS 3.6, GnuTLS) | `+tls` sessions for A (two names), AAAA, MX, TXT, CNAME and NXDOMAIN, each rendered by kdig; decrypted by the pcap oracle |
+| `tests/server/dot/real_client_test.rs` | `dig` (ISC BIND 9.20, OpenSSL) | the same queries with dig's defaults, EDNS and a COOKIE offered; the echoed OPT read back |
+| `tests/server/dot/e2e_test.rs` | rustls + hickory-proto | the handshake and framing in process; hickory is the server's own codec, so not wire evidence |
 
-Neither is `#[ignore]`d; the kdig test **fails** naming `brew install knot` rather than skipping.
-
-**The second one alone was half circular, and the protocol's own metadata said so for months
-before anyone acted on it.** rustls is genuinely independent for the transport, but the DNS
-message is hand-assembled over **hickory-proto — the codec this server encodes with** — so that
-half proved our encoder agrees with our decoder and nothing more. The `e2e_testing` field named
-`kdig +tls` as the thing that would close it and recorded that it was not installed. It is now.
-
-Verified by answering with a fixed transaction id instead of the client's: kdig waits out its
-timeout and the test fails. A resolver discards any reply whose id does not match, which is
-exactly the class of defect an in-house codec cannot see.
+Neither real-client test is `#[ignore]`d; each **fails** naming its package when the binary
+is absent. Verified by answering with a fixed transaction id instead of the client's: both
+resolvers discard the reply and the tests fail.
 
 **Unproven:** certificate validation of any kind — the certificate is self-signed and plain
-`+tls` does not authenticate it (that needs `+tls-ca`, `+tls-hostname` or `+tls-pin`) — client
-auth, and record types beyond A.
+`+tls` does not authenticate it (that needs `+tls-ca`, `+tls-hostname` or `+tls-pin`) — and
+client auth.
+
+## Maturity: the six conditions
+
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source in
+November 2026 rather than inherited. **The rating covers the surface this server implements**:
+RFC 7858 over a self-signed certificate, one query at a time per connection, answered by the
+DNS server's query actions and its answer rules. Certificate provisioning, client
+authentication, EDNS padding (RFC 7830/8467) and pipelined (out-of-order) answers are not
+implemented, and the DNS server's DNSSEC signing and zone transfers are not offered here.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — `kdig` (Knot DNS, GnuTLS) and `dig` (ISC BIND, OpenSSL), each hard-failing when absent; between them A for two names, AAAA, MX, TXT, CNAME and NXDOMAIN, and dig with its defaults (EDNS and a COOKIE offered) |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — every kdig and dig session crosses `recording_relay` with `SSLKEYLOGFILE`; tshark decrypts it and `require_named("dns")` must hold |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes, as of this pass** — `dns_message`, rebuilt this pass (nightly-2025-12-04, the `-undefined,dynamic_lookup` link flag, `fuzz/Cargo.lock` seeded from the root) and run `-max_total_time=300 -timeout=25` from the committed seeds, `pointer_chain_bomb` among them: 137 196 inputs in 301 s, clean; the corpus grew from 7 to 742 inputs (kept out of the tree). The framing around it is a `read_exact` on a `u16` length, so this decoder is the one peer bytes reach |
+| 4 | every declared bound has a test | **yes, as of this pass** — the Bounds table above, each verified by removal |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/dot/AGENTS.md`, the latter rewritten |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/dot/` is empty, and kdig and dig fail rather than skip |
+
+**Condition 1 rested on one client.** The rating said "two independent peers", and the second
+was rustls with the DNS message assembled and decoded by hickory-proto, the codec this server
+encodes with — the circular half of which this file's own "Verified" section was candid about.
+kdig was the only independent client, and it drove A records only. `dig +tls` (BIND 9.20) is
+the second, and both now read every record type the actions write.
+
+**Condition 4 and condition 5 found the same defects**, because the failure section was a
+promise the code did not keep: an answer with no sendable action wrote nothing, two answers
+wrote two replies, unparsed and oversize answers wrote nothing or garbage, and a query with no
+question or one that did not decode was skipped with its connection left open. All of them were
+DoT's own copy of an answer loop the DNS server had already fixed; DoT now answers through
+`dns::StreamQuery` (see "Failure behaviour"). The idle bound was a constant nobody could test
+in under five minutes; it is the `idle_timeout_secs` startup parameter now, with its range
+checked. Corrected in this file as well: the action list (it lacked `send_dns_records` and
+`send_dns_refused`), "no connection state stored in ServerInstance", "No EDNS0 support", the
+`CloseConnection` paragraph, and the claim that delegation keeps DNS, DoT and DoH answering
+identically, which was true only of the actions offered.
+
+**What the oracle cannot see here** is anything TLS-level: the certificate is self-signed and
+neither client validates it, so the rating says nothing about a deployment's PKI.

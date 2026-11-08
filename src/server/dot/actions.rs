@@ -114,34 +114,38 @@ impl Protocol for DotProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             // RFC 7858 assigns DoT to TCP/853, which is a privileged port.
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(853))
             .well_known_port(853)
             .implementation("hickory-proto + tokio-rustls; DNS actions and action execution are delegated to the DNS protocol")
             .llm_control("Same as DNS (delegates to DNS protocol)")
             .e2e_testing(
-                "TWO independent peers, neither #[ignore]d and neither able to skip. \
-                 (1) tests/server/dot/real_client_test.rs drives the real kdig binary (Knot DNS \
-                 3.6, a C implementation sharing no code with this tree) through `kdig +tls`: it \
-                 matches the reply's transaction id against the one it chose, confirms the \
-                 question section, decodes the RFC 7858 length prefix and renders the answer \
-                 through its own presentation writer. Two queries for different names with \
-                 different addresses, so a reply bound to the wrong question is visible. The \
-                 test FAILS, naming `brew install knot`, when kdig is absent. \
-                 (2) tests/server/dot/e2e_test.rs: rustls completes a real handshake and the \
-                 test asserts the id and question are echoed and that each domain gets its own \
-                 address. \
-                 UNTIL SEPTEMBER 2026 ONLY (2) EXISTED, and its DNS half was circular: the \
-                 message is hand-assembled over hickory-proto, the codec this server encodes \
-                 with, so it proved our encoder agrees with our decoder. This field named kdig \
-                 as the thing that would close it; kdig is now installed and does. Verified by \
-                 answering with a fixed transaction id instead of the client's, at which point \
-                 kdig waits out its timeout and the test fails. \
-                 UNPROVEN: certificate validation of any kind (the cert is self-signed and plain \
-                 `+tls` does not authenticate it), client auth, and record types beyond A. PCAP ORACLE: kdig runs with SSLKEYLOGFILE through a recording relay; tshark decrypts both sessions and must dissect DNS in the server's direction. FUZZ: fuzz/fuzz_targets/dns_message.rs (hickory-proto's Message::from_vec).",
+                "STABLE, November 2026, on the six conditions; see 'Maturity: the six conditions' in \
+                 src/server/dot/AGENTS.md. (1) TWO independent resolvers, neither #[ignore]d and \
+                 neither able to skip: tests/server/dot/real_client_test.rs drives kdig (Knot \
+                 DNS, GnuTLS) and dig (ISC BIND 9.20, OpenSSL) through `+tls`. Each picks the \
+                 transaction id, matches the reply against it, confirms the question and renders \
+                 the answer: A for two names with two addresses, AAAA, MX (preference 4660, so a \
+                 byte-swap is visible), TXT, CNAME and NXDOMAIN; dig runs with its defaults, \
+                 EDNS and a COOKIE offered, and reads the OPT the server echoes. Verified by \
+                 answering with a fixed transaction id: both discard the reply. (2) PCAP ORACLE: \
+                 kdig's sessions cross a recording relay with SSLKEYLOGFILE; tshark decrypts \
+                 them and must dissect DNS in the server's direction (dig writes no key log). \
+                 (3) FUZZ: fuzz/fuzz_targets/dns_message.rs, dns_screen then Message::from_vec, \
+                 the pair every query goes through, with a pointer-chain bomb in its corpus. \
+                 (4) BOUNDS: tests/server/dot/bounds_test.rs and connection_bounds_test.rs, one \
+                 test per bound at its boundary, each verified by removal. (6) No #[ignore] and \
+                 no skip gate. UNPROVEN: certificate validation of any kind (self-signed, and \
+                 neither client authenticates it), client auth, EDNS padding.",
             )
-            .notes("Self-signed certs only, no client auth, TLS overhead")
+            .notes(
+                "Self-signed certs only, no client auth. Answers through dns::StreamQuery, the DNS \
+                 server's own answer rules: one message per query, SERVFAIL for a backend failure, \
+                 an unparseable or oversize answer and an answer with nothing sendable, FORMERR \
+                 for no question; a message that does not decode closes the connection. \
+                 idle_timeout_secs (default 300) bounds the wait for the next query.",
+            )
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()
