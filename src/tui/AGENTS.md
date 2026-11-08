@@ -33,12 +33,12 @@ sparkline, a **driver badge**), the requests parked for you (each with the time 
 before it fails closed, from its rule's `timeout_secs`), a facts line (status, uptime,
 traffic, rate), the instance's error when it has one (wrapped whole under the facts — it is
 usually why nothing works), the driver (an LLM driver with no model selected says its events
-fail closed), then its **buttons as an aligned grid** — every cell as wide
-as the widest label, as many per row as fit — and its **sections**: `peers` (each peer
-with `[ disconnect ]` on its row and, beneath it, **the conversation on that connection**:
-one row per message in `←` and per message out `→`, oldest first, the latest few with an
-"… N earlier" row that lifts the cap, each row opening the full entry, then
-`[ send message ]`; `[ + <proto> client ]` at the foot), `rules` (each rule with delete /
+fail closed while the endpoint has none to auto-select), then its **buttons as an aligned
+grid** — every cell as wide as the widest label, as many per row as fit — and its
+**sections**: `peers` (each peer with `[ disconnect ]` on its row and, beneath it, **the
+conversation on that connection**: one row per message in `←` and per message out `→`,
+oldest first, the latest few with an "… N earlier" row that lifts the cap, each row opening
+the full entry, then `[ send message ]`; `[ + <proto> client ]` at the foot), `rules` (each rule with delete /
 ↑ / ↓ beside it and `+ add rule` below), `config` (each setting opens the form); a client
 has `send` (its verbs) and `connections` (each attempt with its conversation and
 `[ send message ]`) instead of `peers`. `cards::payload_summary` turns a request or an

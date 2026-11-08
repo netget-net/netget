@@ -125,8 +125,9 @@ pub struct RailSnapshot {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_llm_calls: u64,
-    /// No model is selected, so an instance the model drives fails every event
-    /// closed (`false` when unknown, as in a hand-built snapshot).
+    /// No model is stored, so an instance the model drives fails every event
+    /// closed unless that event's own auto-selection finds one at the endpoint
+    /// (`false` when unknown, as in a hand-built snapshot).
     pub no_model: bool,
 }
 

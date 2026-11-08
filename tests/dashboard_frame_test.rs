@@ -1202,6 +1202,29 @@ fn an_llm_driven_instance_with_no_model_says_its_events_fail_closed() {
         text.contains("No model is selected"),
         "the LLM driver row warns:\n{text}"
     );
+    // Wide enough not to wrap, so the warning reads as one sentence. It must
+    // not promise that only /model ends the failures: every event that
+    // reaches the model asks the endpoint for one first, so a model pulled
+    // later is auto-selected by the next event.
+    let warning: Vec<String> = netget::tui::cards::rows(
+        &snapshot,
+        &netget::tui::cards::CardState::default(),
+        &std::collections::HashMap::new(),
+        400,
+    )
+    .iter()
+    .map(|row| row.text())
+    .filter(|text| text.contains("No model is selected"))
+    .collect();
+    assert!(!warning.is_empty());
+    for line in &warning {
+        assert!(
+            line.contains("asks the LLM endpoint for one")
+                && line.contains("fails closed while none is installed or reachable")
+                && !line.contains("until /model"),
+            "the warning says when events fail closed, truthfully: {line}"
+        );
+    }
 
     snapshot.no_model = false;
     app.absorb_snapshot(snapshot);
