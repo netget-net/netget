@@ -62,13 +62,16 @@ identically.
 
 Connection flow:
 
-1. Accept TCP connection on port 853
-2. Perform TLS handshake using self-signed certificate
-3. Read length-prefixed DNS messages (2-byte big-endian length + DNS packet)
-4. Parse DNS query with hickory-proto
-5. Send to LLM for response
-6. Write length-prefixed DNS response back over TLS
-7. Loop for multiple queries per connection
+1. Accept TCP connection on port 853 (past `MAX_CONNECTIONS`, closed before the handshake)
+2. Perform TLS handshake using self-signed certificate, within `TLS_HANDSHAKE_TIMEOUT`
+3. Read a length-prefixed DNS message (2-byte big-endian length + DNS packet): the prefix
+   within `idle_timeout_secs`, the body within `MESSAGE_READ_TIMEOUT`
+4. Screen and parse it with `dns_screen::decode_dns_message`; a message that does not decode
+   closes the connection
+5. Answer a query with no question FORMERR; send any other to `call_llm`
+6. Turn the answer into at most one message with `dns::StreamQuery` — the DNS server's own rules,
+   see "Failure behaviour" below — and write it length-prefixed
+7. Loop for the next query on the same connection
 
 ### 3. Length-Prefixed Messages
 
@@ -79,12 +82,12 @@ DoT uses TCP framing (unlike standard DNS UDP):
 - Prevents message fragmentation issues
 - Read: `read_exact(&mut [0u8; 2])` then `read_exact(&mut vec![0u8; len])`
 - Write: `DotServer::send_framed`, which **checks** the length rather than casting
-  it. Every write site used `bytes.len() as u16`, which wraps silently: a
-  65540-byte message (reachable through `send_dns_response`, whose whole point is
-  that the model hands over arbitrary hex) announced a length of 4 and then wrote
-  65540 bytes, so the peer read 4 of them as a message and the rest as the next
-  length prefix - the stream desynchronised permanently and every later query on
-  that connection got garbage. Oversize is now refused and logged
+  it (`bytes.len() as u16` wraps, and a wrapped prefix desynchronises the stream for
+  good). Every message reaching it was encoded by hickory through `StreamQuery`, whose
+  encoder stops at 65535 octets and turns a larger answer — 300 TXT records handed over
+  through `send_dns_response`, say — into SERVFAIL, so the check cannot fire from anything
+  the model sends. If it ever does, the connection is closed
+  (`decision=fail_closed_oversize_answer`), never misframed
 
 ### 4. Self-Signed Certificates
 
@@ -129,7 +132,8 @@ Event parameters:
 
 ### Available Actions
 
-DoT reuses all DNS actions, and only those:
+DoT offers `DnsProtocol::query_actions()`, the DNS server's query vocabulary without the
+zone-transfer actions:
 
 - `send_dns_a_response` - Return IPv4 address (A record)
 - `send_dns_aaaa_response` - Return IPv6 address (AAAA record)
@@ -137,16 +141,15 @@ DoT reuses all DNS actions, and only those:
 - `send_dns_txt_response` - Return text record
 - `send_dns_cname_response` - Return canonical name alias
 - `send_dns_nxdomain` - Domain does not exist
+- `send_dns_records` - Any number of records in any section, any RCODE
+- `send_dns_refused` - REFUSED, echoing the question
 - `send_dns_response` - Hand-assembled response, hex-encoded (escape hatch)
 - `ignore_query` - Don't send response
 
 See `src/server/dns/AGENTS.md` for detailed action documentation.
 
-Two actions previously listed here do not exist and never did: `dns_response`
-(the real name is `send_dns_response`) and `close_connection`. The connection
-handler *does* honour `ActionResult::CloseConnection` if some other action
-produces it, but no DNS action does, so there is no way for the LLM to close a
-DoT connection - it ends when the client closes it or a read fails.
+There is no `close_connection`: the model cannot close a DoT connection. It ends when the
+client closes it, a read fails or times out, or a message does not decode.
 
 As with plain DNS, a **static** event handler cannot serve DoT answers: it
 cannot echo the client's random transaction ID or the queried name. Use script
@@ -205,8 +208,9 @@ a caller that asked for port 0 would be told the port was 0. The accept loop's
 ### State Management
 
 - DoT connections are stateful (persistent TCP+TLS)
-- Multiple queries share same TLS session
-- No connection state stored in ServerInstance (simple protocol)
+- Multiple queries share same TLS session, answered in order, one at a time
+- Each connection is a `ConnectionState` in `ServerInstance.connections` (see the
+  lifecycle above); no protocol-specific state is kept in it
 - Each query is independent at DNS layer
 
 ## Known Limitations
@@ -236,29 +240,65 @@ All limitations from standard DNS protocol apply:
 - No recursive resolution
 - See `src/server/dns/AGENTS.md` for full list
 
-### 4. No Connection Pooling
+### 4. No rate limiting
 
-- Each connection handled independently
-- Connections are capped at 256; rate limiting is not implemented. After a length
-  prefix arrives, its DNS body must finish within 10 seconds (`MESSAGE_READ_TIMEOUT`).
-- Memory usage grows with concurrent connections
+Connections are capped and every wait is bounded (see "Bounds" below), but there is no
+per-source limit or query-rate limit: one address may hold all 256 connections.
 
-Bounded in three places, though, all added September 2026:
+### 5. EDNS0 is echoed, not used
 
-- the TLS handshake times out after 10s, so a peer cannot park a task by
-  connecting and saying nothing;
-- an established connection that sends no query for 300s is closed (RFC 7858 §3.4
-  leaves the server free to; the value is generous because resolvers legitimately
-  pin one connection);
-- each per-connection task is registered with `AppState::register_server_task`, so
-  `stop_server` aborts it. Unregistered, those tasks outlived the server that
-  accepted them and went on answering.
+A query with an OPT record gets one back (`Reply::finish`, as on the DNS server's TCP path);
+there is no truncation over TLS and no EDNS option is acted on — Client Subnet, COOKIE and
+Padding (RFC 7830, which RFC 8310 recommends for DoT) are ignored.
 
-### 5. No EDNS0 Support
+## Bounds
 
-- No support for Extended DNS (RFC 6891)
-- No client subnet information
-- No large UDP response fallback (DoT always uses TCP)
+Every number this server enforces, and the test that fails when it is removed
+(`tests/server/dot/bounds_test.rs` unless named):
+
+| bound | value | direction | test |
+|---|---|---|---|
+| `MAX_CONNECTIONS` | 256 | accept | `connection_bounds_test.rs`: the 257th's handshake never starts; a closed peer's slot comes back |
+| `TLS_HANDSHAKE_TIMEOUT` | 10 s | inbound | a silent peer and a half-sent ClientHello are open at 6 s and closed by 15 s |
+| `idle_timeout_secs` (`IDLE_READ_TIMEOUT`) | 300 s, 1-3600 | inbound | at 3 s: three queries 2 s apart are answered, silence after them closes at the bound; 0 and 3601 refused at start |
+| `MESSAGE_READ_TIMEOUT` | 10 s | inbound | a body finished 4 s after its prefix is answered; `connection_bounds_test.rs`: one never finished is closed |
+| the length prefix | 65535 (a `u16`), 0 closes | inbound | a 65535-octet query is read whole and answered; a zero length closes |
+| `dns_screen` (`MAX_POINTER_HOPS` 127) | per message | inbound | a 2 000-hop compression-pointer chain closes its connection; the next connection is answered |
+| hickory's encoder | 65535 octets | **outbound** | a ~80 KB answer is SERVFAIL and the stream stays framed |
+| one reply per query | | **outbound** | an answer with two A actions puts one message on the wire |
+
+DoT declares no `max_inbound_bytes`: the `u16` prefix is the ceiling and nothing accumulates
+across messages (a "structural" entry in `tests/max_inbound_bytes_declaration_test.rs`).
+
+## Failure behaviour: one message per query, SERVFAIL rather than silence
+
+DoT answers through `dns::StreamQuery`, which is the DNS server's own `Reply::resolve` and
+`Reply::finish` with the TCP limits, so the outcomes and their `decision=` tags are the DNS
+server's (`src/server/dns/AGENTS.md`, "Failure behaviour"), logged with `DoT` in place of `DNS`:
+
+| outcome | on the wire | `decision=` |
+|---|---|---|
+| the first DNS message an action produced | that message, OPT echoed for an EDNS query | `model_answer` |
+| `ignore_query` | nothing; the connection goes on | `model_silent` |
+| an answer with no sendable action (only `notify_operator`, or a DNS action the executor refused) | SERVFAIL | `fail_closed_no_action` |
+| `send_dns_response` bytes that are not a DNS message | SERVFAIL | `fail_closed_unparseable_answer` |
+| an answer too large to encode (over 65535 octets) | SERVFAIL | `fail_closed_no_action` ("cannot encode") |
+| the backend failed / was overloaded | SERVFAIL | `fail_closed_llm_error` / `fail_closed_llm_overload` |
+| a query with no question | FORMERR, from the server | `spec_reply` |
+| a message that does not decode, or a zero length | the connection closes | `fail_closed_unparseable_query` |
+
+Every SERVFAIL and FORMERR echoes the transaction id and question; a resolver discards a reply
+that does not. A second message from the same answer is never sent: on a pinned connection a
+second reply with one id is either discarded or read as the answer to the next query.
+
+**Until November 2026 four of those rows were false.** DoT had its own copy of the answer loop:
+it wrote nothing for an answer with no sendable action, so the resolver waited out its timeout
+on a connection it had pinned; it wrote every message an answer produced; it put
+`send_dns_response`'s bytes on the wire unparsed, and refused an oversize one by writing
+nothing; and it skipped a query with no question or one that did not decode, leaving the
+connection open and the query unanswered. This file's own Overview said delegation "is what
+keeps DNS, DoT and DoH answering identically" — true of the actions offered, false of
+everything after the model answered. `bounds_test.rs` drives every row.
 
 ## Example Prompts
 

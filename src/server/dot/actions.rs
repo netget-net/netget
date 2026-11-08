@@ -76,6 +76,20 @@ impl DotProtocol {
 
 // Implement Protocol trait (common functionality)
 impl Protocol for DotProtocol {
+    fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
+        vec![crate::llm::actions::ParameterDefinition {
+            name: "idle_timeout_secs".to_string(),
+            type_hint: "number".to_string(),
+            description: "Seconds an established DoT connection may wait for its next query \
+                          before the server closes it (RFC 7858 §3.4 leaves this to the \
+                          server). 1-3600; resolvers pin one connection and reuse it, so the \
+                          default is generous. A query being answered never counts as idle."
+                .to_string(),
+            required: false,
+            example: json!(300),
+            default: Some(json!(super::IDLE_READ_TIMEOUT.as_secs())),
+        }]
+    }
     fn get_async_actions(&self, state: &AppState) -> Vec<ActionDefinition> {
         self.dns_protocol.get_async_actions(state)
     }
@@ -198,6 +212,19 @@ impl Server for DotProtocol {
     > {
         Box::pin(async move {
             use crate::server::dot::DotServer;
+            let idle = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_u64("idle_timeout_secs"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(super::IDLE_READ_TIMEOUT.as_secs());
+            if !(1..=super::MAX_IDLE_TIMEOUT_SECS).contains(&idle) {
+                anyhow::bail!(
+                    "idle_timeout_secs must be between 1 and {}, got {idle}",
+                    super::MAX_IDLE_TIMEOUT_SECS
+                );
+            }
             // DotServer::spawn binds the listener before returning, so bind
             // failures surface here and the address it returns is the real
             // bound address (resolving port 0 to the OS-assigned port).
@@ -207,6 +234,7 @@ impl Server for DotProtocol {
                 ctx.state,
                 ctx.server_id,
                 ctx.status_tx,
+                std::time::Duration::from_secs(idle),
             )
             .await
         })
