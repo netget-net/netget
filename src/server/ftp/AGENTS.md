@@ -2,35 +2,81 @@
 
 ## Overview
 
-FTP (RFC 959) **control connection** server. Every reply the client sees is produced by a
-handler — script, static or LLM. There is no filesystem behind it: the model invents the
-directory listings and file contents, and nothing is read from or written to disk.
+FTP (RFC 959, RFC 2428) server: the control connection **and** passive and active data
+connections. Every reply on the control connection, every directory listing and every file is
+produced by a handler — script, static or LLM. There is no filesystem behind it: the handler
+supplies listings and file contents, and an upload is handed to the handler, never written to
+disk.
 
-**Status**: Experimental
+**Status**: Beta (see "Maturity" at the foot)
 **Port**: 21 (privileged — `privilege_requirement` is `PrivilegedPort(21)`)
-**Feature**: `ftp` (no extra crates; `ftp = []` in `Cargo.toml`)
-**Files**: `mod.rs` (accept loop, session I/O), `actions.rs` (actions, event, metadata)
+**Files**: `mod.rs` (accept loop, session I/O, the transfer sequence), `data.rs` (setup verbs,
+data-connection open/read/write, ASCII conversion, bounds), `actions.rs` (actions, event,
+metadata)
 
-## What this is not
+## What the server answers itself, and what the handler answers
 
-Read this before choosing FTP for anything.
+The data-connection setup verbs are mechanics: their replies name a socket only the server can
+open, or change how the server frames bytes, so a handler inventing a `227` would point the
+client at a port nothing listens on. They never reach the handler (`data::answer_setup`,
+logged `decision=server_answer` or `decision=refused_*`):
 
-**There is no data connection.** `PASV`, `EPSV` and `PORT` are not implemented — the server
-never opens a second socket. Everything is written on the control connection. A real FTP
-client (`ftp`, `lftp`, `curl`, FileZilla) will therefore:
+| Command | Reply |
+|---|---|
+| `PASV` | binds a listener on the **configured host**, port 0, and answers `227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)` with the control connection's local address (a wildcard bind host is not an address a client can connect to). `425` on an IPv6 control connection (use `EPSV`) |
+| `EPSV`, `EPSV 1`/`2` | the same listener, `229 Entering Extended Passive Mode (\|\|\|port\|)`; the other family's number is `522`; `EPSV ALL` is `200` and refuses every other setup verb with `501` afterwards |
+| `PORT h1,…,p2` / `EPRT \|1\|addr\|port\|` | `200`, if the address is the control connection's own peer and the port is 1024 or above; otherwise `500 Illegal PORT command` (the FTP bounce attack, RFC 2577 §3; vsftpd's `port_promiscuous=NO`). An unknown EPRT family is `522` |
+| `TYPE A`, `A N` / `TYPE I`, `L 8` | `200 Type set to A` / `I`; anything else `504`, nothing `501` |
+| `MODE S`, `STRU F` | `200`; any other mode or structure `504` |
 
-- happily complete the login handshake (`USER`/`PASS`/`SYST`/`PWD` are plain replies), and
-- fail or hang on anything that needs a transfer (`LIST`, `NLST`, `RETR`, `STOR`), because the
-  handler's `PASV` reply is whatever the model made up and no data socket is listening behind it.
+A passive listener binds the host the server was configured with and nowhere wider — `0.0.0.0`
+only when that is the configured host. A passive data connection from any address but the
+control connection's peer is dropped and the wait goes on (vsftpd's `pasv_promiscuous=NO`), so
+another host that guessed the port cannot take the transfer. Each setup command replaces a
+channel no transfer has used yet, and each transfer consumes the channel whatever its outcome:
+one channel, one transfer.
 
-`send_ftp_list` and `send_ftp_data` write their bytes on the control connection anyway. That is
-useful against a raw client (`nc localhost 2121`) and against an attacker who is reading the
-transcript, and it is useless for interoperating with a real client. The action descriptions say
-so; do not treat listing support as working file transfer.
+The transfer verbs are the handler's, with the server writing RFC 959 §5.4's reply sequence
+around its answer (`Transfer` in `mod.rs`):
 
-Also missing: FTPS / `AUTH TLS`, binary vs ASCII mode (`TYPE` is just another reply), `REST`,
-and any notion of a current working directory — the model tracks the cwd in its own memory or
-not at all.
+| Command | Handler answers with | Then the server writes |
+|---|---|---|
+| `LIST`, `NLST`, `MLSD` | `send_ftp_list` (`ls -l` lines, bare names, or RFC 3659 fact lines; `[]` is an empty directory) | `150`, the listing on the data connection (CRLF after every line, whatever `TYPE` says), `226` |
+| `RETR` | `send_ftp_data` with the file's contents | `150`, the contents (in `TYPE A` every LF not already after a CR becomes CRLF; in `TYPE I` unchanged), `226` |
+| `LIST`/`NLST`/`MLSD`/`RETR` | a `450`/`550` reply | that reply, and no `150` — a refusal must come before one |
+| `STOR`, `APPE` | one completion reply (`226` to confirm, `451`/`552` to refuse) | `150` **first**, then reads the upload to EOF, then raises the event with it, then the handler's reply |
+
+An upload has to be read before there is anything to ask about, so its `150` comes before the
+handler is consulted; a download is asked about first, so a refusal can precede any `150`. The
+upload reaches the handler as `upload_bytes`, plus `upload_text` when it is valid UTF-8
+(`upload_is_text`); in `TYPE A` CRLF is turned back into LF first. A binary upload is described
+by its size alone — the event never carries raw bytes or base64.
+
+A transfer command with no prepared channel is answered `425 Use PASV, EPSV, PORT or EPRT
+first` without consulting the handler. A `150`/`226` the handler wrote beside a payload is not
+sent — the server owns that sequence — except that a `226`/`250` of its own replaces the
+server's default `226 Transfer complete` text; anything else is dropped with WARN
+`decision=transfer_reply_dropped`. `send_ftp_list` / `send_ftp_data` in answer to any other
+command have no data connection to go to: `decision=fail_closed_bad_action`, answered `451`.
+
+Also missing: FTPS / `AUTH TLS`, `REST` (no resumed transfers), `STOU`, `ABOR` during a
+transfer (the control connection is not read while one runs), `MODE`s other than stream,
+`TYPE E`, and any notion of a current working directory — the handler tracks the cwd in its own
+memory or not at all. File contents are text (`send_ftp_data`'s `data` is a string), so a binary
+download can carry only what a UTF-8 string can.
+
+### Data-connection bounds
+
+Constants in `data.rs`, each overridable per server:
+
+| Bound | Default | Parameter | Over it |
+|---|---|---|---|
+| `DATA_CONNECT_TIMEOUT` | 60s (vsftpd's `accept_timeout` / `connect_timeout`) | `data_connect_timeout_secs` | the client did not connect to the passive port, or the server's connect to the `PORT`/`EPRT` address did not complete: `425 Can't open data connection` after the `150` |
+| `DATA_IDLE_TIMEOUT` | 300s (vsftpd's `data_connection_timeout`) | `data_idle_timeout_secs` | one read or write on an open data connection made no progress: `426 Connection closed; transfer aborted`. Writes go in 64 KiB chunks, so this bounds a stall rather than the length of a transfer |
+| `MAX_UPLOAD_BYTES` | 1 MiB | `max_upload_bytes` | more bytes than this crossed the data connection: `552 Requested file action aborted: exceeded storage allocation`, and the handler is never asked. The whole upload goes into one event, so this bounds what an event can carry into a prompt |
+
+The control connection's read deadlines (below) wrap only the read of a command line, so a long
+transfer is never cut off by them.
 
 ## Architecture
 
@@ -56,11 +102,13 @@ with `500 Command line too long` before closing, rather than dropping the connec
 with a `peer_support::spawn_peer_command_task`, registered right after the connection is added
 and removed on every exit (EOF, both 421 paths, `close_connection`, errors) through the single
 return at the end of `handle_session`. So `[ message this peer ]` / `[ disconnect this peer ]`
-work: an injected `send_ftp_response` / `send_ftp_multiline` / `send_ftp_data` / `send_ftp_list`
-is encoded by the same `execute_action` the handlers use and written to the control connection;
-`close_connection` half-closes it. All of FTP's wire actions return `ActionResult::Output`, so
-there is no `Custom`-result gap. Every read line and every write goes through
-`update_connection_stats`, so the rail's `↓ ↑` counters and `last_activity` are live.
+work: an injected `send_ftp_response` / `send_ftp_multiline` is encoded by the same
+`execute_action` the handlers use and written to the control connection; `close_connection`
+half-closes it. `send_ftp_data` / `send_ftp_list` return the `ftp_transfer` `Custom` result,
+which only a transfer in progress can carry to a data connection, so injecting one writes
+nothing and the injection reports it. Every read line, every write and every data-connection
+byte goes through `update_connection_stats`, so the rail's `↓ ↑` counters and `last_activity`
+are live.
 Proven with zero LLM calls in `tests/server/ftp/peer_injection_test.rs`.
 
 The accept-loop `JoinHandle` is registered with `AppState::register_server_task()`, so
@@ -69,10 +117,12 @@ with `?`, so a port clash is reported as `Error` and not as a phantom `Running` 
 
 ### Startup parameters
 
-None. The previously advertised `passive_port_range` was never read by any code — there is no
-passive mode to configure — and has been removed. `send_first` is not declared either: the
-server always sends the greeting event itself, so passing `send_first` would only earn an
-"unsupported" warning from `server_startup`.
+`first_byte_timeout_secs` and `idle_timeout_secs` (the control connection's read deadlines,
+"Connection bounds" below) and `max_upload_bytes`, `data_connect_timeout_secs` and
+`data_idle_timeout_secs` (the data-connection bounds above). There is no passive port range:
+a passive listener takes an OS-assigned port on the configured host. `send_first` is not
+declared: the server always sends the greeting event itself, so passing `send_first` would only
+earn an "unsupported" warning from `server_startup`.
 
 ## Failure behaviour
 
@@ -88,31 +138,36 @@ event, which is a sentinel and not something a client sends).
 
 | Outcome | On the wire | Log |
 |---|---|---|
-| Model answered with `send_ftp_response` / `_multiline` / `_data` / `_list` | those bytes verbatim | INFO `decision=model_answer (reply <code>)` |
+| Model answered with `send_ftp_response` / `_multiline` | those bytes verbatim | INFO `decision=model_answer (reply <code>)` |
+| Model answered a transfer with `send_ftp_list` / `send_ftp_data` | `150`, the payload on the data connection, `226` | INFO `decision=model_answer (<n> bytes on the data connection, then 226)` |
 | Model answered `close_connection` and nothing else | control connection closed, no reply | INFO `decision=model_reject` |
 | Model answered `wait_for_more` and nothing else | nothing — the next command line is read | INFO `decision=model_wait_for_more` |
-| Model answered with no usable action at all | **nothing**; the client waits for its own timeout | WARN `decision=model_silent` |
-| Executor refused the model's action (bad `code`, CR/LF in `message`, unknown action) | **nothing**; the client waits for its own timeout | ERROR `decision=fail_closed_bad_action` naming the action and the reason |
+| Model answered with no usable action at all | `451 Requested action aborted: local error in processing` (the greeting: `421 … (netget: no greeting was produced)` and close) | WARN `decision=model_silent` |
+| Executor refused the model's action (bad `code`, CR/LF in `message`, unknown action, a payload outside a transfer) | `451` as above (the greeting: `421` and close) | ERROR `decision=fail_closed_bad_action` naming the action and the reason |
+| A download answered with a `1xx`/`2xx` and no payload; an upload answered with no completion reply | `451` | WARN `decision=fail_closed_no_payload` / `fail_closed_no_completion` |
 | Backend failed (unreachable, retries exhausted, malformed) | `421 Service not available, closing control connection (netget: request could not be processed)` then close | ERROR `decision=fail_closed_llm_error` with the full error |
 | Backend saturated | `421 Service not available, closing control connection (netget: backend at capacity, retry later)` then close | ERROR `decision=fail_closed_llm_overloaded` with the full error |
 | Control line over `MAX_COMMAND_LINE` with no newline | `500 Command line too long` then close | WARN `decision=refused_line_too_long` |
+| Transfer with no `PASV`/`EPSV`/`PORT`/`EPRT` first | `425 Use PASV, EPSV, PORT or EPRT first`; the handler is not asked | INFO `decision=refused_no_data_connection` |
+| Data connection did not open within `data_connect_timeout_secs` | `425 Can't open data connection` after the `150` | WARN `decision=refused_data_connection` |
+| Data connection stalled past `data_idle_timeout_secs`, or broke | `426 Connection closed; transfer aborted` | WARN `decision=transfer_aborted` |
+| Upload over `max_upload_bytes` | `552 Requested file action aborted: exceeded storage allocation`; the handler is not asked | WARN `decision=refused_upload_too_large` |
 
 421 rather than silence because an FTP client may not send a command until it has read a
 greeting, so a silent greeting failure hangs the client until its own timeout. The two
-categories are kept apart deliberately: one is retryable and one is not.
+categories are kept apart deliberately: one is retryable and one is not. 451 rather than
+silence for a command, because a client reads a 4xx as a failed command and goes on, where
+silence leaves it waiting for a reply until its own timeout.
 
 **There is no fail-open here, and that is the property to preserve.** Nothing in `actions.rs`
 can synthesise a reply — `execute_action` produces only the packet a named action asked for,
 and an unknown action name is an `Err`, not a default. So no failure path can produce a 2xx:
-an LLM outage during `USER`/`PASS` yields 421 and a closed connection, never 230. If you add a
-fallback reply to either failure path, it must not be in the 2xx range.
+an LLM outage during `USER`/`PASS` yields 421 and a closed connection, never 230, and a
+transfer the handler gave nothing to send is 451, never a 226 for an empty file. If you add a
+fallback reply to any failure path, it must not be in the 2xx range.
 
-**Three outcomes still share one thing on the wire — nothing.** `model_reject`,
-`model_wait_for_more`, `model_silent` and `fail_closed_bad_action` all write no bytes, so only
-the log distinguishes them. That is why `model_silent` is WARN and `fail_closed_bad_action` is
-ERROR while the two deliberate ones are INFO. Tagging them was this pass's job; giving
-`model_silent` and `fail_closed_bad_action` a real reply (451 and 500 respectively would be
-the RFC 959 answers) was deliberately **not**, because it changes what a peer sees.
+Only `model_reject` and `model_wait_for_more` write nothing, and both are decisions the handler
+declared.
 
 ## LLM Integration
 
@@ -124,7 +179,7 @@ handler matches does the model get invoked, once per command line.
 
 | Event         | When                                            | Parameters |
 |---------------|-------------------------------------------------|------------|
-| `ftp_command` | connection accepted, and once per command line  | `command`, `answer_with` |
+| `ftp_command` | connection accepted, and once per command line the handler answers (not the setup verbs) | `command`, `answer_with`; on transfers `transfer_type`; on uploads `upload_bytes`, `upload_text`, `upload_is_text` |
 
 `command` is the raw line with the trailing CRLF stripped — not upper-cased, not split into
 verb and argument. The single sentinel value `CONNECTION_ESTABLISHED` means "TCP connection
@@ -151,8 +206,8 @@ write is not a reply and is let through.
 |-----------------------|-----------------------------------------------------------|-------------------|
 | `send_ftp_response`   | `<code> <message>\r\n`                                    | `code`, `message` |
 | `send_ftp_multiline`  | `<code>-<line>\r\n` … `<code> <last>\r\n`                 | `code`, `lines[]` |
-| `send_ftp_data`       | raw text + CRLF, **on the control connection**            | `data`            |
-| `send_ftp_list`       | one CRLF-terminated line per entry, **on the control connection** | `entries[]` |
+| `send_ftp_data`       | the file, **on the data connection**, to answer `RETR` (nothing appended) | `data` |
+| `send_ftp_list`       | one CRLF-terminated line per entry, **on the data connection**, to answer `LIST`/`NLST`/`MLSD` | `entries[]` |
 | `wait_for_more`       | nothing — read another line first                         | –                 |
 | `close_connection`    | nothing — closes the control connection                   | –                 |
 
@@ -164,10 +219,8 @@ is worse than a visible failure.
 or LF (`reject_line_breaks`). All three descriptions already promised this and nothing checked
 it, which left `send_ftp_response` a response-splitting primitive: a `message` of
 `"ok\r\n230 Logged in"` makes the client read a second, forged reply and treat a 331 as a
-successful login. `send_ftp_data` is deliberately exempt — it is the documented raw escape
-hatch for bytes the reply actions cannot express, and it normalises the ending so exactly one
-CRLF is written (a bare `\n` is upgraded; previously this path emitted a lone `\r` and
-truncated the line for the client).
+successful login. On the data connection the same rule keeps one listing entry one line.
+`send_ftp_data` is exempt: a file's contents are whatever they are, and nothing is appended.
 
 There are no async (user-triggered) actions.
 
@@ -195,23 +248,26 @@ off control, the matched batch and the refused mismatch.
 
 None, by design. The protocol holds no files, no directory tree and no cwd. Directory listings
 and file contents come from the handler on every request; `send_ftp_list` formats strings the
-model supplies and nothing else.
+model supplies and nothing else, and an upload is handed to the handler in its event and then
+dropped — a handler that wants to serve it back later keeps it in memory itself.
 
 ## Testing
 
-`tests/server/ftp/` has mocked E2E tests (greeting, USER/PASS, PWD/QUIT, the 421 failure path)
-and `peer_injection_test.rs` for the dashboard's per-peer injection. To verify by hand:
+`tests/server/ftp/real_client_test.rs` drives python3's stdlib `ftplib` and curl's libcurl
+through logins, every listing verb, downloads and uploads in both representation types, passive
+(`PASV`, `EPSV`) and active (`PORT`, `EPRT`) data connections and refused downloads; both fail
+rather than skip without their client, and the pcap oracle reads ftplib's control connection.
+`data_connection_test.rs` holds each data-connection bound from both sides, the setup verbs the
+server answers itself, the bounce guard, the 451 fail-closed answers, and that a passive listener
+of a server on 127.0.0.1 refuses a connection to the machine's LAN address. The rest of the
+directory covers the greeting, login, 421 paths, one reply per command, batching, the read
+deadlines and peer injection; `tests/server/ftp/AGENTS.md` lists them. To verify by hand:
 
 ```
-nc localhost 2121
-USER anonymous
-PASS a@b.c
-SYST
-PWD
-QUIT
+curl -v ftp://127.0.0.1:2121/            # LIST over EPSV
+curl -v --list-only ftp://127.0.0.1:2121/
+curl -v -T somefile ftp://127.0.0.1:2121/upload.txt
 ```
-
-A real FTP client can be used to exercise login, but not transfers — see "What this is not".
 
 ## Example prompt
 
@@ -221,6 +277,8 @@ Reply 220 "NetGet FTP" to CONNECTION_ESTABLISHED
 Accept user anonymous with any password (331 then 230)
 SYST -> 215 "UNIX Type: L8"
 PWD  -> 257 "\"/\" is current directory"
+LIST -> send_ftp_list with an ls -l line for readme.txt
+RETR readme.txt -> send_ftp_data "Welcome!\n"
 QUIT -> 221 "Goodbye" then close_connection
 ```
 
@@ -262,3 +320,19 @@ marking, the cap — and watching it fail; the default was verified by putting 6
 the regression test fail. `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound
 is removed from the source, and `tests/accept_bounded_test.rs` covers the shared cap mechanism
 itself, including that a busy connection is never reported as idle.
+
+## Maturity: Beta
+
+Two independent clients complete real sessions in `tests/server/ftp/real_client_test.rs`, and
+both tests fail rather than skip when the client is absent: python3's stdlib `ftplib` (login,
+`PWD`, `NLST` passive and active, `LIST`, `MLSD` with its facts parsed, `RETR` in TYPE I and
+TYPE A and over `PORT`, a refused `RETR`, `STOR` in TYPE A and in TYPE I with a non-UTF-8 file,
+`QUIT`) and curl's libcurl FTP (`LIST` and `NLST` over `EPSV`, `RETR` in TYPE I and TYPE A and
+over `PASV`, `EPRT` and `PORT`, `SIZE`, `STOR`, `APPE`, a refused `RETR`). The pcap oracle reads
+ftplib's control connection through a recording relay. Every data-connection bound has a test
+on both sides (`data_connection_test.rs`), and the control connection's bounds have theirs
+(`connection_bounds_test.rs`, `test.rs`).
+
+The rating covers the surface listed under "What the server answers itself" — stream mode, file
+structure, types A and I, RFC 2428's extended commands. It does not cover FTPS, `REST`, `STOU`,
+`ABOR` mid-transfer, or any client that needs them.

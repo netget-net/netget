@@ -83,41 +83,59 @@ impl FtpProtocol {
         let data = action
             .get("data")
             .and_then(|v| v.as_str())
-            .context("Missing 'data' parameter")?;
+            .context("Missing 'data' parameter (the file's contents, as text)")?;
 
-        // Ensure data ends with exactly one CRLF.
-        let formatted = if data.ends_with("\r\n") {
-            data.to_string()
-        } else if let Some(stripped) = data.strip_suffix('\n') {
-            format!("{}\r\n", stripped)
-        } else {
-            format!("{}\r\n", data)
-        };
-
-        debug!("FTP sending data: {} bytes", formatted.len());
-        Ok(ActionResult::Output(formatted.as_bytes().to_vec()))
+        debug!("FTP data-connection payload: {} bytes", data.len());
+        Ok(transfer_result(data.as_bytes()))
     }
 
     fn execute_send_ftp_list(&self, action: serde_json::Value) -> Result<ActionResult> {
-        let entries = action
-            .get("entries")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let entries = action.get("entries").and_then(|v| v.as_array()).context(
+            "Missing 'entries' parameter (an array of listing lines; [] for an empty directory)",
+        )?;
+        let entries = entries
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .context("every element of 'entries' must be a string (one listing line)")
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         for entry in &entries {
             reject_line_breaks("entries", entry)?;
         }
 
-        let entry_count = entries.len();
-        let mut response = String::new();
-        for entry in entries {
-            response.push_str(entry);
-            response.push_str("\r\n");
+        // A listing is ASCII whatever TYPE says (RFC 959 §4.1.3): CRLF after every line.
+        let mut listing = String::new();
+        for entry in &entries {
+            listing.push_str(entry);
+            listing.push_str("\r\n");
         }
 
-        debug!("FTP sending LIST data: {} entries", entry_count);
-        Ok(ActionResult::Output(response.as_bytes().to_vec()))
+        debug!("FTP listing: {} entries", entries.len());
+        Ok(transfer_result(listing.as_bytes()))
+    }
+}
+
+/// The `ActionResult::Custom` name carrying bytes for the data connection.
+pub const TRANSFER_RESULT: &str = "ftp_transfer";
+
+/// Wrap a data-connection payload. The session (`mod.rs`) writes it on the data connection of
+/// the transfer being answered, never on the control connection.
+fn transfer_result(bytes: &[u8]) -> ActionResult {
+    ActionResult::Custom {
+        name: TRANSFER_RESULT.to_string(),
+        data: json!({ "hex": hex::encode(bytes) }),
+    }
+}
+
+/// The bytes inside a [`TRANSFER_RESULT`], if `result` is one.
+pub fn transfer_bytes(result: &ActionResult) -> Option<Vec<u8>> {
+    match result {
+        ActionResult::Custom { name, data } if name == TRANSFER_RESULT => {
+            hex::decode(data.get("hex")?.as_str()?).ok()
+        }
+        _ => None,
     }
 }
 
@@ -176,15 +194,51 @@ fn parse_ftp_code(action: &serde_json::Value) -> Result<u64> {
 // Implement Protocol trait (common functionality)
 impl Protocol for FtpProtocol {
     fn get_startup_parameters(&self) -> Vec<crate::llm::actions::ParameterDefinition> {
-        // This server implements the FTP control connection only - there is no PASV/PORT
-        // data connection, so there is no passive port range to configure. It also always
-        // sends the 220 greeting itself, so it declares no `send_first` either.
+        // The server always sends the 220 greeting itself, so it declares no `send_first`.
+        // Passive listeners take an OS-assigned port on the server's own host, so there is no
+        // passive port range either.
         //
-        // The two it does declare are the read deadlines. Their right value is a property of
-        // who is on the other end, which only the operator knows: the defaults serve NetGet's
-        // own FTP client parked at the dashboard waiting for a person, and a listener exposed
-        // to strangers wants the first one much lower.
+        // What it does declare are its bounds. The right value of each is a property of who is
+        // on the other end, which only the operator knows: the read defaults serve NetGet's own
+        // FTP client parked at the dashboard waiting for a person, and a listener exposed to
+        // strangers wants the first one much lower.
         vec![
+            crate::llm::actions::ParameterDefinition {
+                name: "max_upload_bytes".to_string(),
+                type_hint: "number".to_string(),
+                description: "Largest STOR/APPE upload the server reads, in bytes as they cross \
+                              the data connection. The whole upload is handed to the handler in \
+                              one ftp_command event, so this bounds what one event can carry. \
+                              A larger upload is answered 552 without consulting the handler."
+                    .to_string(),
+                required: false,
+                example: json!(65536),
+                default: Some(serde_json::json!(super::data::MAX_UPLOAD_BYTES)),
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "data_connect_timeout_secs".to_string(),
+                type_hint: "number".to_string(),
+                description: "Seconds a transfer waits for its data connection to open - the \
+                              client connecting to the PASV/EPSV port, or the server's connect \
+                              to the PORT/EPRT address - before answering 425."
+                    .to_string(),
+                required: false,
+                example: json!(60),
+                default: Some(serde_json::json!(
+                    super::data::DATA_CONNECT_TIMEOUT.as_secs()
+                )),
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "data_idle_timeout_secs".to_string(),
+                type_hint: "number".to_string(),
+                description: "Seconds one read or write on an open data connection may make no \
+                              progress before the transfer is aborted with 426. vsftpd's \
+                              data_connection_timeout default."
+                    .to_string(),
+                required: false,
+                example: json!(300),
+                default: Some(serde_json::json!(super::data::DATA_IDLE_TIMEOUT.as_secs())),
+            },
             crate::llm::actions::ParameterDefinition {
                 name: "first_byte_timeout_secs".to_string(),
                 type_hint: "number".to_string(),
@@ -258,15 +312,33 @@ impl Protocol for FtpProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Experimental)
+            .state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(21))
             .well_known_port(21)
-            .implementation("Manual line-based parsing with tokio")
-            .llm_control("All FTP replies on the control connection")
-            .e2e_testing("raw TCP client (nc); real FTP clients cannot transfer files")
+            .implementation(
+                "Manual line-based parsing with tokio; passive (PASV, EPSV) and active (PORT, \
+                 EPRT) data connections, TYPE A/I",
+            )
+            .llm_control(
+                "Every control-connection reply but the data-connection setup verbs and TYPE; \
+                 every listing (LIST/NLST/MLSD) and file (RETR); the verdict on every upload \
+                 (STOR/APPE)",
+            )
+            .e2e_testing(
+                "python3 stdlib ftplib and curl (libcurl) complete real sessions in \
+                 tests/server/ftp/real_client_test.rs and fail rather than skip without their \
+                 client: login, PWD, LIST, NLST, MLSD, RETR in TYPE A and I, STOR in both, \
+                 APPE, SIZE, refused downloads, over PASV, EPSV, PORT and EPRT. The pcap oracle \
+                 reads ftplib's control connection. data_connection_test.rs holds each \
+                 data-connection bound from both sides.",
+            )
             .notes(
-                "Control connection only: PASV/PORT are not implemented, so LIST/RETR/STOR \
-                 cannot complete against a real FTP client. No TLS. No E2E test.",
+                "Beta for the surface it implements, which is RFC 959 stream mode, file \
+                 structure, types A and I, with RFC 2428's EPSV/EPRT. Not implemented: FTPS / \
+                 AUTH TLS, REST, STOU, ABOR during a transfer, block and compressed modes, \
+                 TYPE E. File contents are text, so a binary download can carry only what a \
+                 UTF-8 string can; a binary upload reaches the handler as its size. No storage: \
+                 the handler supplies every listing and file.",
             )
             .max_inbound_bytes(crate::server::ftp::MAX_COMMAND_LINE)
             .history(crate::protocol::metadata::HistoryMode::Last(
@@ -376,6 +448,11 @@ impl Server for FtpProtocol {
             };
             let first_byte_timeout_secs = secs("first_byte_timeout_secs")?;
             let idle_timeout_secs = secs("idle_timeout_secs")?;
+            let data_limits = crate::server::ftp::data::DataLimits::resolve(
+                secs("data_connect_timeout_secs")?,
+                secs("data_idle_timeout_secs")?,
+                secs("max_upload_bytes")?,
+            );
 
             FtpServer::spawn_with_llm_actions(
                 listen_addr,
@@ -385,6 +462,7 @@ impl Server for FtpProtocol {
                 ctx.server_id,
                 first_byte_timeout_secs,
                 idle_timeout_secs,
+                data_limits,
             )
             .await
         })
@@ -496,28 +574,28 @@ fn send_ftp_multiline_action() -> ActionDefinition {
 fn send_ftp_data_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_ftp_data".to_string(),
-        description: "Write raw text on the FTP CONTROL connection, terminated with CRLF. \
-            WARNING: this server implements no data connection (PASV/PORT are not supported), so \
-            this does NOT perform an FTP file transfer - the bytes appear inline in the command \
-            channel. A real FTP client will reject or misparse them. Use it only with raw clients \
-            such as `nc`, or to send a reply line that send_ftp_response cannot express."
+        description: "Answer RETR with the file's contents. The server sends them on the data \
+            connection the client opened with PASV/EPSV/PORT/EPRT, writing the 150 before and the \
+            226 after itself - send no reply of your own beside it. In TYPE A (ascii) every line \
+            ending is sent as CRLF; in TYPE I (binary) the text's bytes go out unchanged. Use it \
+            only to answer RETR; to refuse, send send_ftp_response with 550 instead."
             .to_string(),
         parameters: vec![Parameter {
             name: "data".to_string(),
             type_hint: "string".to_string(),
-            description: "Text to write on the control connection. Exactly one trailing CRLF is \
-                ensured: a bare \"\\n\" is upgraded to \"\\r\\n\" and a missing ending is added"
+            description: "The complete contents of the file, as text, exactly as the client \
+                should receive it. Nothing is appended"
                 .to_string(),
             required: true,
         }],
         example: json!({
             "type": "send_ftp_data",
-            "data": "Hello from FTP"
+            "data": "Hello from FTP\n"
         }),
         log_template: Some(
             LogTemplate::new()
-                .with_info("-> FTP data {output_bytes}B")
-                .with_debug("FTP send_ftp_data: {output_bytes}B")
+                .with_info("-> FTP file {data_len}B")
+                .with_debug("FTP send_ftp_data: {data_len}B")
                 .with_trace("FTP data: {preview(data,200)}"),
         ),
     }
@@ -526,18 +604,20 @@ fn send_ftp_data_action() -> ActionDefinition {
 fn send_ftp_list_action() -> ActionDefinition {
     ActionDefinition {
         name: "send_ftp_list".to_string(),
-        description: "Write directory listing lines, one per entry, each terminated with CRLF. \
-            WARNING: a real FTP client expects a LIST/NLST listing on a separate data connection, \
-            and this server has none - the lines go out on the control connection instead, where \
-            a real client will not accept them. Useful for raw clients (`nc`) and for showing a \
-            plausible listing to an attacker; not for interoperating with `ftp`/`lftp`/`curl`."
+        description: "Answer LIST, NLST or MLSD with a directory listing. The server sends it on \
+            the data connection, one CRLF-terminated line per entry, writing the 150 before and \
+            the 226 after itself - send no reply of your own beside it. An empty array is an \
+            empty directory. Use it only to answer LIST/NLST/MLSD; to refuse, send \
+            send_ftp_response with 550 instead."
             .to_string(),
         parameters: vec![Parameter {
             name: "entries".to_string(),
             type_hint: "array".to_string(),
-            description: "Array of strings, one per directory entry, already formatted as \
-                `ls -l` output (permissions, links, owner, group, size, date, name). Do not \
-                include line endings; CRLF is appended to each entry"
+            description: "Array of strings, one per directory entry, in the format the command \
+                asks for: LIST takes `ls -l` lines (\"-rw-r--r-- 1 ftp ftp 1024 Jan 01 00:00 \
+                file.txt\"), NLST bare names (\"file.txt\"), MLSD RFC 3659 fact lines \
+                (\"type=file;size=1024;modify=20260101000000; file.txt\" - facts, one space, the \
+                name). No line endings"
                 .to_string(),
             required: true,
         }],
@@ -550,7 +630,7 @@ fn send_ftp_list_action() -> ActionDefinition {
         }),
         log_template: Some(
             LogTemplate::new()
-                .with_info("-> FTP LIST {entries_len} entries")
+                .with_info("-> FTP listing {entries_len} entries")
                 .with_debug("FTP send_ftp_list: {entries_len} entries"),
         ),
     }
@@ -610,7 +690,10 @@ pub static FTP_COMMAND_EVENT: LazyLock<EventType> =
         "A client connected, or sent a command line on the FTP control connection. This is the \
          only FTP event: the connect case is signalled by the literal command \
          'CONNECTION_ESTABLISHED', for which you must reply with a 220 greeting before the client \
-         will send anything else.",
+         will send anything else. The server itself answers PASV, EPSV, PORT, EPRT, TYPE, MODE \
+         and STRU and runs the data connection: answer LIST/NLST/MLSD with send_ftp_list, RETR \
+         with send_ftp_data, and STOR/APPE (whose upload arrives in this event) with one \
+         completion reply.",
         json!({"type": "send_ftp_response", "code": 220, "message": "FTP Server Ready"}),
     )
     .with_parameters(vec![Parameter {
@@ -629,6 +712,39 @@ pub static FTP_COMMAND_EVENT: LazyLock<EventType> =
         type_hint: "string".to_string(),
         description: "The reply RFC 959 expects for this command, derived by the server from \
             its verb. Absent for a verb the server does not classify."
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "transfer_type".to_string(),
+        type_hint: "string".to_string(),
+        description: "On LIST, NLST, MLSD, RETR, STOR and APPE only: the representation type \
+            the client set with TYPE, \"ascii\" or \"binary\". The server answers PASV, EPSV, \
+            PORT, EPRT, TYPE, MODE and STRU itself, so those never reach you"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "upload_bytes".to_string(),
+        type_hint: "number".to_string(),
+        description: "On STOR and APPE only: the size of the file the client uploaded, after \
+            ASCII line-ending conversion in TYPE A"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "upload_text".to_string(),
+        type_hint: "string".to_string(),
+        description: "On STOR and APPE only: the uploaded file's contents, present when they \
+            are valid UTF-8 text (upload_is_text true). A binary upload is described by \
+            upload_bytes alone"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "upload_is_text".to_string(),
+        type_hint: "boolean".to_string(),
+        description: "On STOR and APPE only: whether upload_text carries the contents"
             .to_string(),
         required: false,
     }])
@@ -676,9 +792,39 @@ pub fn answer_with_for_command(command: &str) -> Option<&'static str> {
             "one reply: 250 if the directory changed, 550 if it does not exist"
         }
         "SYST" => "one 215 reply naming the system type, e.g. UNIX Type: L8",
-        "TYPE" | "MODE" | "STRU" | "NOOP" => "one 200 reply",
+        "NOOP" => "one 200 reply",
         "QUIT" => "one 221 reply, then the server closes",
-        "FEAT" => "a multi-line 211 reply listing features, or 502 if there are none",
+        "FEAT" => {
+            "a multi-line 211 reply listing features (this server implements EPSV, PASV, EPRT \
+             and MLST type*;size*;modify*;), or 502 if there are none"
+        }
+        "LIST" => {
+            "send_ftp_list with one `ls -l` line per entry; the server opens the data connection \
+             and sends 150 and 226 itself. Or one 450/550 reply if the directory cannot be listed"
+        }
+        "NLST" => {
+            "send_ftp_list with one bare file name per entry; the server opens the data \
+             connection and sends 150 and 226 itself. Or one 450/550 reply if the directory \
+             cannot be listed"
+        }
+        "MLSD" => {
+            "send_ftp_list with one RFC 3659 fact line per entry \
+             (type=file;size=12;modify=20260101000000; notes.txt); the server opens the data \
+             connection and sends 150 and 226 itself. Or one 501/550 reply"
+        }
+        "RETR" => {
+            "send_ftp_data with the file's complete contents; the server opens the data \
+             connection and sends 150 and 226 itself. Or one 450/550 reply if the file does not \
+             exist"
+        }
+        "STOR" | "APPE" => {
+            "the upload has been received in full (upload_bytes, upload_text): one 226 reply to \
+             confirm it, or 451/552 to refuse it"
+        }
+        "SIZE" => "one 213 reply whose message is the file's size in bytes, or 550",
+        "MDTM" => "one 213 reply whose message is the modification time as YYYYMMDDHHMMSS, or 550",
+        "REST" | "STOU" => "one 502 reply: this server does not implement it",
+        "ABOR" => "one 225 reply: no transfer is in progress",
         _ => return None,
     })
 }

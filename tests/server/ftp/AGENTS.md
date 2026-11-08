@@ -2,7 +2,8 @@
 
 ## Test Strategy
 
-Black-box testing using raw TCP connections to verify FTP protocol responses.
+Black-box: two independent real clients (python3's `ftplib`, curl) for the Beta evidence, and
+raw TCP sockets for the bounds and failure paths a real client will not produce on demand.
 
 ## LLM Call Budget
 
@@ -51,10 +52,34 @@ All tests use mock LLM responses via `.with_mock()` builder:
 ./cargo-isolated.sh test --no-default-features --features ftp --test server -- server::ftp::test
 ```
 
-## Known Issues
+## `real_client_test.rs` — the Beta evidence
 
-1. **Control Channel Only**: Tests only verify FTP control channel responses
-2. **No Data Transfer Tests**: LIST/RETR/STOR data transfer not tested (no data channel)
+| Test | Client | LLM calls |
+|---|---|---|
+| `ftplib_lists_retrieves_and_stores_against_the_ftp_server` | python3 stdlib `ftplib`, one control connection through the recording relay (pcap oracle `ftp`) | 16 |
+| `curl_lists_retrieves_and_uploads_against_the_ftp_server` | curl, ten connections | see the test's doc comment |
+
+Both **fail** when their client is absent. The file's header has the verb-by-verb table of what
+each client drives against what the server implements; between them they cover `PASV`, `EPSV`,
+`PORT`, `EPRT`, `TYPE A`/`I`, `LIST`, `NLST`, `MLSD`, `RETR` (both types, all four channel
+kinds, and a `550` refusal), `SIZE`, `STOR` (ASCII, binary text, binary non-UTF-8) and `APPE`.
+Each upload is answered by a rule that compares what reached the handler with what the client
+sent and says `intact` or `DIFFERENT` in the reply the client returns, so a conversion error on
+either side fails on the client's own output. The relay records only the control connection;
+data connections go straight to the server at the port its `227`/`229` named.
+
+## `data_connection_test.rs` — bounds and fail-closed paths, in-process, mocked
+
+Every data-connection bound from both sides (`data_connect_timeout_secs` 3: a connect 1s in
+completes, none is `425` at ~3s; `data_idle_timeout_secs` 3: a 1s pause completes, a stall is
+`426` at ~3s; `max_upload_bytes` 64: 64 bytes reach the handler, 65 are `552` and never do), a
+transfer with no channel (`425`, handler not asked), the setup verbs (`TYPE`, `MODE`, `STRU`,
+`PASV`, `EPSV`, `EPSV ALL`), the bounce guard on `PORT`/`EPRT` (a third host or a privileged
+port is `500`), active mode end to end, `451` for a transfer or command the handler left
+unanswered or answered with no payload, the server-owned `150`/`226` replacing replies the
+handler wrote beside a payload, and that the passive listener of a server on 127.0.0.1 refuses a
+connection to the machine's LAN address. That last test needs one interface besides loopback
+and fails, naming it, without one.
 
 ## FTP Response Codes Tested
 
