@@ -1085,3 +1085,31 @@ fn an_instance_error_is_shown_whole_on_its_card() {
         "the end of the error is on the card:\n{text}"
     );
 }
+
+#[test]
+fn a_long_create_form_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::tui::app::Section;
+    use netget::tui::modal::form::FormModel;
+    use netget::tui::modal::Modal;
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let mut form = FormModel::for_create(Section::Servers, "telnet", Some(23));
+    form.error = Some("bind 127.0.0.1:2323: Address already in use (os error 48)".into());
+    let last = form.fields.last().expect("fields").label.clone();
+    let count = form.fields.len();
+    form.move_selection(count as isize - 1);
+    app.modals.push(Modal::Form(Box::new(form)));
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains(&format!("▸ {last}"))),
+        "the selected field ({last}, the last of {count}) is in view:\n{text}"
+    );
+    assert!(
+        text.contains("Address already in use"),
+        "the error from [ Apply ] is in view:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(text.contains("Apply"), "the buttons stay:\n{text}");
+}

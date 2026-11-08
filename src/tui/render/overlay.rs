@@ -67,7 +67,8 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
             .collect(),
         // Rendered separately below (list + fixed detail pane).
         Modal::ProtocolPicker { .. } => Vec::new(),
-        Modal::Form(form) => form_lines(app, form),
+        // Rendered separately below (scrolled fields, pinned error, buttons).
+        Modal::Form(_) => Vec::new(),
         Modal::TextEditor { editor, .. } => {
             // The textarea widget renders itself; draw it after the chrome.
             let _ = editor;
@@ -97,19 +98,77 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     // The instance form: fields, then Apply / Cancel.
     if let Some(Modal::Form(form)) = app.modals.last() {
+        // The error sits above the buttons, outside the scrolled fields: it
+        // answers the [ Apply ] just pressed, so it must be on screen whichever
+        // field is selected and however many fields the protocol declares.
+        let error_rows: Vec<String> = form
+            .error
+            .as_ref()
+            .map(|e| crate::tui::wrap::wrap(&format!("✗ {e}"), inner.width as usize))
+            .unwrap_or_default();
+        let error_height = (error_rows.len() as u16).min(inner.height.saturating_sub(3) / 2);
         let rows = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
-                ratatui::layout::Constraint::Min(3),
+                ratatui::layout::Constraint::Min(2),
+                ratatui::layout::Constraint::Length(error_height),
                 ratatui::layout::Constraint::Length(1),
             ])
             .split(inner);
-        let (lines, offsets) = form_lines_with_offsets(app, form);
+        let (lines, offsets, (top, bottom)) = form_lines_with_offsets(app, form, rows[0].width);
+        // Scroll so the selected field and its help are in view.
+        let viewport = rows[0].height;
+        let mut scroll = bottom.saturating_sub(viewport);
+        if top < scroll {
+            scroll = top;
+        }
         let buttons = form.buttons();
         let focused = form.focused_action();
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-        push_row_hits(app, rows[0], &offsets);
-        draw_button_row(frame, app, rows[1], &buttons, focused);
+        let total = lines.len() as u16;
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rows[0]);
+        for (index, offset) in offsets.iter().enumerate() {
+            if *offset < scroll || *offset - scroll >= viewport {
+                continue;
+            }
+            app.hits.push(
+                ratatui::layout::Rect {
+                    x: rows[0].x,
+                    y: rows[0].y + (*offset - scroll),
+                    width: rows[0].width,
+                    height: 1,
+                },
+                HitTarget::ModalRow(index),
+            );
+        }
+        // Say there is more, above or below, on the box's top edge.
+        let above = scroll > 0;
+        let below = total > scroll + viewport;
+        if above || below {
+            let hint = match (above, below) {
+                (true, true) => " ↑↓ more fields ",
+                (true, false) => " ↑ more fields ",
+                _ => " ↓ more fields ",
+            };
+            let width = (hint.chars().count() as u16).min(rect.width.saturating_sub(2));
+            frame.render_widget(
+                Paragraph::new(Span::styled(hint, app.styles.dimmed)),
+                ratatui::layout::Rect {
+                    x: rect.x + rect.width.saturating_sub(width + 1),
+                    y: rect.y,
+                    width,
+                    height: 1,
+                },
+            );
+        }
+        if error_height > 0 {
+            let lines: Vec<Line> = error_rows
+                .into_iter()
+                .take(error_height as usize)
+                .map(|row| Line::from(Span::styled(row, app.styles.error)))
+                .collect();
+            frame.render_widget(Paragraph::new(lines), rows[1]);
+        }
+        draw_button_row(frame, app, rows[2], &buttons, focused);
         return;
     }
 
@@ -521,19 +580,22 @@ fn picker_detail_lines<'a>(
     lines
 }
 
-fn form_lines<'a>(app: &DashboardApp, form: &crate::tui::modal::form::FormModel) -> Vec<Line<'a>> {
-    form_lines_with_offsets(app, form).0
-}
-
-/// The form's lines plus the line each field was drawn on, for hit-testing.
+/// The form's fields as one row each, the selected field's help wrapped
+/// beneath it; the row each field starts on (for hit-testing); and the first
+/// and one-past-last row of the selected field with its help (for scrolling).
 fn form_lines_with_offsets<'a>(
     app: &DashboardApp,
     form: &crate::tui::modal::form::FormModel,
-) -> (Vec<Line<'a>>, Vec<u16>) {
+    width: u16,
+) -> (Vec<Line<'a>>, Vec<u16>, (u16, u16)) {
+    use crate::tui::rail::fit;
+    let width = width as usize;
     let mut offsets = Vec::with_capacity(form.fields.len());
     let mut lines = Vec::new();
+    let mut selected_rows = (0u16, 0u16);
     for (index, field) in form.fields.iter().enumerate() {
-        offsets.push(lines.len() as u16);
+        let top = lines.len() as u16;
+        offsets.push(top);
         let is_selected = index == form.selected;
         let marker = if is_selected { "▸ " } else { "  " };
         let label_style = if is_selected {
@@ -541,23 +603,44 @@ fn form_lines_with_offsets<'a>(
         } else {
             app.styles.normal
         };
+        let mut label = format!(
+            "{:<22}",
+            format!("{}{}", field.label, if field.required { " *" } else { "" })
+        );
+        // A long parameter name (`first_byte_timeout_secs`) fills the column;
+        // keep a space between it and its value.
+        if !label.ends_with(' ') {
+            label.push(' ');
+        }
+        let room = width.saturating_sub(2 + label.chars().count());
         let value_display = if is_selected && form.editing.is_some() {
-            format!("{}_", form.editing.as_deref().unwrap_or(""))
-        } else if field.value.is_empty() {
-            field.placeholder.clone()
-        } else if field.multiline {
-            let first = field.value.lines().next().unwrap_or("");
-            let extra = field.value.lines().count().saturating_sub(1);
-            if extra > 0 {
-                format!("{first} … (+{extra} lines)")
+            // The end of what is being typed, where the cursor is.
+            let typed = format!("{}_", form.editing.as_deref().unwrap_or(""));
+            let count = typed.chars().count();
+            if count > room && room > 1 {
+                let tail: String = typed.chars().skip(count - (room - 1)).collect();
+                format!("…{tail}")
             } else {
-                first.to_string()
+                typed
             }
-        } else if field.is_default() {
-            // Says the value is the protocol's own, which is why it will not be submitted.
-            format!("{}  (default)", field.value)
         } else {
-            field.value.clone()
+            let text = if field.value.is_empty() {
+                field.placeholder.clone()
+            } else if field.multiline {
+                let first = field.value.lines().next().unwrap_or("");
+                let extra = field.value.lines().count().saturating_sub(1);
+                if extra > 0 {
+                    format!("{first} … (+{extra} lines)")
+                } else {
+                    first.to_string()
+                }
+            } else if field.is_default() {
+                // Says the value is the protocol's own, which is why it will not be submitted.
+                format!("{}  (default)", field.value)
+            } else {
+                field.value.clone()
+            };
+            fit(&text, room)
         };
         let value_style = if field.value.is_empty() && form.editing.is_none() {
             app.styles.dimmed
@@ -566,30 +649,20 @@ fn form_lines_with_offsets<'a>(
         };
         lines.push(Line::from(vec![
             Span::styled(marker, app.styles.accent),
-            Span::styled(
-                format!(
-                    "{:<22}",
-                    format!("{}{}", field.label, if field.required { " *" } else { "" })
-                ),
-                label_style,
-            ),
+            Span::styled(label, label_style),
             Span::styled(value_display, value_style),
         ]));
         if is_selected {
-            lines.push(Line::from(Span::styled(
-                format!("    {}", field.help),
-                app.styles.dimmed,
-            )));
+            for row in crate::tui::wrap::wrap(&field.help, width.saturating_sub(4)) {
+                lines.push(Line::from(Span::styled(
+                    format!("    {row}"),
+                    app.styles.dimmed,
+                )));
+            }
+            selected_rows = (top, lines.len() as u16);
         }
     }
-    if let Some(error) = &form.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("✗ {error}"),
-            app.styles.error,
-        )));
-    }
-    (lines, offsets)
+    (lines, offsets, selected_rows)
 }
 
 /// The handler editor's kind control: one segment per way of answering, the

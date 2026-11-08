@@ -264,8 +264,11 @@ impl Modal {
             Modal::ProtocolPicker { .. } => ModalSize::new(78, 80, 128, TALL),
             Modal::TextEditor { .. } => ModalSize::new(76, 70, 120, TALL),
             Modal::Form(form) => {
-                // One row per field, plus the help line under the selected one.
-                let rows = form.fields.len() as u16 + 3;
+                // One row per field, the help under the selected one (which
+                // wraps), and the error above the buttons. A box too short for
+                // all of it scrolls to the selected field and keeps the error.
+                let error = if form.error.is_some() { 3 } else { 0 };
+                let rows = form.fields.len() as u16 + 3 + error;
                 ModalSize::new(70, 70, 104, rows + CHROME)
             }
             Modal::Composer(composer) => {
