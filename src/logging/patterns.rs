@@ -30,8 +30,6 @@ pub const TLS_CLIENT_DISCONNECTED: &str = "disconnected";
 // Client patterns - Telnet
 pub const TELNET_CLIENT: &str = "Telnet client";
 pub const TELNET_CLIENT_CONNECTED: &str = "connected to";
-pub const TELNET_CLIENT_SENT_COMMAND: &str = "Sent Telnet command after connect:";
-pub const TELNET_CLIENT_SENT_TEXT: &str = "Sent Telnet text after connect:";
 pub const TELNET_CLIENT_RECEIVED: &str = "received";
 pub const TELNET_CLIENT_DISCONNECTED: &str = "disconnected";
 
