@@ -199,8 +199,8 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
 - `tests/terminal_snapshot/` — the real binary in a pty: an 80×24 snapshot of the first
   frame, and `test_dashboard_starts_and_stops_a_server_from_the_keyboard`, which drives
   Tab → `a` → `tcp` → Enter → Enter → `x` with no model configured and waits on what each
-  key must paint. `assert_snapshot` creates a missing snapshot and passes, so review a new
-  one before trusting it.
+  key must paint. `assert_snapshot` fails on a missing or changed snapshot and writes the
+  screen it got to `<name>.actual.snap.md`; diff that against the old one before accepting it.
 
 ## Progress log
 
@@ -235,8 +235,9 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
 
 - Prefer `tests/dashboard_frame_test.rs` (ratatui `TestBackend`, deterministic, populated
   states) for layout assertions. The pty snapshots in `tests/terminal_snapshot/` need
-  re-recording after any layout change (delete the `.snap.md`, run, review the new file —
-  `assert_snapshot` creates a missing one and passes). Every dashboard pty test waits on
+  re-recording after any layout change that reaches the first screen: run, diff each
+  `<name>.actual.snap.md` against its `<name>.snap.md`, and accept with `UPDATE_SNAPSHOTS=1`
+  or `mv` once the difference is the one intended. Every dashboard pty test waits on
   the text its last key must paint through one `PtyScreen`; never add a fixed sleep.
 - Candidates not done: fold-all / unfold-all keys once many cards are open; per-peer
   throughput; an `[ answer all ]` shortcut when several requests are parked. The composer

@@ -4,15 +4,15 @@
 │    Nothing is running yet.         ││                                        │
 │                                    ││                                        │
 │    That row, or a, picks a protocol││                                        │
-│    and starts it. The instance sho…││                                        │
-│    up here with its buttons, peers,││  NetGet — a starts a server or client, │
-│    rules and config, and stays.    ││  Tab reaches them, F1 lists every key  │
-│    ↑↓ walk the rows, ←→ the button…││  ✗  Ollama is not available or no model│
-│                                    ││  s found.                              │
-│    Or ask the model in the chat:   ││     Please ensure Ollama is running: ht│
-│    “start an http server on 8080”. ││  tps://ollama.ai                       │
-│                                    ││     Use `/model` to list and select a m│
-│                                    ││  odel once Ollama is running.          │
+│    and starts it. The instance     ││                                        │
+│    shows up here with its buttons, ││  NetGet — a starts a server or client, │
+│    peers, rules and config, and    ││  Tab reaches them, F1 lists every key  │
+│    stays. ↑↓ walk the rows, ←→ the ││  ✗  Ollama is not available or no      │
+│    buttons.                        ││  models found.                         │
+│                                    ││     Please ensure Ollama is running:   │
+│    Or ask the model in the chat:   ││  https://ollama.ai                     │
+│    “start an http server on 8080”. ││     Use `/model` to list and select a  │
+│                                    ││  model once Ollama is running.         │
 │                                    ││▶ /usage                                │
 │                                    ││  LLM calls:     0                      │
 │                                    ││  Input tokens:  0                      │

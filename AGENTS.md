@@ -1623,8 +1623,10 @@ pass each, and all four present as *product* bugs:
   idempotent.** Calling it twice renders the second from a blank screen. Polling needs one parser
   fed for the whole wait.
 
-Also: `snapshot_util::assert_snapshot` **creates** a missing snapshot and passes. A new test is
-therefore green on its first run whatever it captured — review the file before trusting it.
+Also: `snapshot_util::assert_snapshot` **fails** on a missing or different snapshot and writes
+what it captured to `<name>.actual.snap.md` beside it. Accepting is a deliberate step —
+`UPDATE_SNAPSHOTS=1`, or `mv` the `.actual` file over the snapshot — so diff the two before you
+do; a snapshot is only as good as the review of the screen it records.
 
 ### Whole-tree source ratchets
 
