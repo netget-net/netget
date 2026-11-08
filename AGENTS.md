@@ -80,7 +80,8 @@ closed at once, because a peer that never reads — our own client parked on a m
 — would otherwise stay "live" after you hung up). Without a handle the buttons stay, disabled,
 and say why. A peer whose request is parked is flagged on its own row, in the list badge
 (`⚠1`), in the overview's first line, in the feed and in the status bar — which is clickable
-and opens the oldest one.
+and opens the oldest one. The card's waiting row and the answer modal both show the time left
+before the request fails closed on its own (the rule's `timeout_secs`).
 
 **Answering a parked request is the composer, not a JSON box.** The intercept modal offers three
 things: `[ Compose answer… ]` opens `ComposerModel::for_intercept` — pick one of the protocol's

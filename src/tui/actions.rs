@@ -224,6 +224,10 @@ pub fn open_intercept(app: &mut DashboardApp, key: UiKey, intercept_id: u64, sta
         description: view.description,
         event_data: view.event_data,
         vocabulary,
+        deadline_unix_ms: Some(
+            view.created_unix_ms
+                .saturating_add(view.timeout_secs.saturating_mul(1000)),
+        ),
         error: None,
         focused: 0,
     })));

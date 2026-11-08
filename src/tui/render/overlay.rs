@@ -931,6 +931,36 @@ fn intercept_lines<'a>(
             ),
         ]),
     ];
+    // Near the top, so a long payload cannot push it out of a short box: the
+    // operator has this long, and then the peer is refused without them.
+    if let Some(deadline) = model.deadline_unix_ms {
+        let left = deadline.saturating_sub(crate::state::intercepts::now_unix_ms()) / 1000;
+        lines.push(Line::from(vec![
+            Span::styled("deadline   ", app.styles.dimmed),
+            Span::styled(
+                if left == 0 {
+                    "failing closed now".to_string()
+                } else {
+                    format!(
+                        "fails closed in {}",
+                        crate::tui::metrics::human_duration(left)
+                    )
+                },
+                if left < 60 {
+                    app.styles.error
+                } else {
+                    app.styles.warning
+                },
+            ),
+            Span::styled(" if nobody answers", app.styles.dimmed),
+        ]));
+    }
+    if let Some(error) = &model.error {
+        lines.push(Line::from(Span::styled(
+            format!("✗ {error}"),
+            app.styles.error,
+        )));
+    }
     if let Some(data) = &model.event_data {
         lines.push(Line::from(Span::styled("payload", app.styles.dimmed)));
         // The peer's own bytes: `serde_json` escapes C0 inside a string but writes DEL and C1
@@ -982,13 +1012,6 @@ fn intercept_lines<'a>(
         "The connection is waiting on you; Esc keeps it waiting.",
         app.styles.dimmed,
     )));
-    if let Some(error) = &model.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("✗ {error}"),
-            app.styles.error,
-        )));
-    }
     lines
 }
 

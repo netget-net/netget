@@ -612,9 +612,30 @@ fn waiting_rows(instance: InstanceRef<'_>, rows: &mut Vec<Row>) {
         row.spans = vec![
             ("⚠ YOUR answer needed".to_string(), Tone::Bad),
             (format!(" · {}{peer}", view.event_type), Tone::Normal),
+            (
+                format!(" · {}", time_left(view)),
+                if view.seconds_until_fail_closed(crate::state::intercepts::now_unix_ms()) < 60 {
+                    Tone::Bad
+                } else {
+                    Tone::Dim
+                },
+            ),
         ];
         row.on_enter = Activate::Action(InstanceAction::Answer(view.id));
         rows.push(row);
+    }
+}
+
+/// How long a parked request has before nobody answering becomes a refusal:
+/// "4m12s left". The dispatcher's deadline, from the rule's `timeout_secs`,
+/// which the operator otherwise has no way to see; the answer modal spells out
+/// what happens then.
+pub fn time_left(view: &crate::state::intercepts::InterceptView) -> String {
+    let left = view.seconds_until_fail_closed(crate::state::intercepts::now_unix_ms());
+    if left == 0 {
+        "failing closed now".to_string()
+    } else {
+        format!("{} left", human_duration(left))
     }
 }
 

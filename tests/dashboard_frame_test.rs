@@ -965,6 +965,7 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
                 description: format!("line {HOSTILE}"),
                 event_data: Some(payload.clone()),
                 vocabulary: Vec::new(),
+                deadline_unix_ms: None,
                 error: None,
                 focused: 0,
             },
@@ -1112,4 +1113,78 @@ fn a_long_create_form_scrolls_to_its_selection_and_keeps_its_error() {
     );
     assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
     assert!(text.contains("Apply"), "the buttons stay:\n{text}");
+}
+
+#[test]
+fn a_parked_request_says_when_it_fails_closed() {
+    let mut app = app();
+    let mut snapshot = populated();
+    snapshot.servers[0].intercepts[0].created_unix_ms =
+        netget::state::intercepts::now_unix_ms() - 100_000;
+    snapshot.servers[0].intercepts[0].timeout_secs = 300;
+    app.absorb_snapshot(snapshot);
+    let text = dump(&frame(&mut app, 140, 60));
+    println!("{text}");
+    assert!(
+        text.contains("from :53121 · 3m") && text.contains("s left"),
+        "the card's waiting row carries the deadline:\n{text}"
+    );
+
+    app.modals
+        .push(netget::tui::modal::Modal::Intercept(Box::new(
+            netget::tui::modal::intercept::InterceptModel {
+                id: 4,
+                owner: UiKey::Server(ServerId::new(1)),
+                protocol: "HTTP".into(),
+                event_type: "http_request".into(),
+                description: "GET /admin".into(),
+                event_data: Some(serde_json::json!({
+                    "method": "GET", "path": "/admin", "headers": {"host": "x", "accept": "*/*"},
+                    "connection_id": "conn-7"
+                })),
+                vocabulary: Vec::new(),
+                deadline_unix_ms: Some(netget::state::intercepts::now_unix_ms() + 200_500),
+                error: None,
+                focused: 0,
+            },
+        )));
+    let text = dump(&frame(&mut app, 80, 24));
+    println!("{text}");
+    assert!(
+        text.contains("fails closed in 3m"),
+        "the answer modal carries it too, at 80×24 with a payload:\n{text}"
+    );
+}
+
+#[test]
+fn the_answer_modal_draws_all_three_buttons_at_80_columns() {
+    let mut app = app();
+    app.absorb_snapshot(populated());
+    app.modals
+        .push(netget::tui::modal::Modal::Intercept(Box::new(
+            netget::tui::modal::intercept::InterceptModel {
+                id: 4,
+                owner: UiKey::Server(ServerId::new(1)),
+                protocol: "HTTP".into(),
+                event_type: "http_request".into(),
+                description: "GET /admin".into(),
+                event_data: Some(serde_json::json!({"method": "GET", "path": "/admin"})),
+                vocabulary: Vec::new(),
+                deadline_unix_ms: None,
+                error: None,
+                focused: 2,
+            },
+        )));
+    let text = dump(&frame(&mut app, 80, 24));
+    println!("{text}");
+    for button in [
+        "[ Compose answer… ]",
+        "[ Answer with nothing ]",
+        "[ Fail closed ]",
+    ] {
+        assert!(
+            text.contains(button),
+            "{button} is drawn (Tab can focus it):\n{text}"
+        );
+    }
 }
