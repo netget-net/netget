@@ -87,6 +87,9 @@ refused (each was the whole of a 0/15 eval case, `api_test.rs` pins each):
 - **An exited container's `status` without its code** ("Exited 10 minutes ago", "Stopped") is
   written `Exited (<exit_code>) 10 minutes ago` / `Exited (<exit_code>)`, the daemon's form. A
   running container's wording is the model's own.
+- **A blank `created` or `id`** (`""`, which the model writes for every example field the
+  instruction did not mention) is the field left out: the creation time is now and the ID is
+  derived from the name. Refusing it failed `docker ps -a` on two eval seeds in five.
 
 **A repeated ID in one `ps` list is replaced** by the ID derived from that container's name; the
 first container keeps it. Two containers never share an ID, and llama3.1:8b copied the action

@@ -87,3 +87,57 @@ fn a_record_keyed_by_its_field_names_is_read_in_field_order() {
         assert!(refused.is_err(), "{bad} must be refused");
     }
 }
+
+/// The query hint names the result's columns as Neo4j names them, read off the final RETURN:
+/// the alias where there is one, the item's text otherwise. Told only "the names after RETURN",
+/// llama3.1:8b named `RETURN count(m) AS movies`'s column `count(m)` or `count` on 13 replayed
+/// seeds in 20; named exactly, on none.
+#[test]
+fn the_query_hint_names_the_columns_of_the_final_return() {
+    use netget::server::bolt::actions::{query_answer_with, return_columns};
+    let hint = query_answer_with("MATCH (m:Movie) RETURN count(m) AS movies");
+    assert!(
+        hint.contains(
+            "send_bolt_records whose fields are exactly [\"movies\"] - the column names after \
+             RETURN, an AS alias where there is one - and whose rows"
+        ),
+        "{hint}"
+    );
+
+    let cols = |q: &str| return_columns(q).map(|c| c.join("|"));
+    assert_eq!(
+        cols("MATCH (p:Person) RETURN p.name AS name").as_deref(),
+        Some("name")
+    );
+    assert_eq!(
+        cols("match (p) return distinct p.name, p.born as Born order by p.name limit 3").as_deref(),
+        Some("p.name|Born")
+    );
+    // Commas and keywords inside brackets and strings belong to the item.
+    assert_eq!(
+        cols("MATCH (n) RETURN coalesce(n.a, 'x, AS y') AS `the value`, [1, 2] AS l").as_deref(),
+        Some("the value|l")
+    );
+    assert_eq!(
+        cols("MATCH (n) RETURN count(n)").as_deref(),
+        Some("count(n)")
+    );
+    // The final RETURN is the result's, not a subquery's.
+    assert_eq!(
+        cols("CALL { MATCH (n) RETURN n AS inner } RETURN inner.name AS outer").as_deref(),
+        Some("outer")
+    );
+    // No plain answer: the hint keeps the general wording.
+    for q in [
+        "CREATE (n:Movie)",
+        "MATCH (n) RETURN *",
+        "MATCH (n RETURN n",
+        "RETURN 'open",
+    ] {
+        assert_eq!(return_columns(q), None, "{q}");
+        assert!(
+            query_answer_with(q).contains("whose fields are the names after RETURN"),
+            "{q}"
+        );
+    }
+}

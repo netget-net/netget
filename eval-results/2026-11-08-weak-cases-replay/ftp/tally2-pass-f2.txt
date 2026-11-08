@@ -1,0 +1,21 @@
+seed  21 PASS 
+seed  22 PASS 
+seed  23 PASS 
+seed  24 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous logged in. Please respond with your password."}, {"type": "append_memory", "value": "current_directory: /eval\nlogged_in: anonymous\nlogin_count: 1"}]
+seed  25 PASS 
+seed  26 PASS 
+seed  27 PASS 
+seed  28 PASS 
+seed  29 PASS 
+seed  30 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous logged in. Please respond with your password."}, {"type": "append_memory", "value": "login_count: 1\npassword: eval@example.com"}]
+seed  31 PASS 
+seed  32 fail [{"type": "send_ftp_response", "code": 331, "message": "User anonymous logged in. Please respond with your password."}]
+seed  33 PASS 
+seed  34 PASS 
+seed  35 PASS 
+seed  36 PASS 
+seed  37 PASS 
+seed  38 PASS 
+seed  39 PASS 
+seed  40 PASS 
+TALLY pass-f2.txt ftp_pass_230 17/20

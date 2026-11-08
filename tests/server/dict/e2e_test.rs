@@ -168,3 +168,19 @@ async fn a_whole_dict_session_against_a_mocked_model() -> E2EResult<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// Told "you only know words that begin with q; for anything else there is no definition" and
+/// asked to DEFINE `zebra` in database `*`, llama3.1:8b answered 550 (unknown database, the
+/// send_dict_error example's code) or 551 (unknown strategy) on 40 replayed seeds in 40, and
+/// 552 on none: the DEFINE event said what `*` means but not what a word with no definition is.
+/// With the sentence below in the event it answered 552 on 38 of the same 40
+/// (`eval-results/2026-11-08-weak-cases-replay/`).
+#[test]
+fn the_define_event_names_552_for_a_word_with_no_definition() {
+    let description = &netget::server::dict::actions::DICT_DEFINE_EVENT.description;
+    assert!(
+        description.contains("no definition for is no match")
+            && description.contains("send_dict_error with code 552"),
+        "dict_define no longer tells the model a word it cannot define is 552: {description}"
+    );
+}

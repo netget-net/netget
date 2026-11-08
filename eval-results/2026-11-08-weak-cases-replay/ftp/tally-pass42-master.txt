@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed   3 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed  10 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed  17 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+TALLY pass42-master.txt ftp_pass_230 14/20

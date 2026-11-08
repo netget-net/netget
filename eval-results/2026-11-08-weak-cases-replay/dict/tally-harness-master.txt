@@ -1,0 +1,41 @@
+seed   1 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy, use \"SHOW DB\" for list of databases"}]
+seed   2 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy"}]
+seed   3 fail [{"type": "send_dict_error", "code": 501, "message": "Invalid word, only words starting with 'q' are defined"}]
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy"}]
+seed   9 fail [{"type": "send_dict_error", "code": 501, "message": "Only words starting with 'q' are defined"}, {"type": "close_connection"}]
+seed  10 PASS 
+seed  11 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy"}]
+seed  12 fail [{"type": "send_dict_error", "code": 501, "message": "Unknown word, definitions only for queries"}]
+seed  13 PASS 
+seed  14 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy: \"*\""}, {"type": "close_connection"}]
+seed  15 PASS 
+seed  16 PASS 
+seed  17 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy"}]
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+seed  21 PASS 
+seed  22 PASS 
+seed  23 fail [{"type": "send_dict_error", "code": 501, "message": "Invalid word, use only words that begin with the letter q."}]
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 PASS 
+seed  28 PASS 
+seed  29 PASS 
+seed  30 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy for <word> (only words starting with 'q' are defined)"}]
+seed  31 PASS 
+seed  32 PASS 
+seed  33 PASS 
+seed  34 PASS 
+seed  35 PASS 
+seed  36 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy"}]
+seed  37 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown strategy, use 'SHOW DB' for list of databases"}]
+seed  38 fail [{"type": "send_dict_error", "code": 501, "message": "Invalid parameters"}]
+seed  39 PASS 
+seed  40 fail [{"type": "send_dict_error", "code": 551, "message": "Invalid database, use \"SHOW DB\" for list of databases"}]
+TALLY master.txt dict_nomatch_harness 25/40
