@@ -1,0 +1,21 @@
+seed   1 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+seed  10 PASS 
+seed  11 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The user 'neo4j' is not authorized to log in."}]
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+TALLY login-people-master.txt bolt_login_accept 16/20

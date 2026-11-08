@@ -1,0 +1,21 @@
+seed   1 PASS 
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}]
+seed   9 PASS 
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 fail [{"type": "send_ftp_response", "code": 331, "message": "User name okay, need password"}, {"type": "set_memory", "value": "users_logged_in: anonymous\ncurrent_directory: /eval"}]
+seed  19 PASS 
+seed  20 PASS 
+TALLY pass42-f2.txt ftp_pass_230 18/20

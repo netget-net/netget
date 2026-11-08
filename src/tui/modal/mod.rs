@@ -264,8 +264,11 @@ impl Modal {
             Modal::ProtocolPicker { .. } => ModalSize::new(78, 80, 128, TALL),
             Modal::TextEditor { .. } => ModalSize::new(76, 70, 120, TALL),
             Modal::Form(form) => {
-                // One row per field, plus the help line under the selected one.
-                let rows = form.fields.len() as u16 + 3;
+                // One row per field, the help under the selected one (which
+                // wraps), and the error above the buttons. A box too short for
+                // all of it scrolls to the selected field and keeps the error.
+                let error = if form.error.is_some() { 3 } else { 0 };
+                let rows = form.fields.len() as u16 + 3 + error;
                 ModalSize::new(70, 70, 104, rows + CHROME)
             }
             Modal::Composer(composer) => {
@@ -298,7 +301,13 @@ impl Modal {
                             + 1
                     })
                     .unwrap_or(0);
-                ModalSize::new(72, 75, 120, payload + 7 + CHROME)
+                // 90% wide: at 80 columns 72% was 57 cells, and the three
+                // buttons need 59, so `[ Fail closed ]` was never drawn while
+                // Tab still moved the focus onto it. The deadline and error
+                // rows add two.
+                let extra =
+                    u16::from(model.deadline_unix_ms.is_some()) + u16::from(model.error.is_some());
+                ModalSize::new(90, 85, 120, payload + 7 + extra + CHROME)
             }
             Modal::Routing(model) => {
                 let rows = match &model.draft {

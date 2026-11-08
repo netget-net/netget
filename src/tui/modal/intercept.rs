@@ -32,6 +32,9 @@ pub struct InterceptModel {
     /// The actions this event may be answered with — what the composer offers
     /// (`crate::state::intercepts::server_answer_actions` / `client_answer_actions`).
     pub vocabulary: Vec<ActionDefinition>,
+    /// Unix ms at which the waiting dispatcher fails the event closed if
+    /// nobody answers (`InterceptView::created_unix_ms` + `timeout_secs`).
+    pub deadline_unix_ms: Option<u64>,
     pub error: Option<String>,
     /// Index into [`Self::buttons`].
     pub focused: usize,

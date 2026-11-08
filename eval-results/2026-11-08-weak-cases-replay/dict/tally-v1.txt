@@ -1,0 +1,41 @@
+seed   1 fail [{"type": "send_dict_error", "code": 550, "message": "Invalid database, use \"SHOW DB\" for list of databases"}]
+seed   2 PASS 
+seed   3 fail [{"type": "send_dict_error", "code": 550, "message": "Unknown database, use \"SHOW DB\" for list of databases"}]
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 fail [{"type": "send_dict_error", "code": 550, "message": "No definition found for word starting with 'z'"}, {"type": "close_connection"}]
+seed  10 PASS 
+seed  11 PASS 
+seed  12 fail [{"type": "send_dict_error", "code": 550, "message": "Invalid database, use \"SHOW DB\" for list of databases"}]
+seed  13 PASS 
+seed  14 fail [{"type": "send_dict_error", "code": 550, "message": "Invalid database, use 'SHOW DB' for list of databases"}]
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 fail [{"type": "send_dict_definitions", "word": "quokka", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quokka\n    n 1: a small wallaby native to Western Australia"}]}]
+seed  21 PASS 
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 fail [{"type": "send_dict_error", "code": 551, "message": "Unknown database strategy, use '*' or '!'"}]
+seed  28 PASS 
+seed  29 PASS 
+seed  30 PASS 
+seed  31 PASS 
+seed  32 PASS 
+seed  33 PASS 
+seed  34 fail [{"type": "send_dict_definitions", "word": "quadrangle", "definitions": [{"database": "wn", "database_description": "WordNet (r) 3.0", "text": "quadrangle\n    n 1: a polygon with four sides"}]}]
+seed  35 PASS 
+seed  36 PASS 
+seed  37 PASS 
+seed  38 PASS 
+seed  39 PASS 
+seed  40 PASS 
+TALLY v1.txt dict_nomatch_strict 32/40

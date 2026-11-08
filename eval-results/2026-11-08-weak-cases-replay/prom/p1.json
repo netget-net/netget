@@ -1,0 +1,1 @@
+[["(upper bound, or \"+Inf\") and are cumulative;", "(upper bound, or \"+Inf\") and are cumulative: each counts every observation at or below its le, so no bucket holds less than the one before it and the +Inf bucket equals _count;"]]

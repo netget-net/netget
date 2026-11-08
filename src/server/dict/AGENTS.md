@@ -66,6 +66,12 @@ every command.
 | `send_dict_error {code, message?}` | one 5xx line; only 500–503, 530–532, 550–552, 554, 555; empty message → the RFC's own wording |
 | `close_connection` | close after the reply |
 
+The `dict_define` event says that a word the instructions give no definition for is no match,
+answered `send_dict_error` 552. Without that sentence, told "you only know words that begin with
+q" and asked `DEFINE * zebra`, llama3.1:8b answered 550 (unknown database — the error action's
+example code) or 551 on 40 replayed seeds in 40; with it, 552 on 38
+(`eval-results/2026-11-08-weak-cases-replay/`; `e2e_test.rs` pins the sentence).
+
 `send_dict_definitions` takes a **top-level `word`** that the per-definition entries default
 to. The executor has no view of the event, and a `151` line must name its headword, so the
 model supplies it (normally copying the event's `word`). A missing word is refused by the

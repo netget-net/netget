@@ -224,6 +224,10 @@ pub fn open_intercept(app: &mut DashboardApp, key: UiKey, intercept_id: u64, sta
         description: view.description,
         event_data: view.event_data,
         vocabulary,
+        deadline_unix_ms: Some(
+            view.created_unix_ms
+                .saturating_add(view.timeout_secs.saturating_mul(1000)),
+        ),
         error: None,
         focused: 0,
     })));
@@ -360,6 +364,13 @@ fn cycle_driver(app: &mut DashboardApp, key: UiKey, state: &AppState) {
         next.label(),
         next.describe()
     ));
+    if next == crate::tui::driver::Driver::Llm && app.snapshot.no_model {
+        app.push_error(format!(
+            "{}: driver LLM — {}",
+            key.describe(),
+            crate::tui::cards::NO_MODEL_FOR_LLM_DRIVER
+        ));
+    }
 
     let llm = app.llm_client.clone();
     let status_tx = app.status_tx.clone();

@@ -1,0 +1,21 @@
+seed   1 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]]}]
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  11 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": null, "query_type": "r"}]
+seed  12 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]]}]
+seed  13 PASS 
+seed  14 fail NOJSON **Understanding the Event**  The client has run a Cypher query against the graph database, asking to count the number of Movie nodes. The query is:  `MATCH (m:Movie) RETURN count(m) AS movies`  **Foll
+seed  15 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  16 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]]}]
+seed  17 PASS 
+seed  18 PASS 
+seed  19 fail [{"type": "send_bolt_records", "fields": ["movies"], "records": [["42"]], "stats": {}, "query_type": "r"}]
+seed  20 PASS 
+TALLY query-q2.txt bolt_count 12/20

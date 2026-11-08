@@ -277,9 +277,15 @@ fn now_unix() -> i64 {
 }
 
 /// A creation time given as unix seconds or RFC 3339, as unix seconds.
+///
+/// A blank string is no creation time, the same as leaving the field out. Told only which
+/// containers exist, llama3.1:8b fills every field of the example with an empty value
+/// (`"created": ""`, `"status": ""`, `"ip": ""`), and refusing the whole listing over the one
+/// field the instruction never mentioned failed `docker ps -a` on two seeds in five.
 fn created_unix(obj: &Value, what: &str) -> Result<i64, String> {
     match field(obj, &["created", "Created", "created_at", "CreatedAt"]) {
         None => Ok(now_unix()),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(now_unix()),
         Some(Value::Number(n)) => n
             .as_i64()
             .ok_or_else(|| format!("{what} created must be unix seconds or RFC 3339")),
@@ -477,7 +483,8 @@ fn container(obj: &Value, index: usize) -> Result<Container, String> {
             "{what}: name must match [a-zA-Z0-9][a-zA-Z0-9_.-]* as Docker requires"
         ));
     }
-    let id = match str_field(obj, &["id", "Id", "ID"]) {
+    // A blank ID is no ID, as a blank `created` is no creation time.
+    let id = match str_field(obj, &["id", "Id", "ID"]).filter(|id| !id.trim().is_empty()) {
         Some(id) => id_from(&id, "container", &what)?,
         None => derived_id(&format!("container:{name}")),
     };
