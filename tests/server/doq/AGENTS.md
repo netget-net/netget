@@ -48,7 +48,7 @@ failed for its own reason, and nothing else did:
 
 | Reverted | Fails |
 |---|---|
-| reset the stream for an answer with nothing sendable | `an_answer_with_nothing_sendable_is_servfail` (stream reset, code 0), `decision_logs_…`, both real-client tests |
+| reset the stream for an answer with nothing sendable | `an_answer_with_nothing_sendable_is_servfail` (stream reset, code 0) and `decision_logs_…` |
 | merge the answers of several messages | `two_messages_answer_with_the_first` (two A records) |
 | `Reply::finish`'s TC check skipping a message already marked TC | `an_answer_past_65535_octets_is_servfail` (NOERROR with TC), and `server::dns::security_test` over TCP |
 | NOTIMP for types outside A/AAAA/MX/TXT/CNAME/ANY | `any_record_type_reaches_the_model`, and kdig and dnsproxy at the SRV query |
@@ -56,7 +56,6 @@ failed for its own reason, and nothing else did:
 | reset at the exchange deadline instead of SERVFAIL | `exchange_deadline_answers_inside_it_and_servfails_past_it` (reset, code 5) |
 | no `RESPONSE_WRITE_TIMEOUT` | `an_answer_the_peer_never_takes_is_reset_after_the_write_timeout` |
 
-The OPT echo for an EDNS query comes from `StreamQuery` itself and was not reverted separately;
-the server's earlier loop never set one.
+The OPT echo for an EDNS query comes from `StreamQuery` itself and was not reverted separately.
 
 The rating is Experimental; `src/server/doq/AGENTS.md` ("Maturity") says what is missing.
