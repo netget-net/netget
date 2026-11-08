@@ -180,9 +180,11 @@ Each DNS query creates a "connection" entry in ServerInstance:
 
 ### 6. TCP, EDNS, transfers and DNSSEC (October 2026)
 
-**One answer path, three callers.** `Reply::resolve` turns what the model answered into
-messages, and `Reply::finish` finishes one; DoT and DoH call the same two through
-`StreamQuery` (TCP limits, no signer), so a fix here is a fix there. hickory's encoder does not
+**One answer path, four callers.** `Reply::resolve` turns what the model answered into
+messages, and `Reply::finish` finishes one; DoT, DoH and DoQ call the same two through
+`StreamQuery` (TCP limits, no signer), so a fix here is a fix there. `StreamQuery::spec_reply`
+and `servfail` give a transport the rcode-only reply and the SERVFAIL for what it refuses or
+times out itself (DoQ's FORMERR, NOTIMP and exchange deadline). hickory's encoder does not
 fail at 65535 octets — it stops writing records, sets TC and returns `Ok` — so over TCP
 `finish` refuses a TC it did not ask for with SERVFAIL rather than send a partial NOERROR.
 
