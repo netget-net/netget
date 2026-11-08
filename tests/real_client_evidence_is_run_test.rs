@@ -262,15 +262,21 @@ fn the_scan_finds_real_client_tests() {
 #[test]
 fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
     let loop_text = evidence_loop();
+    let filters: BTreeSet<&str> = loop_text.split_whitespace().collect();
     let baseline: BTreeSet<&str> = NOT_RUN_ANYWHERE.iter().copied().collect();
 
     let mut missing = Vec::new();
     let mut baseline_now_run = Vec::new();
     for (name, bins) in real_client_tests() {
         let protocol = name.split("::").next().unwrap();
-        // `openvpn::` is a deliberate whole-protocol filter in the loop, so accept either the
-        // exact module path or a filter that subsumes it.
-        let named = loop_text.contains(&name) || loop_text.contains(&format!("{protocol}:: "));
+        // A filter is matched whole, never as a substring of the loop: `tftp::real_client_test`
+        // contains `ftp::real_client_test`, so a substring test read FTP's evidence as run while
+        // the loop named only TFTP's. Accept the exact module path, the same path qualified with
+        // the `server::` root (which a filter needs when its bare form is a substring of another
+        // protocol's), or `openvpn::`'s deliberate whole-protocol filter.
+        let named = filters.contains(name.as_str())
+            || filters.contains(format!("server::{name}").as_str())
+            || filters.contains(format!("{protocol}::").as_str());
         match (named, baseline.contains(name.as_str())) {
             (false, false) => missing.push(format!("{name}  (drives {bins:?})")),
             (true, true) => baseline_now_run.push(name),

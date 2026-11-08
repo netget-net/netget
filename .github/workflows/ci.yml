@@ -424,8 +424,9 @@ jobs:
       #                       here for months while OpenSSH disconnected on a duplicate
       #                       SSH_MSG_CHANNEL_CLOSE one run in five)
       #   subversion (svn)  - svn (the real ra_svn client; info/ls/log)
-      #   tftp-hpa (tftp)   - tftp (the second client beside curl; smtp and pop3 use
-      #                       curl and python3's stdlib smtplib/poplib, already present)
+      #   tftp-hpa (tftp)   - tftp (the second client beside curl; smtp, pop3 and ftp use
+      #                       curl and python3's stdlib smtplib/poplib/ftplib, already
+      #                       present)
       #   tor               - tor_relay
       #   wakeonlan         - wol
       #
@@ -1123,7 +1124,7 @@ jobs:
             smb::real_client_test smtp::real_client_test pop3::real_client_test \
             statsd::real_client_test graphite::real_client_test \
             sqs::real_client_test ssh::real_client_test stun::real_client_test \
-            svn::real_client_test tftp::real_client_test \
+            svn::real_client_test tftp::real_client_test server::ftp::real_client_test \
             torrent_tracker::real_client_test vault::real_client_test webdav::real_client_test \
             websocket::e2e_test \
             wol::real_client_test \
