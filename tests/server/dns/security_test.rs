@@ -219,6 +219,9 @@ const RAW_HANDLER: &str = r#"import json,sys
 i=json.load(sys.stdin); t=i['event_type_id']; e=i['event']
 if t=='dns_query' and e['domain']=='short.test.': d='004281800001000000000000'
 elif t=='dns_query' and e['domain']=='long.test.': d='00428180ffff000000000000'+'00'*70000
+elif t=='dns_query' and e['domain']=='huge.test.':
+    h=bytes.fromhex('%04x8180'%e['query_id'])+bytes([0,1,1,44,0,0,0,0])+bytes([4])+b'huge'+bytes([4])+b'test'+bytes([0,0,16,0,1])
+    d=(h+(bytes([0xc0,12,0,16,0,1,0,0,0,60,1,0,255])+b'x'*255)*300).hex()
 else: d=None
 print(json.dumps({'actions':[{'type':'send_dns_response','data':d}] if d else []}))"#;
 
@@ -249,4 +252,35 @@ async fn model_bytes_that_are_not_dns_are_answered_servfail() {
             "{name} over TCP"
         );
     }
+
+    // A message that parses but does not fit 65535 octets: 300 TXT records of 255, ~80 KB.
+    // hickory's encoder stops at its ceiling, sets TC and reports success, so this went out
+    // over TCP as a NOERROR carrying part of the RRset — TC means nothing on a stream, and the
+    // resolver took half an answer for the whole one. Over UDP TC is right: the client retries
+    // over TCP, where it now gets SERVFAIL.
+    let r = udp(
+        &socket,
+        device.port,
+        &query(0x5555, "huge.test.", RecordType::TXT),
+    )
+    .await;
+    assert_eq!(r.id, 0x5555);
+    assert!(
+        r.metadata.truncation,
+        "over UDP the huge answer is TC: {r:?}"
+    );
+    let r = tcp(
+        &mut stream,
+        &query(0x6666, "huge.test.", RecordType::TXT),
+        1,
+    )
+    .await;
+    assert_eq!(r[0].id, 0x6666);
+    assert_eq!(
+        r[0].response_code,
+        ResponseCode::ServFail,
+        "an answer past 65535 octets over TCP must be SERVFAIL, not a truncated NOERROR: {:?}",
+        r[0].metadata
+    );
+    assert!(r[0].answers.is_empty());
 }
