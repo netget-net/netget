@@ -4,7 +4,7 @@
 
 TFTP (Trivial File Transfer Protocol) server implementing RFC 1350 for network booting and simple file transfers. The LLM controls file read/write operations via memory-based responses (no disk storage).
 
-**Status**: Experimental
+**Status**: Beta (see "Maturity" at the foot of this file)
 **RFC**: RFC 1350 (TFTP)
 **Port**: 69 (UDP)
 
@@ -29,11 +29,15 @@ TFTP (Trivial File Transfer Protocol) server implementing RFC 1350 for network b
 The LLM doesn't manipulate raw TFTP packets. Instead, it returns semantic actions:
 
 **Server Actions**:
-- `send_tftp_data` - Send file data block (512 bytes max)
+- `send_tftp_file` - Serve a whole file (text, or hex with `encoding: "hex"`); NetGet sends
+  the blocks and handles the ACKs
+- `send_tftp_data` - Send one file data block (512 bytes max; text or hex)
 - `send_tftp_ack` - Acknowledge received block
 - `send_tftp_error` - Send error and terminate transfer
 
-Each action includes required fields (block_number, data_hex, error_code) and validates constraints (512-byte max).
+Each action validates its fields (block number range, 512-byte block, error code 0-7). File
+content is text by default: a model writes text far more reliably than hex, and hex remains
+for binary content with `encoding: "hex"` (the older `data_hex` is still accepted).
 
 ### 2. Stateful Multi-Packet Transfers
 
@@ -72,6 +76,35 @@ TFTP uses UDP source ports as transaction IDs:
 - Supports concurrent transfers from same client
 - No transaction ID collision (OS manages port allocation)
 - Automatic transfer isolation
+
+The TID socket is bound to the address the main socket is bound to, not `0.0.0.0`: a server
+told to listen on loopback must not answer its transfers from every interface. A datagram
+reaching a TID socket from anyone but the transfer's peer is answered `ERROR 5` (unknown
+transfer ID, RFC 1350 §4) and otherwise ignored.
+
+A client retransmits its RRQ/WRQ when the answer is slow, and a model is slow. A repeat of a
+request from the same address and port whose transfer is still being set up or running is
+ignored (`claim_request`); each copy used to start a transfer of its own, on its own TID, and
+the client received two streams of DATA.
+
+### Retransmission and the one-task transfer
+
+A whole transfer runs in the task that handled its request (`handle_read_request`,
+`handle_write_request`), through `TransferCtx` in `mod.rs`:
+
+- **Downloads.** Every DATA block is sent, then `await_ack` waits `RETRANSMIT_TIMEOUT` (2s) for
+  its ACK and sends it again, up to `MAX_SENDS` (6) sends. An ACK for an earlier block is
+  ignored rather than answered with a retransmission (the Sorcerer's Apprentice bug, RFC 1123
+  §4.2.3.1). With `send_tftp_file` NetGet then sends the next block itself; with
+  `send_tftp_data` it raises `tftp_ack_received` for the model's next block. A file that is a
+  multiple of 512 bytes ends with an empty block.
+- **Uploads.** A retransmitted DATA block (the client did not see our ACK) is answered with
+  the ACK already sent and never reaches the model; client silence is answered by resending the
+  last ACK; after the final block the transfer dallies one `RETRANSMIT_TIMEOUT` so a lost final
+  ACK is sent again (RFC 1350 §6).
+- **netascii.** A file served in `netascii` mode is encoded (`netascii_encode`): every line
+  ends CR LF and a lone CR is sent as CR NUL (RFC 1350 §5). A client in that mode writes the
+  model's text back exactly; without the encoding it received bare LFs.
 
 ### 4. LLM Memory vs File Storage
 
@@ -153,6 +186,7 @@ Event parameters:
 
 Event parameters:
 - `block_number` (number) - Block number (1-65535)
+- `data` (string) - Block data as text, present when the block is valid UTF-8
 - `data_hex` (string) - Block data as hex string
 - `data_length` (number) - Number of bytes in block
 - `is_final` (boolean) - True if final block (< 512 bytes)
@@ -164,13 +198,26 @@ Event parameters:
 
 ### Available Actions
 
+#### `send_tftp_file`
+
+Serve the whole file the RRQ asked for. NetGet splits it into 512-byte blocks, sends each,
+retransmits any the client does not acknowledge, and netascii-encodes it in `netascii` mode.
+The answer to an RRQ only; one model call per download.
+
+Parameters:
+- `content` (required) - The file as text, or as hex with `encoding: "hex"`
+- `encoding` (optional) - `"text"` (default) or `"hex"`
+
+**Validation**: at most `MAX_FILE_BYTES` (65535 × 512 − 1), since the block number is 16 bits.
+
 #### `send_tftp_data`
 
 Send file data block to client.
 
 Parameters:
 - `block_number` (required) - Block number (1-65535)
-- `data_hex` (required) - Data as hex string (max 512 bytes)
+- `data` (required) - The block as text (or hex, with `encoding: "hex"`), max 512 bytes;
+  `data_hex` is still accepted
 
 **Validation**: Data cannot exceed 512 bytes
 
@@ -258,20 +305,19 @@ is consumed; `Self::log_decision` emits it at the level below.
 |---|---|---|
 | Handler answered with `send_tftp_data` / `send_tftp_ack` | that packet; the transfer continues | INFO `TFTP <stage> from <peer> decision=model_answer` |
 | Handler answered with `send_tftp_error` | ERROR packet; the transfer is torn down | INFO `decision=model_reject` |
-| Handler answered with no usable action | **nothing**; the client retransmits until it times out and the transfer entry survives until then | WARN `decision=model_silent` |
-| Executor refused the handler's action (bad block number, unknown action, undecodable `data_hex`) | **nothing**, same as above | ERROR `decision=fail_closed_bad_action` naming the action and the reason |
+| Handler answered with no usable action | ERROR code 0, `Request not answered by server`; transfer torn down | WARN `decision=model_silent` |
+| Executor refused the handler's action (bad block number, unknown action, undecodable hex) | ERROR code 0, same message; transfer torn down | ERROR `decision=fail_closed_bad_action` naming the action and the reason |
 | Backend failed | ERROR code 0, `Internal error: LLM backend failure`; transfer torn down | ERROR `decision=fail_closed_llm_error` with the full error |
 | Backend saturated | ERROR code 0, `Server overloaded, retry later`; transfer torn down | ERROR `decision=fail_closed_llm_overloaded` with the full error |
 
 The two ERROR messages are byte-literals built by `llm_failure_error_packet`; nothing derived
 from the error reaches the wire, which is what `tests/wire_failure_test.rs` enforces.
 
-**Known gap, tagged rather than fixed in this pass.** `model_silent` and
-`fail_closed_bad_action` write nothing, although the protocol has an ERROR frame that could
-say so — the natural answers would be code 0 with a fixed message, exactly as the LLM-failure
-path already does. Changing that alters what a peer sees, so it was left alone and made
-greppable instead. If you close it, reuse `fail_transfer_on_llm_error`'s shape: fixed message,
-tear the transfer down, keep the tag.
+`model_silent` and `fail_closed_bad_action` answer with ERROR code 0 and a fixed message
+(`TransferCtx::end_unanswered`), the same shape as the LLM-failure path: the client learns the
+transfer is over instead of retransmitting into a socket nobody reads. The client's own
+outcomes are tagged too: a client ERROR, or `MAX_SENDS` sends with no ACK, ends the transfer
+with a DEBUG line saying which.
 
 **TFTP is not `connectionless`, and the ERROR frame is why that matters here.** A transfer is
 stateful and is idle for the whole of an LLM call, so declaring `.connectionless()` would let
@@ -350,7 +396,8 @@ the 10-second idle sweep evict live transfers out from under themselves — see 
 Client:random → Server:69: RRQ filename="boot.bin" mode="octet"
 Server creates TID socket :52341
 LLM receives tftp_read_request event
-LLM returns send_tftp_data action block #1
+LLM returns send_tftp_file (NetGet sends every block below itself, no further
+LLM calls) or send_tftp_data block #1 (one LLM call per ACK, as drawn)
 
 Server:52341 → Client:random: DATA block #1 (512 bytes)
 Client:random → Server:52341: ACK block #1
@@ -411,17 +458,17 @@ Transfer complete, connection closed
 - Anyone can read/write (if LLM allows)
 - Security via LLM instruction: "Only serve to 192.168.1.0/24"
 
-### 4. No Retransmission
+### 4. Retransmission is fixed-interval
 
-- Server doesn't retry on timeout
-- Client responsible for retransmitting requests
-- Timeout causes connection close (client must reconnect)
+- Every packet is retransmitted every 2s, up to 6 sends; there is no adaptive timeout
+- The RFC 2349 `timeout` option is not negotiated
 
 ### 5. Mode Support
 
 - Supports `octet` (binary) and `netascii` (text) modes
 - `mail` mode not implemented (obsolete)
-- Mode is informational only (LLM doesn't transform data)
+- `netascii` downloads are encoded by NetGet; `netascii` uploads reach the model as the bytes
+  the client sent (CR LF line endings)
 
 ### 6. Concurrent Transfer Limit
 
@@ -475,7 +522,8 @@ Serve config.txt with content from your memory
 ### Latency
 
 - **With Scripting**: Sub-millisecond response (script handles transfers)
-- **Without Scripting**: 2-5 seconds per block (one LLM call per DATA/ACK)
+- **Without Scripting**: one LLM call per download with `send_tftp_file`; 2-5 seconds per
+  block when the model answers block by block with `send_tftp_data`, and per uploaded block
 - Packet construction: ~5-10 microseconds
 
 ### Throughput
@@ -538,3 +586,18 @@ When scripting enabled:
 - [RFC 2347: TFTP Option Extension](https://datatracker.ietf.org/doc/html/rfc2347)
 - [RFC 2348: TFTP Blocksize Option](https://datatracker.ietf.org/doc/html/rfc2348)
 - [Wikipedia: Trivial File Transfer Protocol](https://en.wikipedia.org/wiki/Trivial_File_Transfer_Protocol)
+
+## Maturity: Beta
+
+Two independent clients download and upload through the server in
+`tests/server/tftp/real_client_test.rs`, and both fail rather than skip when the client is
+absent: curl's libcurl TFTP (a three-block `send_tftp_file` download, a model-driven
+`send_tftp_data` download, a refused RRQ that curl reports as exit 68, and an upload; curl's
+RFC 2347 options are ignored and it falls back to 512-byte blocks) and the system `tftp(1)`
+(BSD tftp on macOS, tftp-hpa on Linux: a `netascii` download, an `octet` download of exactly
+1024 bytes ending in an empty block, and an upload). Not implemented, so not claimed: option
+negotiation (OACK, `blksize`, `tsize`, `timeout`, `windowsize`) and `mail` mode. `retransmit_test.rs` provokes what a loopback client never does: a repeated RRQ, a withheld
+ACK, a stale ACK, a stranger on the TID, a repeated upload block, and checks netascii on the
+wire. There is no pcap-oracle check of the real clients' traffic: a transfer moves to a TID port the recording
+relay cannot follow; `e2e_test.rs` runs the oracle over packets it exchanges itself. What the
+clients found is in the test file's header.

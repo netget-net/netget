@@ -148,13 +148,14 @@ async fn each_command_is_told_its_answer_and_retr_is_rendered_from_fields() -> E
         "From: alice@example.com\r\nSubject: Quarterly figures are in\r\n\r\nSee attached.\r\n..hidden line\r\n",
         "headers written from the fields, body byte-stuffed"
     );
-    // The advertised octet count is what was actually sent before the terminator.
+    // The advertised octet count is the message's size: what was sent before the terminator,
+    // less the one transparency dot (`..hidden line`), which the client removes.
     let octets: usize = status
         .split_whitespace()
         .nth(1)
         .and_then(|n| n.parse().ok())
         .expect("RETR status carries an octet count");
-    assert_eq!(octets, body.concat().len());
+    assert_eq!(octets, body.concat().len() - 1);
 
     write_half.write_all(b"RETR 2\r\n").await?;
     assert!(read_line(&mut reader).await?.starts_with("+OK "));

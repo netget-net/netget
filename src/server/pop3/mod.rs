@@ -223,7 +223,8 @@ pub fn assemble_multiline_answer(
         .strip_suffix("\n.")
         .unwrap_or(body.trim_end_matches('\n'));
     let framed = actions::format_pop3_multiline_body(body);
-    Some(format!("+OK {} octets\r\n{}.\r\n", framed.len(), framed).into_bytes())
+    let octets = actions::pop3_message_octets(&framed);
+    Some(format!("+OK {octets} octets\r\n{framed}.\r\n").into_bytes())
 }
 
 /// The event data for one POP3 command line: the line itself, plus what NetGet can tell from

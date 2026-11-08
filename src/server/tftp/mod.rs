@@ -24,6 +24,7 @@ use actions::{
 /// RFC 1350 opcodes. Named rather than spelled as literals at each comparison, because the
 /// read continuation used to test a packet's *length* where it meant to test its opcode.
 const OP_DATA: u16 = 3;
+const OP_ACK: u16 = 4;
 const OP_ERROR: u16 = 5;
 
 /// How many consecutive `recv_from` failures on the main socket are tolerated before the
@@ -64,6 +65,303 @@ struct TftpTransfer {
     current_block: u16,
     connection_id: ConnectionId,
     server_socket: Arc<UdpSocket>, // Unique socket for this transfer (TID)
+}
+
+/// RFC 1350's block size. A DATA block shorter than this is the last one.
+pub const BLOCK_SIZE: usize = 512;
+
+/// How long to wait for the peer's answer to a packet before sending the packet again.
+///
+/// RFC 1350 §2: "If a packet gets lost in the network, the intended recipient will timeout
+/// and may retransmit his last packet". A server that sends each DATA block once loses the
+/// transfer to one dropped datagram.
+const RETRANSMIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How many times one packet is sent before the transfer is given up: the first send and
+/// five retransmissions, twelve seconds of silence in all.
+const MAX_SENDS: u32 = 6;
+
+/// The `ActionResult::Custom` name `send_tftp_file` produces; `data.hex` carries the file.
+pub const FILE_RESULT: &str = "tftp_file";
+
+/// The ERROR a client gets when a step of its transfer was answered with nothing usable.
+///
+/// Code 0 ("not defined, see error message"), a fixed message, and the transfer ends: the
+/// alternative is the client retransmitting into a socket nobody reads until its own timeout.
+const UNANSWERED_MESSAGE: &str = "Request not answered by server";
+
+/// Encode file bytes for a `netascii` transfer (RFC 1350 §5, RFC 764): every line ends in
+/// CR LF, and a CR that does not end a line is sent as CR NUL. Text written with `\n` (or
+/// `\r\n`) line endings comes out the same; a client in netascii mode decodes it back to its
+/// own line ending.
+pub fn netascii_encode(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 16);
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
+                out.extend_from_slice(b"\r\n");
+                i += 1;
+            }
+            b'\r' => out.extend_from_slice(b"\r\0"),
+            b'\n' => out.extend_from_slice(b"\r\n"),
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// What a model's answer to one read step sends.
+enum ReadAnswer {
+    /// `send_tftp_file`: the whole file, which NetGet then sends block by block.
+    File(Vec<u8>),
+    /// One DATA or ERROR packet.
+    Packet(Vec<u8>),
+    Nothing,
+}
+
+/// One datagram from a transfer's peer, or why there is none.
+enum Received {
+    Packet(Vec<u8>),
+    TimedOut,
+    Failed,
+}
+
+/// Everything one transfer's steps need: its socket (the server's TID), its peer, and the
+/// bookkeeping that has to be undone exactly once when it ends.
+struct TransferCtx {
+    socket: Arc<UdpSocket>,
+    peer_addr: SocketAddr,
+    transfer_id: TransferId,
+    server_id: crate::state::ServerId,
+    connection_id: ConnectionId,
+    app_state: Arc<AppState>,
+    status_tx: mpsc::UnboundedSender<String>,
+    transfers: Arc<Mutex<HashMap<TransferId, TftpTransfer>>>,
+}
+
+impl TransferCtx {
+    /// Send one packet to the peer and count it. `false` when the socket refused it.
+    async fn send(&self, packet: &[u8]) -> bool {
+        match self.socket.send_to(packet, self.peer_addr).await {
+            Ok(sent) => {
+                self.app_state
+                    .update_connection_stats(
+                        self.server_id,
+                        self.connection_id,
+                        None,
+                        Some(sent as u64),
+                        None,
+                        Some(1),
+                    )
+                    .await;
+                Log::new(Some(&self.status_tx))
+                    .trace(format!("TFTP sent packet (hex): {}", hex::encode(packet)));
+                true
+            }
+            Err(e) => {
+                Log::new(Some(&self.status_tx))
+                    .error(format!("TFTP failed to send to {}: {}", self.peer_addr, e));
+                false
+            }
+        }
+    }
+
+    /// The next datagram from this transfer's peer, within `wait`.
+    ///
+    /// A datagram from any other address is answered `ERROR 5` (unknown transfer ID) and
+    /// otherwise ignored, as RFC 1350 §4 requires: the TID is what keeps two transfers, or a
+    /// stray sender, from writing into each other.
+    async fn recv_from_peer(&self, wait: std::time::Duration) -> Received {
+        let deadline = tokio::time::Instant::now() + wait;
+        let mut buffer = vec![0u8; 4 + BLOCK_SIZE];
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Received::TimedOut;
+            }
+            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buffer)).await {
+                Err(_) => return Received::TimedOut,
+                Ok(Err(e)) => {
+                    Log::new(Some(&self.status_tx))
+                        .error(format!("TFTP socket error on transfer: {}", e));
+                    return Received::Failed;
+                }
+                Ok(Ok((n, from))) if from != self.peer_addr => {
+                    let _ = self
+                        .socket
+                        .send_to(
+                            &TftpServer::build_error_packet(5, "Unknown transfer ID"),
+                            from,
+                        )
+                        .await;
+                    Log::new(Some(&self.status_tx)).debug(format!(
+                        "TFTP {n} bytes from {from}, not this transfer's peer {}; answered \
+                         ERROR 5",
+                        self.peer_addr
+                    ));
+                }
+                Ok(Ok((n, _))) if n < 4 => continue,
+                Ok(Ok((n, _))) => {
+                    self.app_state
+                        .update_connection_stats(
+                            self.server_id,
+                            self.connection_id,
+                            Some(n as u64),
+                            None,
+                            Some(1),
+                            None,
+                        )
+                        .await;
+                    return Received::Packet(buffer[..n].to_vec());
+                }
+            }
+        }
+    }
+
+    /// Wait for the ACK of `block`, sending `packet` again whenever the peer is silent for
+    /// [`RETRANSMIT_TIMEOUT`], up to [`MAX_SENDS`] sends in all (the caller made the first).
+    ///
+    /// An ACK for an earlier block is ignored rather than answered: retransmitting on a
+    /// duplicate ACK is the "Sorcerer's Apprentice" bug (RFC 1123 §4.2.3.1), which doubles
+    /// every packet for the rest of the transfer. `false` when the transfer cannot go on: the
+    /// peer sent ERROR, went silent, or the socket failed.
+    async fn await_ack(&self, packet: &[u8], block: u16) -> bool {
+        let log = Log::new(Some(&self.status_tx));
+        let mut sends = 1;
+        let mut deadline = tokio::time::Instant::now() + RETRANSMIT_TIMEOUT;
+        loop {
+            let wait = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match self.recv_from_peer(wait).await {
+                Received::Packet(reply) => match TftpServer::packet_opcode(&reply) {
+                    Some(OP_ACK) if u16::from_be_bytes([reply[2], reply[3]]) == block => {
+                        log.debug(format!("TFTP received ACK for block {}", block));
+                        return true;
+                    }
+                    Some(OP_ERROR) => {
+                        log.debug(format!(
+                            "TFTP client sent ERROR {} ({}), transfer terminated",
+                            u16::from_be_bytes([reply[2], reply[3]]),
+                            String::from_utf8_lossy(&reply[4..]).trim_end_matches('\0')
+                        ));
+                        return false;
+                    }
+                    _ => continue,
+                },
+                Received::TimedOut if sends < MAX_SENDS => {
+                    sends += 1;
+                    log.debug(format!(
+                        "TFTP no ACK for block {block}; retransmitting (send {sends} of \
+                         {MAX_SENDS})"
+                    ));
+                    if !self.send(packet).await {
+                        return false;
+                    }
+                    deadline = tokio::time::Instant::now() + RETRANSMIT_TIMEOUT;
+                }
+                Received::TimedOut => {
+                    log.debug(format!(
+                        "TFTP timeout waiting for ACK block {block} after {MAX_SENDS} sends"
+                    ));
+                    return false;
+                }
+                Received::Failed => return false,
+            }
+        }
+    }
+
+    /// Send a whole file, block by block, each retransmitted until it is acknowledged. A file
+    /// that is an exact multiple of [`BLOCK_SIZE`] ends with an empty block (RFC 1350 §6).
+    async fn serve_file(&self, content: &[u8]) {
+        let log = Log::new(Some(&self.status_tx));
+        let mut offset = 0usize;
+        let mut block: u16 = 1;
+        loop {
+            let end = (offset + BLOCK_SIZE).min(content.len());
+            let chunk = &content[offset..end];
+            let mut packet = Vec::with_capacity(4 + chunk.len());
+            packet.extend_from_slice(&OP_DATA.to_be_bytes());
+            packet.extend_from_slice(&block.to_be_bytes());
+            packet.extend_from_slice(chunk);
+            if !self.send(&packet).await {
+                break;
+            }
+            self.app_state
+                .update_tftp_connection_block(
+                    self.server_id,
+                    self.connection_id,
+                    block,
+                    chunk.len(),
+                )
+                .await;
+            if !self.await_ack(&packet, block).await {
+                break;
+            }
+            if chunk.len() < BLOCK_SIZE {
+                log.info(format!(
+                    "TFTP sent {} bytes to {} in {} blocks; transfer complete",
+                    content.len(),
+                    self.peer_addr,
+                    block
+                ));
+                break;
+            }
+            offset = end;
+            block = block.wrapping_add(1);
+        }
+        self.teardown().await;
+    }
+
+    /// End a transfer whose step was answered with nothing usable: `ERROR 0`, then teardown.
+    async fn end_unanswered(&self, stage: &str) {
+        Log::new(Some(&self.status_tx)).warn(format!(
+            "TFTP {} from {}: no packet to send; answering ERROR 0 and ending the transfer",
+            stage, self.peer_addr
+        ));
+        self.send(&TftpServer::build_error_packet(0, UNANSWERED_MESSAGE))
+            .await;
+        self.teardown().await;
+    }
+
+    async fn fail_on_llm_error(&self, stage: &str, err: &anyhow::Error) {
+        TftpServer::fail_transfer_on_llm_error(
+            &self.socket,
+            self.peer_addr,
+            self.transfer_id,
+            stage,
+            err,
+            self.server_id,
+            self.connection_id,
+            &self.app_state,
+            &self.status_tx,
+            &self.transfers,
+        )
+        .await;
+    }
+
+    /// Forget the transfer and close its connection entry.
+    async fn teardown(&self) {
+        self.transfers.lock().await.remove(&self.transfer_id);
+        self.app_state
+            .close_connection_on_server(self.server_id, self.connection_id)
+            .await;
+    }
+}
+
+/// A request's claim on its peer address, released when its handler task ends; by then the
+/// transfer is in the transfer map (or never will be), which is what keeps later copies out.
+struct PendingClaim(
+    Arc<std::sync::Mutex<std::collections::HashSet<SocketAddr>>>,
+    SocketAddr,
+);
+
+impl Drop for PendingClaim {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.0.lock() {
+            pending.remove(&self.1);
+        }
+    }
 }
 
 /// TFTP server that forwards requests to LLM
@@ -129,7 +427,16 @@ impl TftpServer {
     ) {
         let mut buffer = vec![0u8; 516]; // Max TFTP packet (4 bytes header + 512 data)
         let log = Log::new(Some(&status_tx));
+        let bind_ip = match main_socket.local_addr() {
+            Ok(addr) => addr.ip(),
+            Err(e) => {
+                log.error(format!("TFTP main socket has no local address: {e}"));
+                return;
+            }
+        };
         let mut consecutive_errors: u32 = 0;
+        // Peers whose request has been accepted but whose transfer is not registered yet.
+        let pending: Arc<std::sync::Mutex<std::collections::HashSet<SocketAddr>>> = Arc::default();
 
         loop {
             match main_socket.recv_from(&mut buffer).await {
@@ -150,6 +457,16 @@ impl TftpServer {
 
                     let opcode = u16::from_be_bytes([data[0], data[1]]);
 
+                    if matches!(opcode, 1 | 2)
+                        && !Self::claim_request(&pending, &transfers, peer_addr).await
+                    {
+                        log.debug(format!(
+                            "TFTP request from {peer_addr} repeats one already being answered; \
+                             ignored (the client retransmits while the handler thinks)"
+                        ));
+                        continue;
+                    }
+
                     match opcode {
                         1 => {
                             // RRQ (Read Request)
@@ -158,14 +475,17 @@ impl TftpServer {
                             let status_clone = status_tx.clone();
                             let protocol_clone = protocol.clone();
                             let transfers_clone = transfers.clone();
+                            let pending_clone = pending.clone();
 
                             // Tracked, not detached: stop_server must abort this task too.
                             let task_owner = app_state.clone();
                             task_owner
                                 .spawn_server_task(server_id, async move {
+                                    let _claim = PendingClaim(pending_clone, peer_addr);
                                     if let Err(e) = Self::handle_read_request(
                                         data,
                                         peer_addr,
+                                        bind_ip,
                                         llm_clone,
                                         state_clone,
                                         status_clone,
@@ -187,14 +507,17 @@ impl TftpServer {
                             let status_clone = status_tx.clone();
                             let protocol_clone = protocol.clone();
                             let transfers_clone = transfers.clone();
+                            let pending_clone = pending.clone();
 
                             // Tracked, not detached: stop_server must abort this task too.
                             let task_owner = app_state.clone();
                             task_owner
                                 .spawn_server_task(server_id, async move {
+                                    let _claim = PendingClaim(pending_clone, peer_addr);
                                     if let Err(e) = Self::handle_write_request(
                                         data,
                                         peer_addr,
+                                        bind_ip,
                                         llm_clone,
                                         state_clone,
                                         status_clone,
@@ -241,9 +564,17 @@ impl TftpServer {
     }
 
     /// Handle RRQ (Read Request)
+    ///
+    /// The whole download runs in this one task: the model's answer to the RRQ is either a
+    /// whole file (`send_tftp_file`, after which NetGet sends every block itself) or block 1
+    /// (`send_tftp_data`, after which each ACK asks the model for the next block). Either way
+    /// every DATA packet is retransmitted until the client acknowledges it
+    /// ([`Self::await_ack`]), and every way the transfer ends tells the client so.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_read_request(
         data: Vec<u8>,
         peer_addr: SocketAddr,
+        bind_ip: std::net::IpAddr,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
@@ -260,8 +591,9 @@ impl TftpServer {
             filename, mode, peer_addr
         ));
 
-        // Create unique socket for this transfer (transaction ID)
-        let transfer_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        // The transfer's own socket (its TID), on the address the server was bound to: a
+        // server on loopback must not answer from a socket every interface can reach.
+        let transfer_socket = Arc::new(UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await?);
         let tid_addr = transfer_socket.local_addr()?;
 
         log.debug(format!("TFTP RRQ assigned TID {}", tid_addr.port()));
@@ -309,6 +641,17 @@ impl TftpServer {
 
         transfers.lock().await.insert(transfer_id, transfer);
 
+        let ctx = TransferCtx {
+            socket: transfer_socket,
+            peer_addr,
+            transfer_id,
+            server_id,
+            connection_id,
+            app_state,
+            status_tx: status_tx.clone(),
+            transfers,
+        };
+
         // Call LLM with read request event
         let event = Event::new(
             &TFTP_READ_REQUEST_EVENT,
@@ -321,9 +664,9 @@ impl TftpServer {
 
         log.debug(format!("TFTP calling LLM for RRQ: {}", filename));
 
-        match call_llm(
+        let answer = match call_llm(
             &llm_client,
-            &app_state,
+            &ctx.app_state,
             server_id,
             Some(connection_id),
             &event,
@@ -332,459 +675,167 @@ impl TftpServer {
         .await
         {
             Ok(execution_result) => {
-                // Display messages
                 for message in &execution_result.messages {
                     log.info(message);
                 }
-
-                log.debug(format!(
-                    "TFTP parsed {} actions for RRQ",
-                    execution_result.raw_actions.len()
-                ));
-
                 let decision = Self::classify_outcome(&execution_result);
                 Self::log_decision(&log, decision, "RRQ", peer_addr, &execution_result);
-
-                // Process protocol results (DATA or ERROR packets)
-                for protocol_result in execution_result.protocol_results {
-                    match protocol_result {
-                        crate::llm::actions::protocol_trait::ActionResult::Output(packet) => {
-                            // Send packet from transfer socket to client
-                            if let Err(e) = transfer_socket.send_to(&packet, peer_addr).await {
-                                log.error(format!("TFTP failed to send DATA: {}", e));
-                                continue;
-                            }
-
-                            // Update bytes sent
-                            app_state
-                                .update_connection_stats(
-                                    server_id,
-                                    connection_id,
-                                    None,
-                                    Some(packet.len() as u64),
-                                    None,
-                                    Some(1),
-                                )
-                                .await;
-
-                            log.trace(format!(
-                                "TFTP sent DATA packet (hex): {}",
-                                hex::encode(&packet)
-                            ));
-
-                            // Check if this is DATA packet
-                            if packet.len() >= 4 {
-                                let opcode = u16::from_be_bytes([packet[0], packet[1]]);
-                                if opcode == 3 {
-                                    // DATA
-                                    let block_num = u16::from_be_bytes([packet[2], packet[3]]);
-                                    let data_len = packet.len() - 4;
-
-                                    // Update transfer state
-                                    if let Some(transfer) =
-                                        transfers.lock().await.get_mut(&transfer_id)
-                                    {
-                                        transfer.current_block = block_num;
-                                    }
-
-                                    // Update connection info
-                                    app_state
-                                        .update_tftp_connection_block(
-                                            server_id,
-                                            connection_id,
-                                            block_num,
-                                            data_len,
-                                        )
-                                        .await;
-
-                                    log.debug(format!(
-                                        "TFTP sent DATA block {} ({} bytes)",
-                                        block_num, data_len
-                                    ));
-
-                                    // If final block (< 512 bytes data), spawn ACK listener
-                                    if data_len < 512 {
-                                        log.debug("TFTP final block sent, waiting for final ACK");
-
-                                        // Spawn listener for final ACK
-                                        let socket_clone = transfer_socket.clone();
-                                        let status_clone = status_tx.clone();
-                                        let state_clone = app_state.clone();
-                                        let transfers_clone = transfers.clone();
-
-                                        // Tracked, not detached: stop_server must abort this task too.
-                                        let task_owner = app_state.clone();
-                                        task_owner
-                                            .spawn_server_task(server_id, async move {
-                                                Self::wait_for_final_ack(
-                                                    socket_clone,
-                                                    peer_addr,
-                                                    transfer_id,
-                                                    block_num,
-                                                    server_id,
-                                                    connection_id,
-                                                    state_clone,
-                                                    status_clone,
-                                                    transfers_clone,
-                                                )
-                                                .await;
-                                            })
-                                            .await;
-                                    } else {
-                                        // Spawn listener for ACK and continue transfer
-                                        let socket_clone = transfer_socket.clone();
-                                        let llm_clone = llm_client.clone();
-                                        let state_clone = app_state.clone();
-                                        let status_clone = status_tx.clone();
-                                        let protocol_clone = protocol.clone();
-                                        let transfers_clone = transfers.clone();
-
-                                        // Tracked, not detached: stop_server must abort this task too.
-                                        let task_owner = app_state.clone();
-                                        task_owner
-                                            .spawn_server_task(server_id, async move {
-                                                Self::continue_read_transfer(
-                                                    socket_clone,
-                                                    peer_addr,
-                                                    transfer_id,
-                                                    block_num,
-                                                    llm_clone,
-                                                    state_clone,
-                                                    status_clone,
-                                                    server_id,
-                                                    connection_id,
-                                                    protocol_clone,
-                                                    transfers_clone,
-                                                )
-                                                .await;
-                                            })
-                                            .await;
-                                    }
-                                } else if opcode == 5 {
-                                    // ERROR - transfer terminated
-                                    log.debug("TFTP sent ERROR, transfer terminated");
-                                    transfers.lock().await.remove(&transfer_id);
-                                    app_state
-                                        .close_connection_on_server(server_id, connection_id)
-                                        .await;
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                Self::read_answer(execution_result, &log)
             }
             Err(e) => {
-                Self::fail_transfer_on_llm_error(
-                    &transfer_socket,
-                    peer_addr,
-                    transfer_id,
-                    "read request",
-                    &e,
-                    server_id,
-                    connection_id,
-                    &app_state,
-                    &status_tx,
-                    &transfers,
-                )
-                .await;
+                ctx.fail_on_llm_error("read request", &e).await;
+                return Ok(());
             }
-        }
+        };
 
-        Ok(())
-    }
+        let mut packet = match answer {
+            ReadAnswer::File(content) => {
+                let content = if mode.eq_ignore_ascii_case("netascii") {
+                    netascii_encode(&content)
+                } else {
+                    content
+                };
+                ctx.serve_file(&content).await;
+                return Ok(());
+            }
+            ReadAnswer::Packet(packet) => packet,
+            ReadAnswer::Nothing => {
+                ctx.end_unanswered("RRQ").await;
+                return Ok(());
+            }
+        };
 
-    /// Continue read transfer by waiting for ACK and calling LLM for next block
-    fn continue_read_transfer(
-        socket: Arc<UdpSocket>,
-        peer_addr: SocketAddr,
-        transfer_id: TransferId,
-        expected_block: u16,
-        llm_client: OllamaClient,
-        app_state: Arc<AppState>,
-        status_tx: mpsc::UnboundedSender<String>,
-        server_id: crate::state::ServerId,
-        connection_id: ConnectionId,
-        protocol: Arc<TftpProtocol>,
-        transfers: Arc<Mutex<HashMap<TransferId, TftpTransfer>>>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-        Box::pin(async move {
-            let mut buffer = vec![0u8; 516];
-            let log = Log::new(Some(&status_tx));
+        // The model sends the file a block at a time: one model call per ACK.
+        loop {
+            if !ctx.send(&packet).await {
+                ctx.teardown().await;
+                return Ok(());
+            }
+            if Self::packet_opcode(&packet) == Some(OP_ERROR) {
+                log.debug("TFTP sent ERROR, transfer terminated");
+                ctx.teardown().await;
+                return Ok(());
+            }
+            let block_num = u16::from_be_bytes([packet[2], packet[3]]);
+            let data_len = packet.len() - 4;
+            if let Some(transfer) = ctx.transfers.lock().await.get_mut(&transfer_id) {
+                transfer.current_block = block_num;
+            }
+            ctx.app_state
+                .update_tftp_connection_block(server_id, connection_id, block_num, data_len)
+                .await;
+            log.debug(format!(
+                "TFTP sent DATA block {} ({} bytes)",
+                block_num, data_len
+            ));
 
-            // Wait for ACK with timeout
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                socket.recv_from(&mut buffer),
+            if !ctx.await_ack(&packet, block_num).await {
+                ctx.teardown().await;
+                return Ok(());
+            }
+            if data_len < BLOCK_SIZE {
+                log.debug(format!(
+                    "TFTP transfer complete (final ACK received for block {})",
+                    block_num
+                ));
+                ctx.teardown().await;
+                return Ok(());
+            }
+
+            let event = Event::new(
+                &TFTP_ACK_RECEIVED_EVENT,
+                serde_json::json!({ "block_number": block_num }),
+            );
+            packet = match call_llm(
+                &llm_client,
+                &ctx.app_state,
+                server_id,
+                Some(connection_id),
+                &event,
+                protocol.as_ref(),
             )
             .await
             {
-                Ok(Ok((n, _))) => {
-                    let data = &buffer[..n];
-
-                    if data.len() >= 4 {
-                        let opcode = u16::from_be_bytes([data[0], data[1]]);
-                        if opcode == 4 {
-                            // ACK
-                            let ack_block = u16::from_be_bytes([data[2], data[3]]);
-
-                            log.debug(format!("TFTP received ACK for block {}", ack_block));
-
-                            if ack_block == expected_block {
-                                // Update connection
-                                app_state
-                                    .update_connection_stats(
-                                        server_id,
-                                        connection_id,
-                                        Some(n as u64),
-                                        None,
-                                        Some(1),
-                                        None,
-                                    )
-                                    .await;
-
-                                // Call LLM for next block
-                                let event = Event::new(
-                                    &TFTP_ACK_RECEIVED_EVENT,
-                                    serde_json::json!({
-                                        "block_number": ack_block,
-                                    }),
-                                );
-
-                                match call_llm(
-                                    &llm_client,
-                                    &app_state,
-                                    server_id,
-                                    Some(connection_id),
-                                    &event,
-                                    protocol.as_ref(),
-                                )
-                                .await
-                                {
-                                    Ok(execution_result) => {
-                                        let decision = Self::classify_outcome(&execution_result);
-                                        Self::log_decision(
-                                            &log,
-                                            decision,
-                                            "ACK continuation",
-                                            peer_addr,
-                                            &execution_result,
-                                        );
-
-                                        // Exactly one continuation may be spawned per answer.
-                                        // The model can legitimately return several actions,
-                                        // and spawning a reader per packet would put two or
-                                        // more tasks on the same socket racing for the next
-                                        // ACK.
-                                        let mut continued = false;
-                                        for protocol_result in execution_result.protocol_results {
-                                            if let crate::llm::actions::protocol_trait::ActionResult::Output(packet) = protocol_result {
-                                            if let Err(e) = socket.send_to(&packet, peer_addr).await {
-                                                log.error(format!(
-                                                    "TFTP failed to send packet to {peer_addr}: {e}"
-                                                ));
-                                                continue;
-                                            }
-
-                                            app_state.update_connection_stats(server_id, connection_id, None, Some(packet.len() as u64), None, Some(1)).await;
-
-                                            if continued {
-                                                continue;
-                                            }
-
-                                            // Dispatch on the opcode, as the RRQ path does.
-                                            // This branch used to test only the length, so an
-                                            // ERROR packet — which is short — was taken for a
-                                            // final DATA block: the server waited five seconds
-                                            // for an ACK the client had no reason to send, and
-                                            // read the packet's *error code* as a block number.
-                                            // Aborting a transfer mid-flight therefore looked
-                                            // to the log like a completed one.
-                                            match Self::packet_opcode(&packet) {
-                                                Some(OP_DATA) => {
-                                                    let block_num = u16::from_be_bytes([packet[2], packet[3]]);
-                                                    let data_len = packet.len() - 4;
-                                                    continued = true;
-
-                                                    let socket_clone = socket.clone();
-                                                    let state_clone = app_state.clone();
-                                                    let status_clone = status_tx.clone();
-                                                    let transfers_clone = transfers.clone();
-
-                                                    if data_len < 512 {
-                                                        log.debug("TFTP final block sent");
-                                                        // Tracked, not detached: stop_server must abort this task too.
-                                                        let task_owner = app_state.clone();
-                                                        task_owner.spawn_server_task(server_id, async move {
-                                                            Self::wait_for_final_ack(
-                                                                socket_clone,
-                                                                peer_addr,
-                                                                transfer_id,
-                                                                block_num,
-                                                                server_id,
-                                                                connection_id,
-                                                                state_clone,
-                                                                status_clone,
-                                                                transfers_clone,
-                                                            )
-                                                            .await;
-                                                        }).await;
-                                                    } else {
-                                                        let llm_clone = llm_client.clone();
-                                                        let protocol_clone = protocol.clone();
-                                                        // Tracked, not detached: stop_server must abort this task too.
-                                                        let task_owner = app_state.clone();
-                                                        task_owner.spawn_server_task(server_id, async move {
-                                                            Self::continue_read_transfer(
-                                                                socket_clone,
-                                                                peer_addr,
-                                                                transfer_id,
-                                                                block_num,
-                                                                llm_clone,
-                                                                state_clone,
-                                                                status_clone,
-                                                                server_id,
-                                                                connection_id,
-                                                                protocol_clone,
-                                                                transfers_clone,
-                                                            )
-                                                            .await;
-                                                        }).await;
-                                                    }
-                                                }
-                                                Some(OP_ERROR) => {
-                                                    log.debug(
-                                                        "TFTP sent ERROR mid-transfer, transfer terminated",
-                                                    );
-                                                    continued = true;
-                                                    transfers.lock().await.remove(&transfer_id);
-                                                    app_state
-                                                        .close_connection_on_server(server_id, connection_id)
-                                                        .await;
-                                                }
-                                                other => {
-                                                    log.warn(format!(
-                                                        "TFTP handler answered a read transfer with opcode \
-                                                         {other:?}, which is neither DATA nor ERROR; the \
-                                                         transfer cannot continue"
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        // Mid-transfer failure: the client is waiting for
-                                        // the next DATA block, so it gets an ERROR packet
-                                        // instead of nothing.
-                                        Self::fail_transfer_on_llm_error(
-                                            &socket,
-                                            peer_addr,
-                                            transfer_id,
-                                            "read transfer",
-                                            &e,
-                                            server_id,
-                                            connection_id,
-                                            &app_state,
-                                            &status_tx,
-                                            &transfers,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
+                Ok(execution_result) => {
+                    let decision = Self::classify_outcome(&execution_result);
+                    Self::log_decision(
+                        &log,
+                        decision,
+                        "ACK continuation",
+                        peer_addr,
+                        &execution_result,
+                    );
+                    match Self::read_answer(execution_result, &log) {
+                        ReadAnswer::Packet(packet) => packet,
+                        // A whole file is the answer to an RRQ, not to an ACK mid-transfer.
+                        ReadAnswer::File(_) | ReadAnswer::Nothing => {
+                            ctx.end_unanswered("ACK continuation").await;
+                            return Ok(());
                         }
                     }
                 }
-                Ok(Err(e)) => {
-                    log.error(format!("TFTP socket error waiting for ACK: {}", e));
-                    transfers.lock().await.remove(&transfer_id);
-                    app_state
-                        .close_connection_on_server(server_id, connection_id)
-                        .await;
+                Err(e) => {
+                    // Mid-transfer failure: the client is waiting for the next DATA block,
+                    // so it gets an ERROR packet instead of nothing.
+                    ctx.fail_on_llm_error("read transfer", &e).await;
+                    return Ok(());
                 }
-                Err(_) => {
-                    log.debug(format!(
-                        "TFTP timeout waiting for ACK block {}",
-                        expected_block
-                    ));
-                    transfers.lock().await.remove(&transfer_id);
-                    app_state
-                        .close_connection_on_server(server_id, connection_id)
-                        .await;
-                }
-            }
-        })
-    }
-
-    /// Wait for final ACK and close transfer
-    async fn wait_for_final_ack(
-        socket: Arc<UdpSocket>,
-        _peer_addr: SocketAddr,
-        transfer_id: TransferId,
-        expected_block: u16,
-        server_id: crate::state::ServerId,
-        connection_id: ConnectionId,
-        app_state: Arc<AppState>,
-        status_tx: mpsc::UnboundedSender<String>,
-        transfers: Arc<Mutex<HashMap<TransferId, TftpTransfer>>>,
-    ) {
-        let mut buffer = vec![0u8; 516];
-        let log = Log::new(Some(&status_tx));
-
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            socket.recv_from(&mut buffer),
-        )
-        .await
-        {
-            Ok(Ok((n, _))) => {
-                let data = &buffer[..n];
-
-                if data.len() >= 4 {
-                    let opcode = u16::from_be_bytes([data[0], data[1]]);
-                    if opcode == 4 {
-                        let ack_block = u16::from_be_bytes([data[2], data[3]]);
-
-                        if ack_block == expected_block {
-                            log.debug(format!(
-                                "TFTP transfer complete (final ACK received for block {})",
-                                ack_block
-                            ));
-
-                            app_state
-                                .update_connection_stats(
-                                    server_id,
-                                    connection_id,
-                                    Some(n as u64),
-                                    None,
-                                    Some(1),
-                                    None,
-                                )
-                                .await;
-
-                            transfers.lock().await.remove(&transfer_id);
-                            app_state
-                                .close_connection_on_server(server_id, connection_id)
-                                .await;
-                        }
-                    }
-                }
-            }
-            _ => {
-                log.debug("TFTP timeout waiting for final ACK (transfer may have completed)");
-                transfers.lock().await.remove(&transfer_id);
-                app_state
-                    .close_connection_on_server(server_id, connection_id)
-                    .await;
-            }
+            };
         }
     }
 
+    /// The one packet (or file) an answer to a read step sends.
+    ///
+    /// Only one: a second DATA packet in the same answer would be a block the client has not
+    /// asked for yet, and the read path waits for one ACK per packet.
+    fn read_answer(result: crate::llm::ExecutionResult, log: &Log<'_>) -> ReadAnswer {
+        use crate::llm::actions::protocol_trait::ActionResult;
+        let mut answer = ReadAnswer::Nothing;
+        let mut extra = 0usize;
+        for protocol_result in result.protocol_results {
+            let candidate = match protocol_result {
+                ActionResult::Custom { name, data } if name == FILE_RESULT => {
+                    match data.get("hex").and_then(|h| h.as_str()).map(hex::decode) {
+                        Some(Ok(bytes)) => ReadAnswer::File(bytes),
+                        _ => continue,
+                    }
+                }
+                ActionResult::Output(packet)
+                    if matches!(Self::packet_opcode(&packet), Some(OP_DATA | OP_ERROR)) =>
+                {
+                    ReadAnswer::Packet(packet)
+                }
+                ActionResult::Output(packet) => {
+                    log.warn(format!(
+                        "TFTP handler answered a read with opcode {:?}, which is neither DATA \
+                         nor ERROR; not sent",
+                        Self::packet_opcode(&packet)
+                    ));
+                    continue;
+                }
+                _ => continue,
+            };
+            if matches!(answer, ReadAnswer::Nothing) {
+                answer = candidate;
+            } else {
+                extra += 1;
+            }
+        }
+        if extra > 0 {
+            log.warn(format!(
+                "TFTP decision=duplicate_response_dropped: {extra} more packet(s) in one answer \
+                 not sent; a read sends one block per ACK"
+            ));
+        }
+        answer
+    }
+
     /// Handle WRQ (Write Request)
+    #[allow(clippy::too_many_arguments)]
     async fn handle_write_request(
         data: Vec<u8>,
         peer_addr: SocketAddr,
+        bind_ip: std::net::IpAddr,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
@@ -801,8 +852,8 @@ impl TftpServer {
             filename, mode, peer_addr
         ));
 
-        // Create unique socket for this transfer
-        let transfer_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        // Create unique socket for this transfer, on the server's own address.
+        let transfer_socket = Arc::new(UdpSocket::bind(SocketAddr::new(bind_ip, 0)).await?);
         let tid_addr = transfer_socket.local_addr()?;
 
         log.debug(format!("TFTP WRQ assigned TID {}", tid_addr.port()));
@@ -850,6 +901,17 @@ impl TftpServer {
 
         transfers.lock().await.insert(transfer_id, transfer);
 
+        let ctx = TransferCtx {
+            socket: transfer_socket,
+            peer_addr,
+            transfer_id,
+            server_id,
+            connection_id,
+            app_state,
+            status_tx: status_tx.clone(),
+            transfers,
+        };
+
         // Call LLM with write request event
         let event = Event::new(
             &TFTP_WRITE_REQUEST_EVENT,
@@ -862,9 +924,9 @@ impl TftpServer {
 
         log.debug(format!("TFTP calling LLM for WRQ: {}", filename));
 
-        match call_llm(
+        let packet = match call_llm(
             &llm_client,
-            &app_state,
+            &ctx.app_state,
             server_id,
             Some(connection_id),
             &event,
@@ -873,312 +935,203 @@ impl TftpServer {
         .await
         {
             Ok(execution_result) => {
-                // Display messages
                 for message in &execution_result.messages {
                     log.info(message);
                 }
-
                 let decision = Self::classify_outcome(&execution_result);
                 Self::log_decision(&log, decision, "WRQ", peer_addr, &execution_result);
-
-                // Process protocol results (should be ACK block 0 or ERROR)
-                for protocol_result in execution_result.protocol_results {
-                    match protocol_result {
-                        crate::llm::actions::protocol_trait::ActionResult::Output(packet) => {
-                            // Send ACK block 0 or ERROR
-                            if let Err(e) = transfer_socket.send_to(&packet, peer_addr).await {
-                                log.error(format!("TFTP failed to send ACK: {}", e));
-                                continue;
-                            }
-
-                            app_state
-                                .update_connection_stats(
-                                    server_id,
-                                    connection_id,
-                                    None,
-                                    Some(packet.len() as u64),
-                                    None,
-                                    Some(1),
-                                )
-                                .await;
-
-                            log.trace(format!("TFTP sent packet (hex): {}", hex::encode(&packet)));
-
-                            // Check if ACK (opcode 4)
-                            if packet.len() >= 4 {
-                                let opcode = u16::from_be_bytes([packet[0], packet[1]]);
-                                if opcode == 4 {
-                                    log.debug("TFTP sent ACK block 0, ready to receive");
-
-                                    // Spawn listener for incoming DATA blocks
-                                    let socket_clone = transfer_socket.clone();
-                                    let llm_clone = llm_client.clone();
-                                    let state_clone = app_state.clone();
-                                    let status_clone = status_tx.clone();
-                                    let protocol_clone = protocol.clone();
-                                    let transfers_clone = transfers.clone();
-
-                                    // Tracked, not detached: stop_server must abort this task too.
-                                    let task_owner = app_state.clone();
-                                    task_owner
-                                        .spawn_server_task(server_id, async move {
-                                            Self::receive_write_data(
-                                                socket_clone,
-                                                peer_addr,
-                                                transfer_id,
-                                                llm_clone,
-                                                state_clone,
-                                                status_clone,
-                                                server_id,
-                                                connection_id,
-                                                protocol_clone,
-                                                transfers_clone,
-                                            )
-                                            .await;
-                                        })
-                                        .await;
-                                } else if opcode == 5 {
-                                    log.debug("TFTP sent ERROR, transfer denied");
-                                    transfers.lock().await.remove(&transfer_id);
-                                    app_state
-                                        .close_connection_on_server(server_id, connection_id)
-                                        .await;
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                Self::write_answer(execution_result)
             }
             Err(e) => {
-                Self::fail_transfer_on_llm_error(
-                    &transfer_socket,
-                    peer_addr,
-                    transfer_id,
-                    "write request",
-                    &e,
-                    server_id,
-                    connection_id,
-                    &app_state,
-                    &status_tx,
-                    &transfers,
-                )
-                .await;
+                ctx.fail_on_llm_error("write request", &e).await;
+                return Ok(());
             }
-        }
+        };
 
+        let Some(packet) = packet else {
+            ctx.end_unanswered("WRQ").await;
+            return Ok(());
+        };
+        if !ctx.send(&packet).await || Self::packet_opcode(&packet) == Some(OP_ERROR) {
+            log.debug("TFTP answered the WRQ with ERROR, transfer denied");
+            ctx.teardown().await;
+            return Ok(());
+        }
+        log.debug("TFTP sent ACK block 0, ready to receive");
+        Self::receive_write_data(&ctx, packet, llm_client, protocol).await;
         Ok(())
     }
 
-    /// Receive DATA blocks for write transfer
+    /// The one ACK or ERROR an answer to a write step sends; the first of them.
+    fn write_answer(result: crate::llm::ExecutionResult) -> Option<Vec<u8>> {
+        result.protocol_results.into_iter().find_map(|r| match r {
+            crate::llm::actions::protocol_trait::ActionResult::Output(packet)
+                if matches!(Self::packet_opcode(&packet), Some(OP_ACK | OP_ERROR)) =>
+            {
+                Some(packet)
+            }
+            _ => None,
+        })
+    }
+
+    /// Receive DATA blocks for write transfer.
+    ///
+    /// `last_ack` is the packet that acknowledged the previous block (ACK 0 for the WRQ). A
+    /// client retransmits a DATA block whose ACK it has not seen, which a slow model makes
+    /// routine: that duplicate is answered with `last_ack` again and never reaches the model.
+    /// Silence from the client is answered by resending `last_ack`, up to [`MAX_SENDS`]. After
+    /// the final block the transfer dallies one [`RETRANSMIT_TIMEOUT`] (RFC 1350 §6), so a
+    /// final ACK the client lost is sent again rather than leaving it to time out.
     async fn receive_write_data(
-        socket: Arc<UdpSocket>,
-        peer_addr: SocketAddr,
-        transfer_id: TransferId,
+        ctx: &TransferCtx,
+        mut last_ack: Vec<u8>,
         llm_client: OllamaClient,
-        app_state: Arc<AppState>,
-        status_tx: mpsc::UnboundedSender<String>,
-        server_id: crate::state::ServerId,
-        connection_id: ConnectionId,
         protocol: Arc<TftpProtocol>,
-        transfers: Arc<Mutex<HashMap<TransferId, TftpTransfer>>>,
     ) {
-        let mut buffer = vec![0u8; 516];
-        let log = Log::new(Some(&status_tx));
+        let log = Log::new(Some(&ctx.status_tx));
+        let mut last_block: u16 = 0;
+        let mut sends: u32 = 1;
+        let mut finished = false;
 
         loop {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                socket.recv_from(&mut buffer),
+            let packet = match ctx.recv_from_peer(RETRANSMIT_TIMEOUT).await {
+                Received::Packet(packet) => packet,
+                Received::TimedOut if finished => break,
+                Received::TimedOut if sends < MAX_SENDS => {
+                    log.debug(format!(
+                        "TFTP no DATA after ACK {last_block}; resending the ACK"
+                    ));
+                    sends += 1;
+                    if !ctx.send(&last_ack).await {
+                        break;
+                    }
+                    continue;
+                }
+                Received::TimedOut => {
+                    log.debug("TFTP timeout waiting for DATA");
+                    break;
+                }
+                Received::Failed => break,
+            };
+
+            match Self::packet_opcode(&packet) {
+                Some(OP_DATA) => {}
+                Some(OP_ERROR) => {
+                    log.debug("TFTP client sent ERROR during upload, transfer terminated");
+                    break;
+                }
+                other => {
+                    log.debug(format!("TFTP expected DATA, got opcode {other:?}"));
+                    continue;
+                }
+            }
+
+            let block_num = u16::from_be_bytes([packet[2], packet[3]]);
+            let block_data = &packet[4..];
+
+            if block_num == last_block {
+                // A retransmission: the client did not see our ACK. Answer it again.
+                log.debug(format!(
+                    "TFTP duplicate DATA block {block_num}; resending its ACK"
+                ));
+                if !ctx.send(&last_ack).await {
+                    break;
+                }
+                continue;
+            }
+            if finished || block_num != last_block.wrapping_add(1) {
+                log.debug(format!(
+                    "TFTP DATA block {block_num} out of sequence (expected {}); ignored",
+                    last_block.wrapping_add(1)
+                ));
+                continue;
+            }
+
+            // Summary FileOnly: the tftp_data_block event template renders
+            // the equivalent line to the TUI.
+            log.debug(format!(
+                "TFTP received DATA block {} ({} bytes)",
+                block_num,
+                block_data.len()
+            ));
+
+            if let Some(transfer) = ctx.transfers.lock().await.get_mut(&ctx.transfer_id) {
+                transfer.current_block = block_num;
+            }
+            ctx.app_state
+                .update_tftp_connection_block(
+                    ctx.server_id,
+                    ctx.connection_id,
+                    block_num,
+                    block_data.len(),
+                )
+                .await;
+
+            let is_final = block_data.len() < BLOCK_SIZE;
+            let mut event_data = serde_json::json!({
+                "block_number": block_num,
+                "data_hex": hex::encode(block_data),
+                "data_length": block_data.len(),
+                "is_final": is_final,
+            });
+            if let Ok(text) = std::str::from_utf8(block_data) {
+                event_data["data"] = text.into();
+            }
+            let event = Event::new(&TFTP_DATA_BLOCK_EVENT, event_data);
+
+            match call_llm(
+                &llm_client,
+                &ctx.app_state,
+                ctx.server_id,
+                Some(ctx.connection_id),
+                &event,
+                protocol.as_ref(),
             )
             .await
             {
-                Ok(Ok((n, _))) => {
-                    let data = buffer[..n].to_vec();
-
-                    if data.len() < 4 {
-                        log.debug("TFTP received short packet, ignoring");
-                        continue;
-                    }
-
-                    let opcode = u16::from_be_bytes([data[0], data[1]]);
-                    if opcode != 3 {
-                        log.debug(format!(
-                            "TFTP expected DATA (opcode 3), got opcode {}",
-                            opcode
-                        ));
-                        continue;
-                    }
-
-                    let block_num = u16::from_be_bytes([data[2], data[3]]);
-                    let block_data = &data[4..];
-
-                    // Summary FileOnly: the tftp_data_block event template renders
-                    // the equivalent line to the TUI.
-                    log.debug(format!(
-                        "TFTP received DATA block {} ({} bytes)",
-                        block_num,
-                        block_data.len()
-                    ));
-
-                    app_state
-                        .update_connection_stats(
-                            server_id,
-                            connection_id,
-                            Some(n as u64),
-                            None,
-                            Some(1),
-                            None,
-                        )
-                        .await;
-
-                    // Update transfer state
-                    if let Some(transfer) = transfers.lock().await.get_mut(&transfer_id) {
-                        transfer.current_block = block_num;
-                    }
-
-                    app_state
-                        .update_tftp_connection_block(
-                            server_id,
-                            connection_id,
-                            block_num,
-                            block_data.len(),
-                        )
-                        .await;
-
-                    // Call LLM with data block event
-                    let is_final = block_data.len() < 512;
-                    let event = Event::new(
-                        &TFTP_DATA_BLOCK_EVENT,
-                        serde_json::json!({
-                            "block_number": block_num,
-                            "data_hex": hex::encode(block_data),
-                            "data_length": block_data.len(),
-                            "is_final": is_final,
-                        }),
+                Ok(execution_result) => {
+                    let decision = Self::classify_outcome(&execution_result);
+                    Self::log_decision(
+                        &log,
+                        decision,
+                        "DATA block",
+                        ctx.peer_addr,
+                        &execution_result,
                     );
-
-                    match call_llm(
-                        &llm_client,
-                        &app_state,
-                        server_id,
-                        Some(connection_id),
-                        &event,
-                        protocol.as_ref(),
-                    )
-                    .await
-                    {
-                        Ok(execution_result) => {
-                            let decision = Self::classify_outcome(&execution_result);
-                            Self::log_decision(
-                                &log,
-                                decision,
-                                "DATA block",
-                                peer_addr,
-                                &execution_result,
-                            );
-
-                            // Process ACK packets
-                            let mut aborted = false;
-                            for protocol_result in execution_result.protocol_results {
-                                if let crate::llm::actions::protocol_trait::ActionResult::Output(
-                                    packet,
-                                ) = protocol_result
-                                {
-                                    if let Err(e) = socket.send_to(&packet, peer_addr).await {
-                                        log.error(format!(
-                                            "TFTP failed to send packet to {peer_addr}: {e}"
-                                        ));
-                                        continue;
-                                    }
-
-                                    app_state
-                                        .update_connection_stats(
-                                            server_id,
-                                            connection_id,
-                                            None,
-                                            Some(packet.len() as u64),
-                                            None,
-                                            Some(1),
-                                        )
-                                        .await;
-
-                                    // The handler is allowed to abort an upload with
-                                    // send_tftp_error. That used to be written to the wire and
-                                    // then ignored: the loop went straight back to waiting for
-                                    // the next DATA block, so a refused upload kept its socket
-                                    // and its connection entry until the ten-second timeout.
-                                    if Self::packet_opcode(&packet) == Some(OP_ERROR) {
-                                        log.debug(
-                                            "TFTP sent ERROR during upload, transfer terminated",
-                                        );
-                                        aborted = true;
-                                    } else {
-                                        log.debug(format!("TFTP sent ACK for block {}", block_num));
-                                    }
-                                }
-                            }
-
-                            if aborted {
-                                transfers.lock().await.remove(&transfer_id);
-                                app_state
-                                    .close_connection_on_server(server_id, connection_id)
-                                    .await;
-                                break;
-                            }
-
-                            // If final block, close transfer
-                            if is_final {
-                                log.debug(format!(
-                                    "TFTP write transfer complete (final block {} received)",
-                                    block_num
-                                ));
-                                transfers.lock().await.remove(&transfer_id);
-                                app_state
-                                    .close_connection_on_server(server_id, connection_id)
-                                    .await;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            // The client is waiting for an ACK for the block it just
-                            // sent; answer with ERROR rather than leaving it to retransmit
-                            // into a socket nobody is reading any more.
-                            Self::fail_transfer_on_llm_error(
-                                &socket,
-                                peer_addr,
-                                transfer_id,
-                                "write data block",
-                                &e,
-                                server_id,
-                                connection_id,
-                                &app_state,
-                                &status_tx,
-                                &transfers,
-                            )
-                            .await;
-                            break;
-                        }
+                    let Some(answer) = Self::write_answer(execution_result) else {
+                        ctx.end_unanswered("DATA block").await;
+                        return;
+                    };
+                    if !ctx.send(&answer).await {
+                        break;
+                    }
+                    // The handler is allowed to abort an upload with send_tftp_error.
+                    if Self::packet_opcode(&answer) == Some(OP_ERROR) {
+                        log.debug("TFTP sent ERROR during upload, transfer terminated");
+                        break;
+                    }
+                    log.debug(format!("TFTP sent ACK for block {}", block_num));
+                    last_ack = answer;
+                    last_block = block_num;
+                    sends = 1;
+                    if is_final {
+                        log.debug(format!(
+                            "TFTP write transfer complete (final block {} received)",
+                            block_num
+                        ));
+                        finished = true;
                     }
                 }
-                Ok(Err(e)) => {
-                    log.error(format!("TFTP socket error: {}", e));
-                    transfers.lock().await.remove(&transfer_id);
-                    app_state
-                        .close_connection_on_server(server_id, connection_id)
-                        .await;
-                    break;
-                }
-                Err(_) => {
-                    log.debug("TFTP timeout waiting for DATA");
-                    transfers.lock().await.remove(&transfer_id);
-                    app_state
-                        .close_connection_on_server(server_id, connection_id)
-                        .await;
-                    break;
+                Err(e) => {
+                    // The client is waiting for an ACK for the block it just sent; answer
+                    // with ERROR rather than leaving it to retransmit into a socket nobody is
+                    // reading any more.
+                    ctx.fail_on_llm_error("write data block", &e).await;
+                    return;
                 }
             }
         }
+        ctx.teardown().await;
     }
 
     /// What the handler produced for one TFTP event, as a stable `decision=` token.
@@ -1198,12 +1151,16 @@ impl TftpServer {
             .flat_map(|r| r.get_all_output())
             .collect();
 
+        let file = result.protocol_results.iter().any(|r| {
+            matches!(r, crate::llm::actions::protocol_trait::ActionResult::Custom { name, .. }
+                if name == FILE_RESULT)
+        });
         if outputs
             .iter()
             .any(|p| Self::packet_opcode(p) == Some(OP_ERROR))
         {
             "model_reject"
-        } else if !outputs.is_empty() {
+        } else if file || !outputs.is_empty() {
             "model_answer"
         } else if !result.failures.is_empty() {
             "fail_closed_bad_action"
@@ -1241,17 +1198,32 @@ impl TftpServer {
                     .collect::<Vec<_>>()
                     .join("; ");
                 log.error(format!(
-                    "TFTP {} from {} decision=fail_closed_bad_action ({}); nothing was sent and \
-                     the transfer is left for the client to time out",
+                    "TFTP {} from {} decision=fail_closed_bad_action ({}); the client is sent \
+                     ERROR 0 and the transfer ends",
                     stage, peer_addr, detail
                 ))
             }
             _ => log.warn(format!(
-                "TFTP {} from {} decision=model_silent; nothing was sent and the transfer is \
-                 left for the client to time out",
+                "TFTP {} from {} decision=model_silent; the client is sent ERROR 0 and the \
+                 transfer ends",
                 stage, peer_addr
             )),
         }
+    }
+
+    /// Whether a request from `peer` starts a new transfer: not while one from the same
+    /// address and port is registered or still being set up. A client retransmits its RRQ
+    /// or WRQ when the first answer is slow, and a model is slow; each copy used to start a
+    /// transfer of its own, on a TID of its own, and the client then received two streams.
+    async fn claim_request(
+        pending: &Arc<std::sync::Mutex<std::collections::HashSet<SocketAddr>>>,
+        transfers: &Arc<Mutex<HashMap<TransferId, TftpTransfer>>>,
+        peer: SocketAddr,
+    ) -> bool {
+        if transfers.lock().await.contains_key(&TransferId::new(peer)) {
+            return false;
+        }
+        pending.lock().unwrap().insert(peer)
     }
 
     /// The opcode of a packet the handler produced, or `None` if it is too short to have one.

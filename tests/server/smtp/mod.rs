@@ -1,6 +1,8 @@
 mod answer_with_test;
 mod batching_test;
 mod connection_bounds_test;
+mod data_framing_test;
 mod llm_failure_test;
 mod peer_inject_test;
+mod real_client_test;
 mod test;

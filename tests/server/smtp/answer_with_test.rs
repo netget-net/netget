@@ -10,7 +10,7 @@
 //! * a second reply to one command is dropped and logged `decision=duplicate_response_dropped`,
 //!   because SMTP reads it as the answer to the *next* command;
 //! * between a 354 and the terminating `.`, a line is message text - `EHLO` in a body is not
-//!   answered by NetGet and reaches the model as a body line.
+//!   answered by NetGet, and reaches the model inside the one event for the whole message.
 
 use crate::server::helpers::{start_netget_server, E2EResult, NetGetConfig};
 use std::time::Duration;
@@ -53,14 +53,10 @@ async fn each_command_is_told_its_answer_and_gets_exactly_one() -> E2EResult<()>
             ]))
             .expect_calls(1)
             .and()
-            // A body line: told it takes no reply.
-            .on_event("smtp_command")
-            .and_event_data_contains("answer_with", "wait_for_more")
-            .respond_with_actions(serde_json::json!([{"type": "wait_for_more"}]))
-            .expect_calls(1)
-            .and()
+            // The whole message, once: the body line that looks like a command is in it.
             .on_event("smtp_command")
             .and_event_data_contains("answer_with", "accept the message")
+            .and_event_data_contains("body", "EHLO this is a line of the body")
             .respond_with_actions(serde_json::json!([
                 {"type": "send_smtp_ok", "message": "queued"}
             ]))
@@ -111,6 +107,7 @@ async fn each_command_is_told_its_answer_and_gets_exactly_one() -> E2EResult<()>
         "250-mail.test greets client.test\r\n",
         "EHLO must be answered by its own reply, not by the dropped second banner"
     );
+    assert_eq!(read_line(&mut reader).await?, "250-SIZE 10485760\r\n");
     assert_eq!(read_line(&mut reader).await?, "250 8BITMIME\r\n");
 
     write_half
@@ -135,8 +132,8 @@ async fn each_command_is_told_its_answer_and_gets_exactly_one() -> E2EResult<()>
     write_half.write_all(b"DATA\r\n").await?;
     assert!(read_line(&mut reader).await?.starts_with("354 "));
 
-    // Message text that looks like a command. NetGet must not answer it, and the model is
-    // told it takes no reply; the next line the client reads is the answer to ".".
+    // Message text that looks like a command. NetGet must not answer it, and the model sees
+    // it only inside the message; the next line the client reads is the answer to ".".
     write_half
         .write_all(b"EHLO this is a line of the body\r\n.\r\n")
         .await?;
