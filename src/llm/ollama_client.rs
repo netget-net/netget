@@ -1720,15 +1720,28 @@ impl OllamaClient {
                 anyhow::anyhow!("LLM backend rejected credential-bearing request; details hidden")
             }
         };
+        if let Some(state) = &self.app_state {
+            match &result {
+                Ok(_) => state.clear_llm_backend_failure(),
+                // An unreachable endpoint or a timeout is raised before any response exists,
+                // so `report_backend_failure` (which handles refusals) never sees it; record it
+                // here, or `get_status` reports nothing wrong while every request fails.
+                Err(e) => {
+                    if let Some(backend) = crate::llm::LlmBackendError::find(e) {
+                        let shown = if private_payloads {
+                            backend.without_detail()
+                        } else {
+                            backend.clone()
+                        };
+                        state.note_llm_backend_failure(shown.to_string());
+                    }
+                }
+            }
+        }
         let Some(permit) = permit else {
             return result.map_err(hide_error);
         };
 
-        if result.is_ok() {
-            if let Some(state) = &self.app_state {
-                state.clear_llm_backend_failure();
-            }
-        }
         match &result {
             Ok(_) => permit.record_success(),
             Err(e) if is_transport_failure(e) => {

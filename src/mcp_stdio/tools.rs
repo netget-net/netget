@@ -213,6 +213,8 @@ pub struct StartServerParams {
     ///     `message`; HTTP `http_request` has `method`/`path`/`headers`/`body`).
     ///   - {"type":"static","actions":[ ... ]} — always emit these fixed actions.
     ///   - {"type":"llm","instruction":"..."} — fall back to the LLM (reasoning).
+    ///   - {"type":"manual","timeout_secs":300} — park the event for YOU: list_intercepts
+    ///     shows it, answer_intercept answers it; unanswered, it fails closed at the timeout.
     ///
     /// Example — a Telnet echo server with ZERO LLM calls (echoes each line back
     /// verbatim):
@@ -316,7 +318,8 @@ pub struct StartClientParams {
     /// Same shape as start_server's: an array of
     /// { "event_pattern": "<event id>" | "*", "handler": {...} }, matched in
     /// order, first match wins; `handler` is one of {"type":"script",...},
-    /// {"type":"static","actions":[...]} or {"type":"llm","instruction":"..."}.
+    /// {"type":"static","actions":[...]}, {"type":"llm","instruction":"..."} or
+    /// {"type":"manual","timeout_secs":300} (parked for list_intercepts / answer_intercept).
     /// Use get_protocol_docs for the protocol's client event ids and action names.
     #[serde(default)]
     pub event_handlers: Option<Vec<serde_json::Value>>,
@@ -954,6 +957,14 @@ fn mptcp_suffix(value: Option<&serde_json::Value>) -> String {
         .unwrap_or_default()
 }
 
+/// Whether some event of an instance with this routing table can reach the model.
+fn reaches_model(routing: Option<&crate::scripting::EventHandlerConfig>) -> bool {
+    routing.is_none_or(|r| r.may_reach_model())
+}
+
+/// How long `start_server` / `start_client` wait to ask the model backend whether it works.
+const MODEL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The port a server is actually listening on.
 ///
 /// `ServerInstance::port` is the port that was *requested*, which is `0` for an OS-assigned
@@ -972,6 +983,59 @@ fn bound_port(server: &crate::state::server::ServerInstance) -> u16 {
         .map(|a| a.port())
         .filter(|p| *p != 0)
         .unwrap_or(server.port)
+}
+
+impl NetGetMcpService {
+    /// One line warning that the model backend an instance is about to depend on does not
+    /// work, or `None` when it does (or cannot be asked: the agent queue, the host bridge).
+    ///
+    /// Asked live, with a short bound, because the alternative is what a caller used to see:
+    /// a server reported as started, and every request it received failing closed with
+    /// nothing anywhere in the result saying the model was unreachable.
+    async fn model_backend_warning(&self) -> Option<String> {
+        use crate::llm::model_selection::{
+            check_model, describe_endpoint, listed_models, summarize_models, ModelAvailability,
+        };
+        let client = &self.state.llm_client;
+        let endpoint = describe_endpoint(client);
+        let model = self.state.app_state.get_ollama_model().await;
+        let problem = match tokio::time::timeout(MODEL_PROBE_TIMEOUT, async {
+            match &model {
+                Some(model) => match check_model(client, model).await {
+                    ModelAvailability::Installed | ModelAvailability::NotApplicable => None,
+                    ModelAvailability::NotInstalled { installed } => Some(format!(
+                        "the model '{model}' is not installed at {endpoint} (installed: {})",
+                        summarize_models(&installed)
+                    )),
+                    ModelAvailability::Unknown { reason } => {
+                        Some(format!("{endpoint} cannot be reached ({reason})"))
+                    }
+                },
+                None => match listed_models(client).await {
+                    None => None,
+                    Some(Ok(models)) if models.is_empty() => {
+                        Some(format!("{endpoint} has no models installed"))
+                    }
+                    Some(Ok(_)) => None,
+                    Some(Err(e)) => Some(format!("{endpoint} cannot be reached ({e:#})")),
+                },
+            }
+        })
+        .await
+        {
+            Ok(problem) => problem,
+            Err(_) => Some(format!(
+                "{endpoint} did not answer within {}s",
+                MODEL_PROBE_TIMEOUT.as_secs()
+            )),
+        }?;
+        Some(format!(
+            "WARNING: events no event handler answers go to the model, and {problem}. Each such \
+             event fails closed until that is fixed: start the backend, choose a model with \
+             set_model (get_status checks it), or answer with event_handlers (static, script \
+             or manual) instead."
+        ))
+    }
 }
 
 // === Tool implementations ===
@@ -1402,10 +1466,12 @@ impl NetGetMcpService {
         }
 
         // Collect startup status messages. Control sentinels (`__UPDATE_UI__`, a protocol
-        // asking the dashboard to repaint) share the stream and are not for the caller.
+        // asking the dashboard to repaint) share the stream and are not for the caller, and
+        // the startup path's own `[SERVER] Starting … / listening on …` lines repeat what the
+        // first line of the result says.
         let mut messages = Vec::new();
         while let Ok(msg) = status_rx.try_recv() {
-            if !crate::utils::is_status_control_line(&msg) {
+            if !crate::utils::is_status_control_line(&msg) && !msg.starts_with("[SERVER] ") {
                 messages.push(msg);
             }
         }
@@ -1418,13 +1484,36 @@ impl NetGetMcpService {
             .filter(|c| !messages.iter().any(|m| m.contains(&c.path)))
             .map(|c| format!("\nCapturing to {}", c.path))
             .unwrap_or_default();
-        let result = format!(
-            "Server #{} ({}) started.\n{}{}",
-            server_id.as_u32(),
-            params.protocol,
-            messages.join("\n"),
-            capturing
-        );
+        let server = self.state.app_state.get_server(server_id).await;
+        // First line: where it is. A caller's next step is to point something at it, so the
+        // address leads instead of sitting in the third of several log lines.
+        let headline = match server.as_ref().and_then(|s| s.local_addr) {
+            Some(addr) => format!(
+                "Server #{} ({}) listening on {}.",
+                server_id.as_u32(),
+                params.protocol,
+                addr
+            ),
+            None => format!(
+                "Server #{} ({}) started (no listening socket).",
+                server_id.as_u32(),
+                params.protocol
+            ),
+        };
+        let consults_model = server.as_ref().is_some_and(|s| {
+            !s.instruction.trim().is_empty() && reaches_model(s.event_handler_config.as_ref())
+        });
+        let mut result = headline;
+        if consults_model {
+            if let Some(warning) = self.model_backend_warning().await {
+                result.push_str(&format!("\n{warning}"));
+            }
+        }
+        if !messages.is_empty() {
+            result.push('\n');
+            result.push_str(&messages.join("\n"));
+        }
+        result.push_str(&capturing);
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -2289,18 +2378,33 @@ impl NetGetMcpService {
             .and_then(|c| c.get_protocol_field("connect_note").cloned())
             .and_then(|v| v.as_str().map(|s| format!("\n{s}")))
             .unwrap_or_default();
+        let consults_model = self
+            .state
+            .app_state
+            .get_client(client_id)
+            .await
+            .is_some_and(|c| reaches_model(c.event_handler_config.as_ref()));
+        let model_warning = if consults_model {
+            self.model_backend_warning()
+                .await
+                .map(|w| format!("\n{w}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Client #{} ({}) connected to {}.{}{}",
+            "Client #{} ({}) connected to {}.{}{}{}",
             client_id.as_u32(),
             params.protocol,
             params.remote_addr,
+            model_warning,
             connect_note,
             capturing
         ))]))
     }
 
     #[tool(
-        description = "Stop a client by its ID. Aborts every background task the client owns (read loop, transport driver, in-flight requests), which releases its socket and stops any further LLM calls, then drops it from NetGet's state so it disappears from list_clients and client_status. Note that a handful of client protocols do not yet register their tasks; for those this still only drops the bookkeeping — see src/mcp_stdio/CLAUDE.md for the current list."
+        description = "Stop a client by its ID. Aborts every background task the client owns (read loop, transport driver, in-flight requests), which releases its socket and stops any further LLM calls, then drops it from NetGet's state so it disappears from list_clients and client_status. A task a client protocol spawned without registering it is not reached by this."
     )]
     async fn stop_client(
         &self,
@@ -3377,6 +3481,17 @@ pub(super) fn summarize_response(response: &[serde_json::Value]) -> String {
         .iter()
         .map(|a| {
             let ty = a.get("type").and_then(|v| v.as_str()).unwrap_or("action");
+            // A failure carries its reason; without it the line read "FAILED: redis_command"
+            // whether the model was unreachable, timed out or answered nonsense.
+            if ty.starts_with(crate::llm::actions::executor::FAILED_ACTION_TYPE_PREFIX) {
+                if let Some(error) = a.get("error").and_then(|v| v.as_str()) {
+                    return format!(
+                        "{} ({})",
+                        ty,
+                        crate::utils::truncate_with_suffix(error, 200, "…")
+                    );
+                }
+            }
             // Surface an HTTP status code if present
             match a
                 .get("status_code")

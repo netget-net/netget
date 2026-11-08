@@ -20,6 +20,10 @@
 
 #![cfg(feature = "mcp-stdio")]
 
+use std::time::Duration;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use clap::Parser;
 use netget::cli::Args;
 use netget::mcp_stdio::tools::NetGetMcpService;
@@ -79,6 +83,127 @@ fn static_http_handlers() -> serde_json::Value {
             {"type": "send_http_response", "status": 200, "body": "hello"}
         ]}
     }])
+}
+
+#[tokio::test]
+async fn start_server_leads_with_the_address_and_warns_when_the_model_is_unreachable() {
+    let client = connect(&[
+        "netget",
+        "--ollama-url",
+        UNREACHABLE_OLLAMA,
+        "--model",
+        "qwen3:8b",
+    ])
+    .await;
+
+    // A server every event of which a rule answers: the address first, no model warning, and
+    // the startup path's own "[SERVER] Starting … / listening on …" lines not repeated.
+    let started = call(
+        &client,
+        "start_server",
+        serde_json::json!({"protocol": "http", "port": 0, "event_handlers": static_http_handlers()}),
+    )
+    .await;
+    let text = text_of(&started);
+    assert_ne!(started.is_error, Some(true), "{text}");
+    let first = text.lines().next().unwrap_or_default();
+    assert!(
+        first.starts_with("Server #") && first.contains("(HTTP) listening on 127.0.0.1:"),
+        "the first line names the address: {text}"
+    );
+    assert!(
+        !text.contains("[SERVER]"),
+        "no repeated startup lines: {text}"
+    );
+    assert!(
+        !text.contains("WARNING"),
+        "a server no event of which reaches the model needs no model: {text}"
+    );
+
+    // A server answered by the model, with the model unreachable: said in the result.
+    let started = call(
+        &client,
+        "start_server",
+        serde_json::json!({"protocol": "redis", "port": 0, "instruction": "Answer PING with PONG."}),
+    )
+    .await;
+    let text = text_of(&started);
+    assert_ne!(started.is_error, Some(true), "{text}");
+    assert!(
+        text.contains("WARNING") && text.contains("cannot be reached"),
+        "the result says the model the server depends on is unreachable: {text}"
+    );
+    let server_id = number_after(&text, "Server #");
+    let port = number_after(&text, "listening on 127.0.0.1:");
+
+    // One request, which fails closed. Async I/O: a blocking read would park the test's only
+    // runtime thread, which is the one the server answers on.
+    let mut peer = tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+        .await
+        .expect("connect to redis");
+    peer.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
+    let mut reply = [0u8; 256];
+    let n = tokio::time::timeout(Duration::from_secs(20), peer.read(&mut reply))
+        .await
+        .expect("a reply within 20s")
+        .expect("redis reply");
+    assert!(
+        reply[..n].starts_with(b"-"),
+        "the peer gets an error reply: {:?}",
+        String::from_utf8_lossy(&reply[..n])
+    );
+
+    // get_status names the failure: an unreachable endpoint is raised before any response
+    // exists, which is the case the backend-failure record used to miss.
+    let status = text_of(&call(&client, "get_status", serde_json::json!({})).await);
+    assert!(
+        status.contains("Last LLM backend failure") && status.contains("127.0.0.1:1"),
+        "get_status names the unreachable backend: {status}"
+    );
+
+    // The access log and the server's status say why the event failed.
+    let logs = text_of(
+        &call(
+            &client,
+            "list_access_logs",
+            serde_json::json!({"server_id": server_id}),
+        )
+        .await,
+    );
+    assert!(
+        logs.contains("FAILED: redis_command (") && logs.contains("127.0.0.1:1"),
+        "the summary carries the reason: {logs}"
+    );
+    let server = text_of(
+        &call(
+            &client,
+            "server_status",
+            serde_json::json!({"server_id": server_id}),
+        )
+        .await,
+    );
+    assert!(
+        server.contains("1 failed with no answer"),
+        "the counters say the event failed rather than that it was answered: {server}"
+    );
+    assert!(
+        server.contains("Actions answered with**: 0"),
+        "a failure is not an action: {server}"
+    );
+
+    // A client with no handlers depends on the model too.
+    let connected = call(
+        &client,
+        "start_client",
+        serde_json::json!({"protocol": "redis", "remote_addr": format!("127.0.0.1:{port}")}),
+    )
+    .await;
+    let text = text_of(&connected);
+    assert_ne!(connected.is_error, Some(true), "{text}");
+    assert!(
+        text.contains("WARNING") && text.contains("cannot be reached"),
+        "start_client warns too: {text}"
+    );
 }
 
 #[tokio::test]
