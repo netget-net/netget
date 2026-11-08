@@ -576,7 +576,9 @@ pub static DICT_DEFINE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
     EventType::new(
         "dict_define",
         "Client sent DEFINE: look up a word. database is a name from your database list, '*' \
-         (all databases) or '!' (stop at the first database that has it).",
+         (all databases) or '!' (stop at the first database that has it). A word your \
+         instructions give no definition for is no match: answer send_dict_error with code \
+         552.",
         json!({
             "type": "send_dict_definitions",
             "word": "serendipity",
