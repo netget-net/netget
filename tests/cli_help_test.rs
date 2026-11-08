@@ -35,8 +35,8 @@ fn help_is_grouped_indented_and_states_the_real_defaults() {
     // Examples keep their indentation.
     assert!(help.contains("\n    netget --mcp\n"), "{help}");
     // The queue-timeout default is the constant's, not a copy that drifted from it.
-    let queue = &help[help.find("--llm-queue-timeout").unwrap()..];
-    let queue = &queue[..queue.find("--llm-max-queued").unwrap()];
+    let queue = &help[help.find("--llm-queue-timeout <SECONDS>").unwrap()..];
+    let queue = &queue[..queue.find("--llm-max-queued <NUM>").unwrap()];
     assert!(
         queue.contains(&format!(
             "Default: {}",
