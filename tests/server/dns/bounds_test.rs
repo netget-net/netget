@@ -43,11 +43,8 @@ const DNS_RECV_BUFFER: usize = 4096;
 /// *claims* every question, so a decoder handed the first 4096 bytes runs off the end of the
 /// last one and errors, rather than quietly parsing a shorter message.
 fn oversize_query(first_domain: &str, min_len: usize) -> (Vec<u8>, u16) {
-    let mut message = DnsMessage::new();
-    message.set_id(0x4242);
-    message.set_message_type(MessageType::Query);
-    message.set_op_code(OpCode::Query);
-    message.set_recursion_desired(true);
+    let mut message = DnsMessage::new(0x4242, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = true;
     message.add_query(Query::query(
         Name::from_str(first_domain).expect("valid name"),
         RecordType::A,
@@ -57,7 +54,7 @@ fn oversize_query(first_domain: &str, min_len: usize) -> (Vec<u8>, u16) {
     loop {
         let bytes = message.to_vec().expect("a query must encode");
         if bytes.len() >= min_len {
-            return (bytes, message.queries().len() as u16);
+            return (bytes, message.queries.len() as u16);
         }
         // Distinct names, so nothing is compressed away into a pointer.
         let name = format!("pad{filler}.filler-{filler}.example.invalid.");
@@ -130,7 +127,7 @@ async fn test_a_datagram_past_the_receive_buffer_is_dropped_and_never_asked() ->
     // The pcap oracle over the *success* path. `llm_failure_test.rs` runs it over a SERVFAIL,
     // which is the reply most likely to have counts that disagree with its body — but until
     // this call the oracle had never read a NOERROR answer with rdata in it, because every
-    // other success-path test drives hickory-client and never sees bytes. An independent
+    // other success-path test drives hickory-net and never sees bytes. An independent
     // dissector reading an A record is a different assertion from hickory decoding what
     // hickory encoded.
     crate::helpers::pcap_oracle::PcapOracle::udp("dns")
@@ -139,8 +136,8 @@ async fn test_a_datagram_past_the_receive_buffer_is_dropped_and_never_asked() ->
         .assert_clean();
 
     let answer = DnsMessage::from_vec(&buf[..n]).expect("the reply must be a DNS message");
-    assert_eq!(answer.id(), 0x4242, "the transaction id must come back");
-    assert_eq!(answer.answers().len(), 1, "one A record");
+    assert_eq!(answer.id, 0x4242, "the transaction id must come back");
+    assert_eq!(answer.answers.len(), 1, "one A record");
 
     // -- the bound: 8 KiB is dropped without a reply and without a prompt --------------
     let (big, questions) = oversize_query("bounds.example.com.", 2 * DNS_RECV_BUFFER);

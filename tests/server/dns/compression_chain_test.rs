@@ -1,18 +1,21 @@
 //! A DNS message whose name-compression pointers chain backwards ~2 000 times, sent to the
 //! running server in one UDP datagram.
 //!
-//! `hickory-proto` 0.24.4 follows a compression pointer by recursing (`rr/domain/name.rs:1203`)
-//! and counts nothing, so each two-byte pointer aiming two bytes further back is one more stack
-//! frame. Measured: a debug build overflows a 2 MiB tokio worker at 1 702 links — a 3 448-byte
+//! `hickory-proto` 0.24 and 0.25 follow a compression pointer by recursing and count nothing,
+//! so each two-byte pointer aiming two bytes further back is one more stack frame. Measured
+//! against 0.24.4: a debug build overflows a 2 MiB tokio worker at 1 702 links — a 3 448-byte
 //! message, inside the server's 4 096-byte receive buffer. A stack overflow is not a panic; it
-//! aborts the whole process, every other server it runs included.
+//! aborts the whole process, every other server it runs included. NetGet decodes with 0.26.3,
+//! which follows pointers in a loop, so this test now holds the screen in place as the second
+//! line rather than the only one.
 //!
 //! The guard is `netget::utils::dns_screen`, which every DNS decode site in NetGet calls before
 //! hickory: it computes the deepest pointer chain any offset could start and refuses the message
 //! past `MAX_POINTER_HOPS` (127, the most a 255-octet name can legitimately need). The
 //! datagram is dropped and logged, which is how this server treats every unparseable query —
-//! and the server goes on answering. Without the guard the legal query after the bomb is never
-//! answered, because the process that would answer it is gone.
+//! and the server goes on answering. Without the guard the refusal is never logged and the
+//! bomb reaches the model as a query; with a decoder that recursed, the legal query after it
+//! would never be answered, because the process that would answer it would be gone.
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
 use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query};
@@ -51,11 +54,8 @@ fn pointer_chain(links: usize) -> Vec<u8> {
 }
 
 fn a_query(domain: &str, id: u16) -> Vec<u8> {
-    let mut message = DnsMessage::new();
-    message.set_id(id);
-    message.set_message_type(MessageType::Query);
-    message.set_op_code(OpCode::Query);
-    message.set_recursion_desired(true);
+    let mut message = DnsMessage::new(id, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = true;
     message.add_query(Query::query(
         Name::from_str(domain).expect("valid name"),
         RecordType::A,
@@ -82,7 +82,7 @@ fn the_screen_refuses_exactly_past_the_hop_limit() {
 
     // Ordinary compression — a response naming the question's name by pointer — passes.
     let mut response = DnsMessage::from_vec(&a_query("www.example.com.", 7)).unwrap();
-    response.set_message_type(MessageType::Response);
+    response.metadata.message_type = MessageType::Response;
     response.add_answer(hickory_proto::rr::Record::from_rdata(
         Name::from_str("www.example.com.").unwrap(),
         60,
@@ -154,8 +154,8 @@ async fn a_pointer_chain_bomb_is_dropped_and_the_server_keeps_answering() -> E2E
              inside hickory's name decoder"
         })??;
     let reply = DnsMessage::from_vec(&buf[..n])?;
-    assert_eq!(reply.id(), 0x5151);
-    assert_eq!(reply.answers().len(), 1);
+    assert_eq!(reply.id, 0x5151);
+    assert_eq!(reply.answers.len(), 1);
 
     server.wait_for_mocks(30).await;
     server.verify_mocks().await?;

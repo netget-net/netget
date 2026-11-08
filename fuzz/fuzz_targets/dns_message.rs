@@ -16,15 +16,18 @@
 //! or recurses. That is the same class as the six overflows this harness exists for, sitting
 //! in a dependency rather than in `src/`.
 //!
-//! There is one, found by reading rather than by this target: `hickory-proto` 0.24 follows a
-//! compression pointer by recursing, one frame per hop, and a chain of pointers each aiming two
-//! bytes back overflows a debug build's 2 MiB worker at ~1 700 hops — 3.4 KB. The NetGet-side
-//! fix is `utils::dns_screen`, which every decode site now calls first, so this target runs the
-//! same pair the servers do: **anything the screen accepts, the decoder must survive.**
-//! `corpus/dns_message/pointer_chain_bomb` is the depth seed. It does not crash this target
-//! with the screen removed — libFuzzer runs on the 8 MiB main thread, and an optimised frame is
-//! ~155 bytes — so the regression for the overflow is `tests/server/dns/compression_chain_test.rs`
-//! against the debug server, not this target.
+//! There was one, found by reading rather than by this target: `hickory-proto` 0.24 and 0.25
+//! follow a compression pointer by recursing, one frame per hop, and a chain of pointers each
+//! aiming two bytes back overflows a debug build's 2 MiB worker at ~1 700 hops — 3.4 KB.
+//! `hickory-proto` 0.26, which NetGet and this target use, follows pointers in a loop. NetGet's
+//! `utils::dns_screen` still runs first at every decode site (it also bounds the work a chain
+//! costs), so this target runs the same pair the servers do: **anything the screen accepts,
+//! the decoder must survive.** `corpus/dns_message/pointer_chain_bomb` (8 001 hops) is the
+//! depth seed the screen refuses; `pointer_chain_at_limit` (127 hops) is the deepest chain it
+//! passes, and 0.26 decodes it; `compression_pointer_loop` (a pointer at itself) passes the
+//! screen and is refused by the decoder's own "target must lie before the name" rule. The
+//! regression for the overflow is `tests/server/dns/compression_chain_test.rs` against the
+//! debug server, not this target: libFuzzer runs on the 8 MiB main thread.
 
 #![no_main]
 
@@ -41,30 +44,30 @@ fuzz_target!(|data: &[u8]| {
 
     // The accessors the servers read before building an event for the model. Each re-walks
     // the decoded records.
-    for q in msg.queries() {
+    for q in &msg.queries {
         let _ = q.name().to_string();
         let _ = q.query_type();
     }
-    for r in msg.answers() {
-        let _ = r.name().to_string();
-        let _ = r.data();
+    for r in &msg.answers {
+        let _ = r.name.to_string();
+        let _ = &r.data;
     }
     // Since October 2026 the DNS server also reads the OPT record (the client's UDP size and
     // DO bit decide truncation and signing) and, for IXFR, the serial of the SOA in the
     // authority section — both from the first message of an unauthenticated peer. With the
     // `dns` feature hickory now decodes DNSSEC rdata too (RRSIG, NSEC, DNSKEY), which a
     // query's sections can carry.
-    if let Some(edns) = msg.extensions() {
+    if let Some(edns) = &msg.edns {
         let _ = edns.max_payload();
-        let _ = edns.dnssec_ok();
+        let _ = edns.flags().dnssec_ok;
     }
-    for r in msg.name_servers().iter().chain(msg.additionals()) {
-        if let Some(hickory_proto::rr::RData::SOA(soa)) = r.data() {
-            let _ = soa.serial();
+    for r in msg.authorities.iter().chain(&msg.additionals) {
+        if let hickory_proto::rr::RData::SOA(soa) = &r.data {
+            let _ = soa.serial;
         }
         // Through NetGet's helper, as the DoH and DoQ clients do: hickory's own Display
         // returns Err for some crafted record data, which `to_string()` turns into a panic.
-        let _ = r.data().and_then(netget::utils::display::try_display);
+        let _ = netget::utils::display::try_display(&r.data);
     }
 
     // A message that decodes must re-encode; `to_vec` is what the servers call on the reply

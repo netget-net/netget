@@ -26,7 +26,7 @@ pub mod actions;
 pub use actions::LlmnrClientProtocol;
 
 use anyhow::{Context, Result};
-use hickory_proto::op::{Header, Message as DnsMessage, MessageType, OpCode, Query};
+use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query};
 use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
 use std::collections::{BTreeSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -510,21 +510,17 @@ impl LlmnrClient {
         // has to guess it.
         let transaction_id: u16 = rand::random();
 
-        let mut message = DnsMessage::new();
-        let mut header = Header::new();
-        header.set_id(transaction_id);
-        header.set_message_type(MessageType::Query);
-        header.set_op_code(OpCode::Query);
+        let mut message = DnsMessage::new(transaction_id, MessageType::Query, OpCode::Query);
+        let header = &mut message.metadata;
         // C = 0: this querier is not reporting a conflict. (DNS's AA bit — do not set it: every
         // other DNS builder in this repo sets AA on an authoritative message, and that line
         // copied to here would change what the packet means.)
-        header.set_authoritative(false);
-        header.set_truncated(false);
+        header.authoritative = false;
+        header.truncation = false;
         // T = 0: tentative is a responder's flag. (DNS's RD bit — a DNS client would set it.)
-        header.set_recursion_desired(false);
+        header.recursion_desired = false;
         // RA is part of LLMNR's Z field and MUST be zero.
-        header.set_recursion_available(false);
-        message.set_header(header);
+        header.recursion_available = false;
 
         let mut question = Query::query(question_name.clone(), question_type);
         question.set_query_class(DNSClass::IN);
@@ -668,25 +664,24 @@ impl LlmnrClient {
         let message = crate::utils::dns_screen::decode_dns_message(data)
             .map_err(|e| format!("not a parseable DNS/LLMNR message ({e})"))?;
 
-        if message.message_type() != MessageType::Response {
+        if message.message_type != MessageType::Response {
             return Err("not a response (QR=0)".to_string());
         }
-        if message.id() != transaction_id {
+        if message.id != transaction_id {
             return Err(format!(
                 "transaction ID mismatch: carried {}, this query used {} — a response with the \
                  wrong ID answers somebody else's question, or nobody's",
-                message.id(),
-                transaction_id
+                message.id, transaction_id
             ));
         }
-        if message.queries().len() != 1 {
+        if message.queries.len() != 1 {
             return Err(format!(
                 "question section not echoed (QDCOUNT={}, must be 1)",
-                message.queries().len()
+                message.queries.len()
             ));
         }
 
-        let echoed = &message.queries()[0];
+        let echoed = &message.queries[0];
         if &echoed.name().to_lowercase() != question_name {
             return Err(format!(
                 "echoed question is for '{}', this query asked for '{}'",
@@ -710,18 +705,18 @@ impl LlmnrClient {
 
         let mut addresses = Vec::new();
         let mut ttl = 0u32;
-        for record in message.answers() {
+        for record in &message.answers {
             if record.record_type() != question_type {
                 continue;
             }
-            let rendered = match record.data() {
-                Some(RData::A(a)) => a.0.to_string(),
-                Some(RData::AAAA(a)) => a.0.to_string(),
-                Some(RData::PTR(ptr)) => ptr.to_string(),
+            let rendered = match &record.data {
+                RData::A(a) => a.0.to_string(),
+                RData::AAAA(a) => a.0.to_string(),
+                RData::PTR(ptr) => ptr.to_string(),
                 _ => continue,
             };
             if addresses.is_empty() {
-                ttl = record.ttl();
+                ttl = record.ttl;
             }
             addresses.push(rendered);
         }

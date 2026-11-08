@@ -4,7 +4,7 @@ pub mod actions;
 pub use actions::DohClientProtocol;
 
 use anyhow::{Context, Result};
-use hickory_proto::op::{Message, Query};
+use hickory_proto::op::{Message, MessageType, OpCode, Query};
 use hickory_proto::rr::{Name, RecordType};
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -620,9 +620,8 @@ impl DohClient {
         };
 
         // Build DNS query message
-        let mut query_msg = Message::new();
-        query_msg.set_id(rand::random());
-        query_msg.set_recursion_desired(true);
+        let mut query_msg = Message::new(rand::random(), MessageType::Query, OpCode::Query);
+        query_msg.metadata.recursion_desired = true;
         query_msg.add_query(Query::query(name, rtype));
 
         // Encode query to DNS wire format
@@ -676,25 +675,23 @@ impl DohClient {
         trace!("DoH response: {:?}", response_msg);
 
         let answers: Vec<serde_json::Value> = response_msg
-            .answers()
+            .answers
             .iter()
             .map(|record| {
                 serde_json::json!({
-                    "name": record.name().to_string(),
+                    "name": record.name.to_string(),
                     "type": record.record_type().to_string(),
-                    "ttl": record.ttl(),
-                    "data": record
-                        .data()
-                        .and_then(crate::utils::display::try_display)
+                    "ttl": record.ttl,
+                    "data": crate::utils::display::try_display(&record.data)
                         .unwrap_or_default(),
                 })
             })
             .collect();
 
-        let status = format!("{:?}", response_msg.response_code());
+        let status = format!("{:?}", response_msg.response_code);
 
         Ok(serde_json::json!({
-            "query_id": response_msg.id(),
+            "query_id": response_msg.id,
             "domain": domain,
             "query_type": record_type,
             "answers": answers,

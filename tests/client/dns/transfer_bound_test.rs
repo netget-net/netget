@@ -46,13 +46,10 @@ async fn wait_for_client_handle(state: &AppState, id: ClientId) {
 
 /// One framed response to `query`, carrying `answers`.
 fn framed_response(query: &Message, answers: Vec<Record>) -> Vec<u8> {
-    let mut m = Message::new();
-    m.set_id(query.id())
-        .set_message_type(MessageType::Response)
-        .set_op_code(query.op_code())
-        .set_authoritative(true)
-        .set_response_code(ResponseCode::NoError);
-    for q in query.queries() {
+    let mut m = Message::new(query.id, MessageType::Response, query.op_code);
+    m.metadata.authoritative = true;
+    m.metadata.response_code = ResponseCode::NoError;
+    for q in &query.queries {
         m.add_query(q.clone());
     }
     m.add_answers(answers);
@@ -76,7 +73,7 @@ async fn hostile_axfr_server(listener: TcpListener, sent: Arc<AtomicUsize>) {
         return;
     }
     let query = Message::from_vec(&buf).expect("the client's AXFR decodes");
-    let zone = query.queries()[0].name().clone();
+    let zone = query.queries[0].name().clone();
 
     let soa = Record::from_rdata(
         zone.clone(),
@@ -177,7 +174,7 @@ async fn bursting_axfr_server(listener: TcpListener, records: usize) {
         return;
     }
     let query = Message::from_vec(&buf).expect("the client's AXFR decodes");
-    let zone = query.queries()[0].name().clone();
+    let zone = query.queries[0].name().clone();
     let soa = Record::from_rdata(
         zone.clone(),
         300,

@@ -504,8 +504,8 @@ impl DnsServer {
                 return Vec::new();
             }
         };
-        let edns = query.extensions().clone();
-        let dnssec_ok = edns.as_ref().is_some_and(|e| e.dnssec_ok());
+        let edns = query.edns.clone();
+        let dnssec_ok = edns.as_ref().is_some_and(|e| e.flags().dnssec_ok);
         let udp_limit = match (&edns, transport) {
             (_, Transport::Tcp) => u16::MAX as usize,
             (Some(e), Transport::Udp) => (e.max_payload() as usize)
@@ -521,7 +521,7 @@ impl DnsServer {
             transport,
         };
 
-        let Some(question) = query.queries().first().cloned() else {
+        let Some(question) = query.queries.first().cloned() else {
             log.warn(format!(
                 "DNS query from {peer_addr} has no question; FORMERR decision=spec_reply"
             ));
@@ -577,7 +577,7 @@ impl DnsServer {
         let event = Event::new(
             &DNS_QUERY_EVENT,
             serde_json::json!({
-                "query_id": query.id(),
+                "query_id": query.id,
                 "domain": question.name().to_string(),
                 "query_type": question.query_type().to_string(),
                 "transport": reply.transport.as_str(),
@@ -660,7 +660,7 @@ impl DnsServer {
         let kind = question.query_type();
         // IXFR carries the serial the client holds as an SOA in the authority section.
         let client_serial = query
-            .name_servers()
+            .authorities
             .iter()
             .find(|r| r.record_type() == RecordType::SOA)
             .and_then(transfer::serial_of);
@@ -669,7 +669,7 @@ impl DnsServer {
             .as_ref()
             .is_some_and(|s| s.zone().to_lowercase() == zone.to_lowercase());
         let mut data = serde_json::json!({
-            "query_id": query.id(),
+            "query_id": query.id,
             "zone": zone.to_string(),
             "transfer_type": kind.to_string(),
             "transport": reply.transport.as_str(),
@@ -719,7 +719,7 @@ impl DnsServer {
                         ));
                         return reply.servfail();
                     };
-                    let decision = if message.response_code() == ResponseCode::Refused {
+                    let decision = if message.response_code == ResponseCode::Refused {
                         "model_reject"
                     } else {
                         "model_answer"
@@ -817,10 +817,10 @@ impl DnsServer {
         let now = now_secs();
         let mut body: Vec<Record> = vec![zone.soa.clone(), signer.dnskey_record()];
         for r in &zone.records {
-            if r.record_type() == RecordType::NS && r.name() != &zone.origin {
+            if r.record_type() == RecordType::NS && r.name != zone.origin {
                 anyhow::bail!(
                     "{} NS is a delegation; a signed zone here holds no delegations",
-                    r.name()
+                    r.name
                 );
             }
             body.push(r.clone());
@@ -925,8 +925,8 @@ impl Reply<'_> {
     /// A reply with only a header, the question and (for EDNS) an OPT.
     fn rcode_only(&self, rcode: ResponseCode) -> Vec<Vec<u8>> {
         let mut message = transfer::response_shell(self.query, rcode);
-        message.set_authoritative(false);
-        for q in self.query.queries() {
+        message.metadata.authoritative = false;
+        for q in &self.query.queries {
             message.add_query(q.clone());
         }
         if let Some(e) = self.response_edns() {
@@ -978,7 +978,7 @@ impl Reply<'_> {
         signer: Option<&ZoneSigner>,
         log: &Log<'_>,
     ) -> Vec<Vec<u8>> {
-        let qname = self.query.queries().first().map(|q| q.name().clone());
+        let qname = self.query.queries.first().map(|q| q.name().clone());
         if let (Some(signer), Some(qname)) = (signer, qname.as_ref()) {
             if self.dnssec_ok && signer.covers(qname) {
                 if let Err(e) = Self::sign_answer(&mut message, signer, qname) {
@@ -1011,9 +1011,9 @@ impl Reply<'_> {
                 bytes.len(),
                 self.udp_limit
             ));
-            let mut truncated = transfer::response_shell(self.query, message.response_code());
-            truncated.set_truncated(true);
-            for q in self.query.queries() {
+            let mut truncated = transfer::response_shell(self.query, message.response_code);
+            truncated.metadata.truncation = true;
+            for q in &self.query.queries {
                 truncated.add_query(q.clone());
             }
             if let Some(e) = self.response_edns() {
@@ -1027,15 +1027,15 @@ impl Reply<'_> {
     /// Sign every in-zone RRset of an answer, and prove a negative one with compact denial.
     fn sign_answer(message: &mut DnsMessage, signer: &ZoneSigner, qname: &Name) -> Result<()> {
         let now = now_secs();
-        let negative = message.response_code() == ResponseCode::NXDomain
-            || (message.response_code() == ResponseCode::NoError && message.answers().is_empty());
-        let mut answers = message.take_answers();
-        let mut authority = message.take_name_servers();
-        let mut additional = message.take_additionals();
+        let negative = message.response_code == ResponseCode::NXDomain
+            || (message.response_code == ResponseCode::NoError && message.answers.is_empty());
+        let mut answers = std::mem::take(&mut message.answers);
+        let mut authority = std::mem::take(&mut message.authorities);
+        let mut additional = std::mem::take(&mut message.additionals);
         if negative {
             let soa = match authority
                 .iter()
-                .find(|r| r.record_type() == RecordType::SOA && signer.covers(r.name()))
+                .find(|r| r.record_type() == RecordType::SOA && signer.covers(&r.name))
             {
                 Some(soa) => soa.clone(),
                 None => {
@@ -1046,7 +1046,7 @@ impl Reply<'_> {
             };
             authority.push(signer.compact_denial(qname, dnssec::negative_ttl(&soa))?);
             // Compact denial answers NOERROR: the NSEC proves the name has no types at all.
-            message.set_response_code(ResponseCode::NoError);
+            message.metadata.response_code = ResponseCode::NoError;
         }
         let answer_sigs = signer.signatures_for(&mut answers, now)?;
         let authority_sigs = signer.signatures_for(&mut authority, now)?;
@@ -1054,10 +1054,10 @@ impl Reply<'_> {
         answers.extend(answer_sigs);
         authority.extend(authority_sigs);
         additional.extend(additional_sigs);
-        message.insert_answers(answers);
-        message.insert_name_servers(authority);
-        message.add_additionals(additional);
-        message.set_authoritative(true);
+        message.answers = answers;
+        message.authorities = authority;
+        message.additionals.extend(additional);
+        message.metadata.authoritative = true;
         Ok(())
     }
 }

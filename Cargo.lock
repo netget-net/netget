@@ -4980,12 +4980,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "endian-type"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
-
-[[package]]
 name = "enum-as-inner"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6339,23 +6333,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "hickory-client"
-version = "0.24.4"
+name = "hickory-net"
+version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "156579a5cd8d1fc6f0df87cc21b6ee870db978a163a1ba484acd98a4eff5a6de"
+checksum = "c480823ed7c2c5d0f09c41020cb6b7c28029ce60ec42dc942158dcf22f8e0a4d"
 dependencies = [
+ "async-trait",
  "cfg-if 1.0.4",
  "data-encoding",
  "futures-channel",
+ "futures-io",
  "futures-util",
- "hickory-proto 0.24.4",
- "once_cell",
- "radix_trie",
- "rand 0.8.5",
- "rustls 0.21.12",
- "thiserror 1.0.69",
+ "hickory-proto 0.26.3",
+ "idna 1.1.0",
+ "ipnet",
+ "jni 0.22.4",
+ "rand 0.10.2",
+ "thiserror 2.0.20",
+ "tinyvec",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -6365,27 +6363,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92652067c9ce6f66ce53cc38d1169daa36e6e7eb7dd3b63b5103bd9d97117248"
 dependencies = [
  "async-trait",
- "bytes",
  "cfg-if 1.0.4",
  "data-encoding",
  "enum-as-inner 0.6.1",
  "futures-channel",
  "futures-io",
  "futures-util",
- "h2 0.3.27",
- "http 0.2.12",
  "idna 1.1.0",
  "ipnet",
  "once_cell",
  "rand 0.8.5",
- "ring 0.17.14",
- "rustls 0.21.12",
- "rustls-pemfile 1.0.4",
- "serde",
  "thiserror 1.0.69",
  "tinyvec",
  "tokio",
- "tokio-rustls 0.24.1",
  "tracing",
  "url",
 ]
@@ -6416,6 +6406,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hickory-proto"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12b92608f679a6fa515dd1d15c1ff89443026e391200a2c840c7afcba482893d"
+dependencies = [
+ "bitflags 2.13.2",
+ "data-encoding",
+ "idna 1.1.0",
+ "ipnet",
+ "jni 0.22.4",
+ "once_cell",
+ "rand 0.10.2",
+ "ring 0.17.14",
+ "rustls-pki-types",
+ "thiserror 2.0.20",
+ "time",
+ "tinyvec",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "hickory-resolver"
 version = "0.24.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6430,12 +6442,9 @@ dependencies = [
  "parking_lot",
  "rand 0.8.5",
  "resolv-conf",
- "rustls 0.21.12",
- "serde",
  "smallvec",
  "thiserror 1.0.69",
  "tokio",
- "tokio-rustls 0.24.1",
  "tracing",
 ]
 
@@ -6457,31 +6466,6 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hickory-server"
-version = "0.24.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "090078aff4e305853f8ccfbc89e6a1eec8a189bcb842be46255a2b660dae9416"
-dependencies = [
- "async-trait",
- "bytes",
- "cfg-if 1.0.4",
- "enum-as-inner 0.6.1",
- "futures-util",
- "h2 0.3.27",
- "hickory-proto 0.24.4",
- "hickory-resolver 0.24.4",
- "http 0.2.12",
- "rustls 0.21.12",
- "serde",
- "thiserror 1.0.69",
- "time",
- "tokio",
- "tokio-rustls 0.24.1",
- "tokio-util",
  "tracing",
 ]
 
@@ -7674,7 +7658,7 @@ checksum = "c6df18c2e3db7e453d3c6ac5b3e9d5182664d28788126d39b91f2d1e22b017ec"
 dependencies = [
  "cesu8",
  "combine",
- "jni-sys",
+ "jni-sys 0.3.0",
  "log",
  "thiserror 1.0.69",
  "walkdir",
@@ -7689,7 +7673,7 @@ dependencies = [
  "cesu8",
  "cfg-if 1.0.4",
  "combine",
- "jni-sys",
+ "jni-sys 0.3.0",
  "log",
  "thiserror 1.0.69",
  "walkdir",
@@ -7697,10 +7681,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "jni"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498"
+dependencies = [
+ "cfg-if 1.0.4",
+ "combine",
+ "jni-macros",
+ "jni-sys 0.4.1",
+ "log",
+ "simd_cesu8",
+ "thiserror 2.0.20",
+ "walkdir",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "jni-macros"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "simd_cesu8",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "jni-sys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
+
+[[package]]
+name = "jni-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
+dependencies = [
+ "jni-sys-macros",
+]
+
+[[package]]
+name = "jni-sys-macros"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "jni-utils"
@@ -9505,9 +9538,8 @@ dependencies = [
  "handlebars",
  "hex",
  "hf-hub",
- "hickory-client",
- "hickory-proto 0.24.4",
- "hickory-server",
+ "hickory-net",
+ "hickory-proto 0.26.3",
  "hkdf 0.12.4",
  "hmac 0.12.1",
  "html2text",
@@ -9888,15 +9920,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-attributes",
-]
-
-[[package]]
-name = "nibble_vec"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
-dependencies = [
- "smallvec",
 ]
 
 [[package]]
@@ -12232,16 +12255,6 @@ name = "radium"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
-
-[[package]]
-name = "radix_trie"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c069c179fcdc6a2fe24d8d18305cf085fdbd4f922c041943e203685d6a1c58fd"
-dependencies = [
- "endian-type",
- "nibble_vec",
-]
 
 [[package]]
 name = "rand"
@@ -14772,6 +14785,16 @@ name = "simd-adler32"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
+
+[[package]]
+name = "simd_cesu8"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11031e251abf8611c80f460e19dbdeb54a66db918e49c65a7065b46ac7aec520"
+dependencies = [
+ "rustc_version",
+ "simdutf8",
+]
 
 [[package]]
 name = "simd_helpers"

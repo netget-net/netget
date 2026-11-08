@@ -366,8 +366,9 @@ impl Protocol for DnsClientProtocol {
             // named logs the AXFR and IXFR it served. Removing the DO bit fails the test.
             .state(DevelopmentState::Beta)
             .implementation(
-                "hickory-client over UDP for queries (each message built by hand, so RD and the \
-                 EDNS DO bit reach the wire); a TCP hickory-client per zone transfer",
+                "hickory-net's client over UDP for queries (each message built by hand, so RD \
+                 and the EDNS DO bit reach the wire, one datagram per query); a TCP connection \
+                 of its own per zone transfer, read one message at a time",
             )
             .llm_control(
                 "Queries (name, type, recursion, DNSSEC) and zone transfers (AXFR, or IXFR from a \

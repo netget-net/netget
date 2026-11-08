@@ -21,10 +21,12 @@
 //! Signatures are valid from an hour before signing to seven days after.
 
 use anyhow::{bail, Context, Result};
-use hickory_proto::rr::dnssec::rdata::{DNSSECRData, DNSKEY, NSEC, RRSIG};
-use hickory_proto::rr::dnssec::{tbs, Algorithm, KeyFormat, KeyPair, Private};
+use hickory_proto::dnssec::crypto::EcdsaSigningKey;
+use hickory_proto::dnssec::rdata::sig::SigInput;
+use hickory_proto::dnssec::rdata::{DNSSECRData, DNSKEY, NSEC, RRSIG};
+use hickory_proto::dnssec::{Algorithm, SigningKey, TBS};
 use hickory_proto::rr::rdata::SOA;
-use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
+use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType, SerialNumber};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The one algorithm: ECDSA P-256 with SHA-256 (13), the algorithm RFC 8624 recommends.
@@ -42,7 +44,7 @@ pub const VALIDITY_SECS: u32 = 7 * 24 * 3600;
 /// The zone's signing key and what is derived from it.
 pub struct ZoneSigner {
     zone: Name,
-    key: KeyPair<Private>,
+    key: EcdsaSigningKey,
     dnskey: DNSKEY,
     key_tag: u16,
     /// The SOA used when the model's answer carries none and a negative answer needs one.
@@ -54,16 +56,16 @@ impl ZoneSigner {
     pub fn generate(zone: Name, now: u32) -> Result<ZoneSigner> {
         let mut zone = zone;
         zone.set_fqdn(true);
-        let pkcs8 = KeyPair::<Private>::generate_pkcs8(ALGORITHM)
+        let pkcs8 = EcdsaSigningKey::generate_pkcs8(ALGORITHM)
             .map_err(|e| anyhow::anyhow!("cannot generate a DNSSEC key: {e}"))?;
-        let key = KeyFormat::Pkcs8
-            .decode_key(&pkcs8, None, ALGORITHM)
+        let key = EcdsaSigningKey::from_pkcs8(&pkcs8, ALGORITHM)
             .map_err(|e| anyhow::anyhow!("cannot load the generated DNSSEC key: {e}"))?;
         let public = key
-            .to_public_bytes()
+            .to_public_key()
             .map_err(|e| anyhow::anyhow!("cannot derive the DNSSEC public key: {e}"))?;
-        // Zone key, secure entry point: one key signing everything, flags 257.
-        let dnskey = DNSKEY::new(true, true, false, ALGORITHM, public);
+        // Zone key, secure entry point: one key signing everything, flags 257. The public key
+        // carries the algorithm.
+        let dnskey = DNSKEY::new(true, true, false, public);
         let key_tag = dnskey
             .calculate_key_tag()
             .map_err(|e| anyhow::anyhow!("cannot compute the key tag: {e}"))?;
@@ -104,72 +106,57 @@ impl ZoneSigner {
     }
 
     pub fn dnskey_record(&self) -> Record {
-        let mut r = Record::with(self.zone.clone(), RecordType::DNSKEY, KEY_TTL);
-        r.set_data(Some(RData::DNSSEC(DNSSECRData::DNSKEY(
-            self.dnskey.clone(),
-        ))));
-        r
+        Record::from_rdata(
+            self.zone.clone(),
+            KEY_TTL,
+            RData::DNSSEC(DNSSECRData::DNSKEY(self.dnskey.clone())),
+        )
     }
 
     /// The SOA a negative answer carries when the model gave none.
     pub fn soa_record(&self) -> Record {
-        let mut r = Record::with(self.zone.clone(), RecordType::SOA, KEY_TTL);
-        r.set_data(Some(RData::SOA(self.soa.clone())));
-        r
+        Record::from_rdata(self.zone.clone(), KEY_TTL, RData::SOA(self.soa.clone()))
     }
 
     /// The RRSIG over one RRset. Every record must share owner, class and type; their TTLs are
     /// made equal (the smallest), since an RRset's TTL is signed as one value.
     pub fn sign_rrset(&self, rrset: &mut [Record], now: u32) -> Result<Record> {
         let first = rrset.first().context("cannot sign an empty RRset")?;
-        let name = first.name().clone();
+        let name = first.name.clone();
         let rtype = first.record_type();
-        let class = first.dns_class();
+        let class = first.dns_class;
         if rrset
             .iter()
-            .any(|r| r.name() != &name || r.record_type() != rtype || r.dns_class() != class)
+            .any(|r| r.name != name || r.record_type() != rtype || r.dns_class != class)
         {
             bail!("an RRset must share owner, class and type");
         }
-        let ttl = rrset.iter().map(|r| r.ttl()).min().unwrap_or(KEY_TTL);
+        let ttl = rrset.iter().map(|r| r.ttl).min().unwrap_or(KEY_TTL);
         for r in rrset.iter_mut() {
-            r.set_ttl(ttl);
+            r.ttl = ttl;
         }
         let inception = now.saturating_sub(INCEPTION_SKEW_SECS);
         let expiration = now.saturating_add(VALIDITY_SECS);
         let labels = name.num_labels();
-        let to_sign = tbs::rrset_tbs(
-            &name,
-            class,
-            labels,
-            rtype,
-            ALGORITHM,
-            ttl,
-            expiration,
-            inception,
-            self.key_tag,
-            &self.zone,
-            rrset,
-        )
-        .map_err(|e| anyhow::anyhow!("cannot serialise {name} {rtype} for signing: {e}"))?;
+        let input = SigInput {
+            type_covered: rtype,
+            algorithm: ALGORITHM,
+            num_labels: labels,
+            original_ttl: ttl,
+            sig_expiration: SerialNumber::new(expiration),
+            sig_inception: SerialNumber::new(inception),
+            key_tag: self.key_tag,
+            signer_name: self.zone.clone(),
+        };
+        let to_sign = TBS::from_input(&name, class, &input, rrset.iter())
+            .map_err(|e| anyhow::anyhow!("cannot serialise {name} {rtype} for signing: {e}"))?;
         let signature = self
             .key
-            .sign(ALGORITHM, &to_sign)
+            .sign(&to_sign)
             .map_err(|e| anyhow::anyhow!("cannot sign {name} {rtype}: {e}"))?;
-        let sig = RRSIG::new(
-            rtype,
-            ALGORITHM,
-            labels,
-            ttl,
-            expiration,
-            inception,
-            self.key_tag,
-            self.zone.clone(),
-            signature,
-        );
-        let mut r = Record::with(name, RecordType::RRSIG, ttl);
-        r.set_dns_class(class);
-        r.set_data(Some(RData::DNSSEC(DNSSECRData::RRSIG(sig))));
+        let sig = RRSIG::from_sig(input, signature);
+        let mut r = Record::from_rdata(name, ttl, RData::DNSSEC(DNSSECRData::RRSIG(sig)));
+        r.dns_class = class;
         Ok(r)
     }
 
@@ -180,11 +167,11 @@ impl ZoneSigner {
         for (i, r) in records.iter().enumerate() {
             if r.record_type() == RecordType::RRSIG
                 || r.record_type() == RecordType::OPT
-                || !self.covers(r.name())
+                || !self.covers(&r.name)
             {
                 continue;
             }
-            sets.entry((r.name().clone(), u16::from(r.record_type())))
+            sets.entry((r.name.clone(), u16::from(r.record_type())))
                 .or_default()
                 .push(i);
         }
@@ -205,12 +192,14 @@ impl ZoneSigner {
             .map_err(|e| anyhow::anyhow!("cannot build the NSEC next name for {qname}: {e}"))?;
         let mut next = next;
         next.set_fqdn(true);
-        let mut r = Record::with(qname.clone(), RecordType::NSEC, ttl);
-        r.set_data(Some(RData::DNSSEC(DNSSECRData::NSEC(NSEC::new(
-            next,
-            vec![RecordType::RRSIG, RecordType::NSEC],
-        )))));
-        Ok(r)
+        Ok(Record::from_rdata(
+            qname.clone(),
+            ttl,
+            RData::DNSSEC(DNSSECRData::NSEC(NSEC::new(
+                next,
+                [RecordType::RRSIG, RecordType::NSEC],
+            ))),
+        ))
     }
 
     /// The full NSEC chain over `zone_records` (which must all be in the zone), in canonical
@@ -223,7 +212,7 @@ impl ZoneSigner {
                 continue;
             }
             types
-                .entry(r.name().to_lowercase())
+                .entry(r.name.to_lowercase())
                 .or_default()
                 .insert(u16::from(r.record_type()));
         }
@@ -237,11 +226,11 @@ impl ZoneSigner {
             bitmap.push(RecordType::NSEC);
             bitmap.sort_by_key(|t| u16::from(*t));
             bitmap.dedup();
-            let mut r = Record::with(name.clone(), RecordType::NSEC, ttl);
-            r.set_data(Some(RData::DNSSEC(DNSSECRData::NSEC(NSEC::new(
-                next, bitmap,
-            )))));
-            chain.push(r);
+            chain.push(Record::from_rdata(
+                name.clone(),
+                ttl,
+                RData::DNSSEC(DNSSECRData::NSEC(NSEC::new(next, bitmap))),
+            ));
         }
         Ok(chain)
     }
@@ -249,9 +238,9 @@ impl ZoneSigner {
 
 /// The negative-caching TTL a zone's SOA gives (RFC 9077: the smaller of its TTL and MINIMUM).
 pub fn negative_ttl(soa: &Record) -> u32 {
-    match soa.data() {
-        Some(RData::SOA(s)) => soa.ttl().min(s.minimum()),
-        _ => soa.ttl(),
+    match &soa.data {
+        RData::SOA(s) => soa.ttl.min(s.minimum),
+        _ => soa.ttl,
     }
 }
 

@@ -3,7 +3,7 @@
 //! # Why a second one
 //!
 //! `dig_test.rs` already breaks the circularity that `test.rs` has: the server encodes with
-//! hickory-proto and `test.rs` decodes with hickory-client, so that suite proves the wire format
+//! hickory-proto and `test.rs` decodes with hickory-net, so that suite proves the wire format
 //! is self-consistent rather than correct. ISC's `dig` shares no code with hickory and fixed it.
 //!
 //! One client is still one client, and this session has twice shown what the second one finds.

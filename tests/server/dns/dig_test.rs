@@ -2,8 +2,8 @@
 //!
 //! ## Why this file exists
 //!
-//! `tests/server/dns/test.rs` drives the server with **hickory-client**, and the server
-//! builds every response with **hickory-proto**. Those are the same project: hickory-client
+//! `tests/server/dns/test.rs` drives the server with **hickory-net**, and the server
+//! builds every response with **hickory-proto**. Those are the same project: hickory-net
 //! depends on hickory-proto and decodes with the same codec that encoded the bytes. So the
 //! existing suite proves the wire format is self-consistent, not that it is correct — the
 //! same circularity that kept `rss` at Experimental until `feed-rs` did its parsing, and that

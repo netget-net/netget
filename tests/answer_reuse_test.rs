@@ -127,12 +127,8 @@ fn dns_query(name: &str, id: u16) -> Vec<u8> {
     use hickory_proto::op::{Message, MessageType, OpCode, Query};
     use hickory_proto::rr::{Name, RecordType};
     use std::str::FromStr;
-    let mut message = Message::new();
-    message
-        .set_id(id)
-        .set_message_type(MessageType::Query)
-        .set_op_code(OpCode::Query)
-        .set_recursion_desired(true);
+    let mut message = Message::new(id, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = true;
     message.add_query(Query::query(Name::from_str(name).unwrap(), RecordType::A));
     message.to_vec().unwrap()
 }
@@ -149,12 +145,11 @@ async fn dns(addr: std::net::SocketAddr, name: &str, id: u16) -> (u16, String) {
         .unwrap();
     let answer = Message::from_vec(&buf[..n]).expect("a DNS message");
     let ip = answer
-        .answers()
+        .answers
         .first()
-        .and_then(|r| r.data())
-        .map(|d| d.to_string())
+        .map(|r| r.data.to_string())
         .unwrap_or_default();
-    (answer.id(), ip)
+    (answer.id, ip)
 }
 
 fn dns_mock() -> helpers::mock_config::MockLlmConfig {

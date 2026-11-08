@@ -550,7 +550,7 @@ impl DohServer {
         };
 
         // Extract query information
-        let queries = dns_message.queries();
+        let queries = &dns_message.queries;
         if queries.is_empty() {
             Log::new(Some(&status_tx)).warn("DoH DNS message has no queries");
             return Ok(error_response(StatusCode::BAD_REQUEST, "No DNS queries"));
@@ -561,7 +561,7 @@ impl DohServer {
         // Display, not Debug: the model reads this string and echoes it back into
         // `send_dns_nxdomain`'s `query_type`, which parses it with `RecordType::from_str`.
         let query_type = query.query_type().to_string();
-        let query_id = dns_message.id();
+        let query_id = dns_message.id;
 
         Log::new(Some(&status_tx)).info(format!(
             "DoH query: {} {} (ID: {})",

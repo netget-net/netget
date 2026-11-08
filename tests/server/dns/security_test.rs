@@ -22,28 +22,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 
 fn query(id: u16, name: &str, rtype: RecordType) -> Message {
-    let mut m = Message::new();
-    m.set_id(id)
-        .set_message_type(MessageType::Query)
-        .set_op_code(OpCode::Query)
-        .add_query(Query::query(Name::from_str(name).unwrap(), rtype));
+    let mut m = Message::new(id, MessageType::Query, OpCode::Query);
+    m.add_query(Query::query(Name::from_str(name).unwrap(), rtype));
     m
 }
 
 fn ixfr(id: u16, zone: &str, serial: u32) -> Message {
     let mut m = query(id, zone, RecordType::IXFR);
-    let mut soa = Record::with(Name::from_str(zone).unwrap(), RecordType::SOA, 0);
-    soa.set_data(Some(RData::SOA(SOA::new(
-        Name::root(),
-        Name::root(),
-        serial,
+    let mut soa = Record::from_rdata(
+        Name::from_str(zone).unwrap(),
         0,
-        0,
-        0,
-        0,
-    ))));
-    soa.set_dns_class(DNSClass::IN);
-    m.add_name_server(soa);
+        RData::SOA(SOA::new(Name::root(), Name::root(), serial, 0, 0, 0, 0)),
+    );
+    soa.dns_class = DNSClass::IN;
+    m.add_authority(soa);
     m
 }
 
@@ -93,9 +85,9 @@ async fn the_events_name_the_client_address() {
     let tcp_port = stream.local_addr().unwrap().port();
     // "Current": the SOA alone, one message.
     let r = tcp(&mut stream, &ixfr(1, "example.com.", SERIAL), 1).await;
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].answers.len(), 1);
     let r = tcp(&mut stream, &query(2, "www.example.com.", RecordType::A), 1).await;
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].answers.len(), 1);
 
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let udp_port = socket.local_addr().unwrap().port();
@@ -105,7 +97,7 @@ async fn the_events_name_the_client_address() {
         &query(3, "mail.example.com.", RecordType::A),
     )
     .await;
-    assert_eq!(r.answers().len(), 1);
+    assert_eq!(r.answers.len(), 1);
 
     let events = device.events().await;
     let find = |kind: &str, field: &str, value: &str| {
@@ -147,11 +139,11 @@ async fn a_full_zone_never_goes_over_udp() {
     let device = DnsDevice::start_with_handler(None, SMALL_ZONE_HANDLER).await;
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let r = udp(&socket, device.port, &ixfr(4, "small.test.", 1)).await;
-    assert_eq!(r.response_code(), ResponseCode::NoError);
-    let types: Vec<RecordType> = r.answers().iter().map(|a| a.record_type()).collect();
+    assert_eq!(r.response_code, ResponseCode::NoError);
+    let types: Vec<RecordType> = r.answers.iter().map(|a| a.record_type()).collect();
     assert_eq!(types, [RecordType::SOA], "the SOA alone: {r:?}");
-    match r.answers()[0].data() {
-        Some(RData::SOA(soa)) => assert_eq!(soa.serial(), 7),
+    match &r.answers[0].data {
+        RData::SOA(soa) => assert_eq!(soa.serial, 7),
         other => panic!("not an SOA: {other:?}"),
     }
 
@@ -159,7 +151,7 @@ async fn a_full_zone_never_goes_over_udp() {
         .await
         .unwrap();
     let r = tcp(&mut stream, &ixfr(5, "small.test.", 1), 1).await;
-    let types: Vec<RecordType> = r[0].answers().iter().map(|a| a.record_type()).collect();
+    let types: Vec<RecordType> = r[0].answers.iter().map(|a| a.record_type()).collect();
     assert_eq!(
         types,
         [RecordType::SOA, RecordType::A, RecordType::SOA],
@@ -207,7 +199,7 @@ async fn one_address_cannot_hold_more_than_its_share_of_tcp_connections() {
             1,
         )
         .await;
-        assert_eq!(r[0].answers().len(), 1, "held connection {i}");
+        assert_eq!(r[0].answers.len(), 1, "held connection {i}");
     }
 
     // Once one is released, the address may open another.
@@ -217,7 +209,7 @@ async fn one_address_cannot_hold_more_than_its_share_of_tcp_connections() {
         .await
         .unwrap();
     let r = tcp(&mut fresh, &query(30, "www.example.com.", RecordType::A), 1).await;
-    assert_eq!(r[0].answers().len(), 1);
+    assert_eq!(r[0].answers.len(), 1);
 }
 
 /// `send_dns_response` with bytes that are not a DNS message: a 12-byte header claiming a
@@ -241,8 +233,8 @@ async fn model_bytes_that_are_not_dns_are_answered_servfail() {
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     for (id, name) in [(0x1111u16, "short.test."), (0x2222, "long.test.")] {
         let r = udp(&socket, device.port, &query(id, name, RecordType::A)).await;
-        assert_eq!(r.id(), id, "{name} over UDP");
-        assert_eq!(r.response_code(), ResponseCode::ServFail, "{name} over UDP");
+        assert_eq!(r.id, id, "{name} over UDP");
+        assert_eq!(r.response_code, ResponseCode::ServFail, "{name} over UDP");
     }
 
     let mut stream = TcpStream::connect(("127.0.0.1", device.port))
@@ -250,9 +242,9 @@ async fn model_bytes_that_are_not_dns_are_answered_servfail() {
         .unwrap();
     for (id, name) in [(0x3333u16, "short.test."), (0x4444, "long.test.")] {
         let r = tcp(&mut stream, &query(id, name, RecordType::A), 1).await;
-        assert_eq!(r[0].id(), id, "{name} over TCP");
+        assert_eq!(r[0].id, id, "{name} over TCP");
         assert_eq!(
-            r[0].response_code(),
+            r[0].response_code,
             ResponseCode::ServFail,
             "{name} over TCP"
         );

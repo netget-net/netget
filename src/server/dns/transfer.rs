@@ -9,8 +9,7 @@
 //! `dnssec_zone`) and cuts it into messages with [`split_into_messages`].
 
 use anyhow::{bail, Context, Result};
-use hickory_proto::op::{Header, Message, MessageType, OpCode, Query, ResponseCode};
-use hickory_proto::rr::rdata::SOA;
+use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::BinEncodable;
 use serde_json::Value;
@@ -54,10 +53,10 @@ fn soa_of(action: &Value, origin: &Name) -> Result<Record> {
     if soa.record_type() != RecordType::SOA {
         bail!("'soa' must be an SOA record");
     }
-    if soa.name() != origin {
+    if &soa.name != origin {
         bail!(
             "the SOA belongs at the zone apex {origin}, not at {}",
-            soa.name()
+            soa.name
         );
     }
     Ok(soa)
@@ -65,34 +64,26 @@ fn soa_of(action: &Value, origin: &Name) -> Result<Record> {
 
 /// The SOA's serial.
 pub fn serial_of(soa: &Record) -> Option<u32> {
-    match soa.data() {
-        Some(RData::SOA(s)) => Some(s.serial()),
+    match &soa.data {
+        RData::SOA(s) => Some(s.serial),
         _ => None,
     }
 }
 
 fn with_serial(soa: &Record, serial: u32) -> Record {
     let mut r = soa.clone();
-    if let Some(RData::SOA(s)) = soa.data() {
-        r.set_data(Some(RData::SOA(SOA::new(
-            s.mname().clone(),
-            s.rname().clone(),
-            serial,
-            s.refresh(),
-            s.retry(),
-            s.expire(),
-            s.minimum(),
-        ))));
+    if let RData::SOA(s) = &mut r.data {
+        s.serial = serial;
     }
     r
 }
 
 fn in_zone(records: &[Record], origin: &Name, what: &str) -> Result<()> {
     for r in records {
-        if !origin.zone_of(r.name()) {
+        if !origin.zone_of(&r.name) {
             bail!(
                 "{what}: {} {} is outside the zone {origin}",
-                r.name(),
+                r.name,
                 r.record_type()
             );
         }
@@ -192,15 +183,10 @@ pub fn ixfr_from_action(action: &Value, client_serial: u32) -> Result<(Name, Vec
 
 /// An empty response to `query`, AA set: the shell every transfer message is built in.
 pub fn response_shell(query: &Message, rcode: ResponseCode) -> Message {
-    let mut message = Message::new();
-    let mut header = Header::new();
-    header.set_id(query.id());
-    header.set_message_type(MessageType::Response);
-    header.set_op_code(OpCode::Query);
-    header.set_authoritative(true);
-    header.set_recursion_desired(query.recursion_desired());
-    header.set_response_code(rcode);
-    message.set_header(header);
+    let mut message = Message::new(query.id, MessageType::Response, OpCode::Query);
+    message.metadata.authoritative = true;
+    message.metadata.recursion_desired = query.recursion_desired;
+    message.metadata.response_code = rcode;
     message
 }
 

@@ -20,19 +20,18 @@ use std::time::Duration;
 /// the id a resolver chose must come back, and the question it asked must be repeated.
 fn assert_correlates(response: &DnsMessage, query_id: u16, name: &Name) {
     assert_eq!(
-        response.id(),
-        query_id,
+        response.id, query_id,
         "DoH reply carried transaction id {} but the query used {query_id}; \
          a resolver would discard this reply",
-        response.id()
+        response.id
     );
     assert_eq!(
-        response.queries().len(),
+        response.queries.len(),
         1,
         "reply must echo exactly one question"
     );
     assert_eq!(
-        response.queries()[0].name(),
+        response.queries[0].name(),
         name,
         "reply must echo the queried name"
     );
@@ -44,12 +43,12 @@ fn assert_correlates(response: &DnsMessage, query_id: u16, name: &Name) {
 /// test rather than pass quietly — `!answers.is_empty()` passes for an executor that
 /// ignores the `ip` it was handed.
 fn answer_a(response: &DnsMessage) -> Option<std::net::Ipv4Addr> {
-    let answers = response.answers();
+    let answers = &response.answers;
     if answers.len() != 1 {
         return None;
     }
-    match answers[0].data() {
-        Some(hickory_proto::rr::RData::A(addr)) => Some(addr.0),
+    match &answers[0].data {
+        hickory_proto::rr::RData::A(addr) => Some(addr.0),
         _ => None,
     }
 }
@@ -68,10 +67,13 @@ async fn query_doh_get(
     // looks healthy here while failing against every real client.
     let name = Name::from_str(domain)?;
     let query_id: u16 = rand::random();
-    let mut query_msg = DnsMessage::new();
-    query_msg.set_id(query_id);
+    let mut query_msg = DnsMessage::new(
+        query_id,
+        hickory_proto::op::MessageType::Query,
+        hickory_proto::op::OpCode::Query,
+    );
+    query_msg.metadata.recursion_desired = true;
     query_msg.add_query(Query::query(name.clone(), record_type));
-    query_msg.set_recursion_desired(true);
 
     // Serialize to wire format
     let query_bytes = query_msg.to_vec()?;
@@ -119,10 +121,13 @@ async fn query_doh_post(
     // Build DNS query message
     let name = Name::from_str(domain)?;
     let query_id: u16 = rand::random();
-    let mut query_msg = DnsMessage::new();
-    query_msg.set_id(query_id);
+    let mut query_msg = DnsMessage::new(
+        query_id,
+        hickory_proto::op::MessageType::Query,
+        hickory_proto::op::OpCode::Query,
+    );
+    query_msg.metadata.recursion_desired = true;
     query_msg.add_query(Query::query(name.clone(), record_type));
-    query_msg.set_recursion_desired(true);
 
     // Serialize to wire format
     let query_bytes = query_msg.to_vec()?;

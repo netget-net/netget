@@ -1,15 +1,16 @@
 //! End-to-end DNS tests for NetGet
 //!
 //! These tests spawn the actual NetGet binary with DNS prompts
-//! and validate the responses using the hickory-client DNS client library.
+//! and validate the responses using the hickory-net DNS client library.
 
 // Helper module imported from parent
 
 use super::super::super::helpers::{self, E2EResult, NetGetConfig};
-use hickory_client::client::{AsyncClient, ClientHandle};
-use hickory_client::op::ResponseCode;
-use hickory_client::rr::{DNSClass, Name, RData, RecordType};
-use hickory_client::udp::UdpClientStream;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
+use hickory_proto::op::ResponseCode;
+use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
@@ -18,13 +19,13 @@ use std::str::FromStr;
 /// `None` when the answer section does not hold exactly one A record — which must fail the
 /// test rather than pass quietly. `assert!(!answers.is_empty())` was the previous bar, and it
 /// passes for an executor that ignores the `ip` it was given.
-fn answer_a(response: &hickory_client::op::DnsResponse) -> Option<Ipv4Addr> {
-    let answers = response.answers();
+fn answer_a(response: &hickory_proto::op::DnsResponse) -> Option<Ipv4Addr> {
+    let answers = &response.answers;
     if answers.len() != 1 {
         return None;
     }
-    match answers[0].data() {
-        Some(RData::A(addr)) => Some(addr.0),
+    match &answers[0].data {
+        RData::A(addr) => Some(addr.0),
         _ => None,
     }
 }
@@ -88,12 +89,14 @@ async fn test_dns_a_record_query() -> E2EResult<()> {
         .await
         .map_err(|e| format!("DNS server never reported a listening socket: {e}"))?;
 
-    // VALIDATION: Use hickory-client to query DNS
+    // VALIDATION: Use hickory-net to query DNS
     println!("Querying example.com A record...");
 
     let address: SocketAddr = format!("127.0.0.1:{}", server.port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
 
     // Run the background task
     tokio::spawn(bg);
@@ -107,10 +110,10 @@ async fn test_dns_a_record_query() -> E2EResult<()> {
         answer_a(&response),
         Some("93.184.216.34".parse::<Ipv4Addr>().unwrap()),
         "example.com must resolve to the address its handler chose; got {:?}",
-        response.answers()
+        response.answers
     );
     assert_eq!(
-        response.response_code(),
+        response.response_code,
         ResponseCode::NoError,
         "a successful A answer must carry RCODE 0"
     );
@@ -204,8 +207,10 @@ async fn test_dns_multiple_records() -> E2EResult<()> {
 
     // VALIDATION: Query multiple domains
     let address: SocketAddr = format!("127.0.0.1:{}", server.port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     // Query example.com
@@ -219,7 +224,7 @@ async fn test_dns_multiple_records() -> E2EResult<()> {
         answer_a(&response1),
         Some("1.2.3.4".parse::<Ipv4Addr>().unwrap()),
         "example.com must resolve to 1.2.3.4; got {:?}",
-        response1.answers()
+        response1.answers
     );
     println!("  ✓ example.com returned 1.2.3.4");
 
@@ -231,7 +236,7 @@ async fn test_dns_multiple_records() -> E2EResult<()> {
         answer_a(&response2),
         Some("5.6.7.8".parse::<Ipv4Addr>().unwrap()),
         "mail.example.com must resolve to its own address, not example.com's; got {:?}",
-        response2.answers()
+        response2.answers
     );
     println!("  ✓ mail.example.com returned 5.6.7.8");
 
@@ -306,8 +311,10 @@ async fn test_dns_txt_record() -> E2EResult<()> {
 
     // VALIDATION: Query TXT record
     let address: SocketAddr = format!("127.0.0.1:{}", server.port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     println!("Querying example.com TXT record...");
@@ -315,11 +322,12 @@ async fn test_dns_txt_record() -> E2EResult<()> {
     let response = client.query(name, DNSClass::IN, RecordType::TXT).await?;
 
     println!("DNS TXT response received:");
-    let answers = response.answers();
+    let answers = &response.answers;
     assert_eq!(answers.len(), 1, "Expected exactly one TXT record");
 
-    let txt = match answers[0].data() {
-        Some(RData::TXT(txt)) => txt
+    let txt = match &answers[0].data {
+        RData::TXT(txt) => txt
+            .txt_data
             .iter()
             .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
             .collect::<String>(),
@@ -401,8 +409,10 @@ async fn test_dns_nxdomain() -> E2EResult<()> {
 
     // VALIDATION: Query an unknown domain
     let address: SocketAddr = format!("127.0.0.1:{}", server.port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     println!("Querying unknown.example.com, which the handler answers with NXDOMAIN...");
@@ -419,31 +429,31 @@ async fn test_dns_nxdomain() -> E2EResult<()> {
         .await?;
 
     assert_eq!(
-        response.response_code(),
+        response.response_code,
         ResponseCode::NXDomain,
         "send_dns_nxdomain must set RCODE 3; got {:?} with {} answers",
-        response.response_code(),
-        response.answers().len()
+        response.response_code,
+        response.answers.len()
     );
     assert!(
-        response.answers().is_empty(),
+        response.answers.is_empty(),
         "NXDOMAIN carries no answer records; got {:?}",
-        response.answers()
+        response.answers
     );
     // With no answer section, the echoed question is the only thing tying this reply to
     // the query — a resolver discards it otherwise.
     assert_eq!(
-        response.queries().len(),
+        response.queries.len(),
         1,
         "the reply must echo exactly one question"
     );
     assert_eq!(
-        response.queries()[0].name(),
+        response.queries[0].name(),
         &name,
         "the reply must echo the queried name"
     );
     assert_eq!(
-        response.queries()[0].query_type(),
+        response.queries[0].query_type(),
         RecordType::A,
         "send_dns_nxdomain defaults query_type to A, which is what was asked"
     );

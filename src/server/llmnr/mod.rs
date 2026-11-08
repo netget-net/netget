@@ -461,32 +461,31 @@ impl Responder {
 
         // RFC 4795 §2.1.1 discard rules. Each of these is "silently discard", so none of them
         // reaches the model and none of them produces a packet.
-        if query.message_type() != MessageType::Query {
+        if query.message_type != MessageType::Query {
             debug!("LLMNR dropped a response (not a query) from {}", peer_addr);
             return None;
         }
-        if query.op_code() != OpCode::Query {
+        if query.op_code != OpCode::Query {
             debug!(
                 "LLMNR dropped query from {}: unsupported OPCODE {:?}",
-                peer_addr,
-                query.op_code()
+                peer_addr, query.op_code
             );
             return None;
         }
-        if query.queries().len() != 1 {
+        if query.queries.len() != 1 {
             debug!(
                 "LLMNR dropped query from {}: QDCOUNT is {}, must be 1",
                 peer_addr,
-                query.queries().len()
+                query.queries.len()
             );
             return None;
         }
 
-        let question = &query.queries()[0];
+        let question = &query.queries[0];
         let name = question.name().to_string();
         let query_type = question.query_type().to_string();
         let query_class = question.query_class().to_string();
-        let transaction_id = query.id();
+        let transaction_id = query.id;
 
         let connection_id = self.record_connection(peer_addr, data.len()).await;
         let _ = self.status_tx.send("__UPDATE_UI__".to_string());

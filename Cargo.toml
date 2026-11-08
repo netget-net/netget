@@ -321,9 +321,10 @@ opcua = { package = "netget-async-opcua", version = "=0.19.0", features = ["serv
 apollo-compiler = { version = "1.33.0" } # graphql: parse, validate, introspect, execute
 tiger = { version = "0.2" }
 bzip2 = { version = "0.5", features = ["static"] }
-# DNS server (Hickory DNS, formerly Trust-DNS)
-hickory-server = { version = "0.24", features = ["dns-over-https-rustls", "dns-over-rustls"] }
-hickory-proto = { version = "0.24", features = ["dns-over-https-rustls", "dns-over-rustls", "dnssec-ring"] }
+# DNS wire format (Hickory DNS, formerly Trust-DNS) for every DNS-family server and client. The
+# servers frame and answer on their own sockets; hickory supplies the codec and, through
+# `dnssec-ring`, the DNS server's zone signing.
+hickory-proto = { version = "0.26", features = ["dnssec-ring"] }
 # SSH server
 russh = { version = "0.45" }
 russh-keys = { version = "0.45" }
@@ -418,8 +419,9 @@ aws-sdk-dynamodb = { version = "1.52" }
 aws-smithy-types = { version = "1.3" }
 # OpenAI API client
 async-openai = { version = "0.26" }
-# DNS client (includes TLS for DoT/DoH)
-hickory-client = { version = "0.24", features = ["dns-over-rustls", "dns-over-https-rustls"] }
+# DNS client: hickory's UDP client stream and `Client` handle. The DoT and DoH clients frame
+# their own transport (tokio-rustls, reqwest) and use hickory-proto only for the messages.
+hickory-net = { version = "0.26" }
 # NTP client
 rsntp = { version = "4.0" }
 # SSH client

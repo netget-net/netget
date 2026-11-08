@@ -53,7 +53,7 @@ pub const LLMNR_IPV6_GROUP: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0x00
 /// That is the responder's own opinion and is reported to the model alongside this querier's
 /// independent observation of how many hosts answered.
 pub fn conflict_bit(message: &DnsMessage) -> bool {
-    message.authoritative()
+    message.authoritative
 }
 
 /// Read the LLMNR `T` (Tentative) bit out of a parsed message.
@@ -62,7 +62,7 @@ pub fn conflict_bit(message: &DnsMessage) -> bool {
 /// yet verified the uniqueness of the name". A tentative answer is a weaker claim and the model
 /// is told so rather than having it flattened away.
 pub fn tentative_bit(message: &DnsMessage) -> bool {
-    message.recursion_desired()
+    message.recursion_desired
 }
 
 /// The record types this querier will ask for.

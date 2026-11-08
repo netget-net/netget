@@ -147,10 +147,15 @@ fn zigbee_configure_reporting_reply_fits_one_aps_frame() {
 }
 
 /// `fuzz/artifacts/dns_message/crash-cd477a70017bdc829af6ee6483f4d458745950fd`: a message
-/// whose record data hickory-proto decodes but whose own `Display` then returns `Err`, which
-/// `to_string()` turns into a panic. The DoH and DoQ clients printed every answer's data that
-/// way, so a hostile server could stop them with one response; they now go through
-/// `try_display`.
+/// whose record data hickory-proto 0.24 decoded — an OPT record in the answer section — but
+/// whose own `Display` then returned `Err`, which `to_string()` turns into a panic. The DoH and
+/// DoQ clients printed every answer's data that way, so a hostile server could stop them with
+/// one response; they now go through `try_display`.
+///
+/// hickory-proto 0.26 refuses the message at decode time (it allows OPT only in the additional
+/// section, where it becomes the message's EDNS, and refuses empty record data outside an
+/// UPDATE), so the input no longer reaches a client. `RData::OPT` is still the record data whose
+/// `Display` is `Err`, so the guard is pinned on it directly.
 #[test]
 fn dns_record_data_whose_display_fails_is_not_a_panic() {
     let input: &[u8] = &[
@@ -173,19 +178,17 @@ fn dns_record_data_whose_display_fails_is_not_a_panic() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x04,
     ];
-    let msg = hickory_proto::op::Message::from_vec(input).expect("the crash input decodes");
-    let shown: Vec<Option<String>> = msg
-        .answers()
-        .iter()
-        .chain(msg.name_servers())
-        .chain(msg.additionals())
-        .filter_map(|r| r.data())
-        .map(try_display)
-        .collect();
     assert!(
-        shown.iter().any(Option::is_none),
-        "the input still holds record data hickory cannot print, or this test proves nothing"
+        hickory_proto::op::Message::from_vec(input).is_err(),
+        "hickory-proto decodes the crash input again: check what its records' Display does"
     );
+
+    let opt = hickory_proto::rr::RData::OPT(hickory_proto::rr::rdata::OPT::new(Vec::new()));
+    assert!(
+        std::fmt::Write::write_fmt(&mut String::new(), format_args!("{opt}")).is_err(),
+        "OPT's Display no longer fails, so this test no longer exercises the guard"
+    );
+    assert_eq!(try_display(&opt), None);
 }
 
 /// `zigbee_mt` (local run, 24 October 2026), input `01 00`: the target sends the bytes as a

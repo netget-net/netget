@@ -58,12 +58,12 @@ async fn multiplexing_fin_id_question_and_cleanup() {
     let (first, s1) = first.unwrap();
     let (second, s2) = second.unwrap();
     assert_ne!(s1, s2);
-    assert_eq!(first.id(), 0);
-    assert_eq!(second.id(), 0);
-    assert_eq!(first.queries(), a.queries());
-    assert_eq!(second.queries(), aaaa.queries());
-    assert_eq!(first.answers()[0].ttl(), 17);
-    assert_eq!(second.answers()[0].ttl(), 23);
+    assert_eq!(first.id, 0);
+    assert_eq!(second.id, 0);
+    assert_eq!(first.queries, a.queries);
+    assert_eq!(second.queries, aaaa.queries);
+    assert_eq!(first.answers[0].ttl, 17);
+    assert_eq!(second.answers[0].ttl, 23);
     fixture.decision("decision=model_answer").await;
     fixture.close().await;
     tokio::time::timeout(Duration::from_secs(3), connection.closed())
@@ -136,7 +136,7 @@ async fn missing_fin_times_out_and_cancellation_leaves_other_streams_usable() {
     let (response, _) = exchange(&c, &query("live.example", "A"), Duration::from_secs(3))
         .await
         .unwrap();
-    assert_eq!(response.answers().len(), 1);
+    assert_eq!(response.answers.len(), 1);
     fixture.close().await;
 }
 
@@ -193,14 +193,14 @@ async fn handler_failure_returns_servfail_and_xfr_is_explicitly_unsupported() {
     let (response, _) = exchange(&c, &query("failure.example", "A"), Duration::from_secs(5))
         .await
         .unwrap();
-    assert_eq!(response.response_code(), ResponseCode::ServFail);
+    assert_eq!(response.response_code, ResponseCode::ServFail);
     fixture
         .decision("decision=fail_closed_llm_error category=unavailable")
         .await;
     let mut xfr = query("zone.example", "A");
-    xfr.queries_mut()[0].set_query_type(hickory_proto::rr::RecordType::AXFR);
+    xfr.queries[0].set_query_type(hickory_proto::rr::RecordType::AXFR);
     let (response, _) = exchange(&c, &xfr, Duration::from_secs(3)).await.unwrap();
-    assert_eq!(response.response_code(), ResponseCode::NotImp);
+    assert_eq!(response.response_code, ResponseCode::NotImp);
     fixture.close().await;
 }
 
@@ -224,7 +224,7 @@ async fn decision_logs_distinguish_silence_negative_answers_and_action_failure()
         let (_endpoint, c) = fixture.peer().await;
         let result = exchange(&c, &query("decision.example", "A"), Duration::from_secs(3)).await;
         if let Some(code) = expected {
-            assert_eq!(result.unwrap().0.response_code(), code);
+            assert_eq!(result.unwrap().0.response_code, code);
         } else {
             assert!(result.is_err(), "silence resets the stream");
         }
@@ -244,9 +244,9 @@ fn decoder_rejects_truncation_extra_messages_ids_and_tcp_keepalive() {
     let declared = (trailing.len() - 2) as u16;
     trailing[..2].copy_from_slice(&declared.to_be_bytes());
     assert!(decode(&trailing, MessageType::Query).is_err());
-    q.set_id(2);
+    q.metadata.id = 2;
     assert!(encode(&q).is_err());
-    q.set_id(0);
+    q.metadata.id = 0;
     let mut edns = hickory_proto::op::Edns::new();
     edns.options_mut()
         .insert(hickory_proto::rr::rdata::opt::EdnsOption::Unknown(

@@ -705,9 +705,10 @@ async fn test_http_actual_examples() -> E2EResult<()> {
 /// E2E test for DNS using actual protocol examples
 #[tokio::test]
 async fn test_dns_actual_examples() -> E2EResult<()> {
-    use hickory_client::client::{AsyncClient, ClientHandle};
-    use hickory_client::rr::{DNSClass, Name, RecordType};
-    use hickory_client::udp::UdpClientStream;
+    use hickory_net::client::{Client, ClientHandle};
+    use hickory_net::runtime::TokioRuntimeProvider;
+    use hickory_net::udp::UdpClientStream;
+    use hickory_proto::rr::{DNSClass, Name, RecordType};
     use std::net::SocketAddr;
     use std::str::FromStr;
 
@@ -773,17 +774,19 @@ async fn test_dns_actual_examples() -> E2EResult<()> {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Query using hickory-client
+    // Query using hickory-net
     let address: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
-    let stream = UdpClientStream::<tokio::net::UdpSocket>::new(address);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     let name = Name::from_str("example.com.")?;
     let response = client.query(name, DNSClass::IN, RecordType::A).await?;
 
     println!("✓ DNS response received");
-    let answers = response.answers();
+    let answers = &response.answers;
     println!("✓ DNS answers: {} records", answers.len());
 
     for record in answers {

@@ -32,9 +32,10 @@ bson = "3.0"
 serde_cbor = "0.11"
 serde = "1"
 
-# NetGet has no DNS parser of its own — `dns`, `dot` and `doh` all call
-# `Message::from_vec` inline. See fuzz_targets/dns_message.rs.
-hickory-proto = "0.24"
+# NetGet has no DNS parser of its own — every DNS-family decode site calls
+# `utils::dns_screen::decode_dns_message`, which hands screened bytes to `Message::from_vec`.
+# Same version as netget's. See fuzz_targets/dns_message.rs.
+hickory-proto = "0.26"
 
 # The Nostr target checks that every refusal NetGet renders is itself JSON.
 serde_json = "1"

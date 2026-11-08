@@ -181,7 +181,7 @@ async fn test_send_to_address_reaches_the_named_address_only() -> E2EResult<()> 
 }
 
 // Note: DNS, DHCP, NTP, and SNMP tests have been moved to their own dedicated test files:
-// - tests/server/dns_test.rs - DNS tests using hickory-client
+// - tests/server/dns_test.rs - DNS tests using hickory-net
 // - tests/server/dhcp_test.rs - DHCP tests with proper DHCP packet construction
 // - tests/server/ntp_test.rs - NTP tests using rsntp client library
 // - tests/server/snmp_test.rs - SNMP tests using snmp library and snmpget

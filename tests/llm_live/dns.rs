@@ -1,7 +1,7 @@
 //! Live-LLM DNS suite. Setup (LiveProtocolTest, model-driven) and request
 //! handling (LiveRequestTest, deterministic `--server` start) are separate
 //! tests — see tcp.rs for the rationale. The model must answer real
-//! hickory-client queries, which means echoing the query ID and building a
+//! hickory-net queries, which means echoing the query ID and building a
 //! correct wire response.
 //!
 //! COVERS: dns: dns_query
@@ -10,9 +10,10 @@ use crate::helpers::llm_live::{
     live_llm_enabled, LiveProtocolTest, LiveRequestTest, FIRST_BYTE_TIMEOUT,
 };
 use crate::helpers::E2EResult;
-use hickory_client::client::{AsyncClient, ClientHandle};
-use hickory_client::rr::{DNSClass, Name, RData, RecordType};
-use hickory_client::udp::UdpClientStream;
+use hickory_net::client::{Client, ClientHandle};
+use hickory_net::runtime::TokioRuntimeProvider;
+use hickory_net::udp::UdpClientStream;
+use hickory_proto::rr::{DNSClass, Name, RData, RecordType};
 use std::net::SocketAddr;
 use std::str::FromStr;
 
@@ -33,7 +34,7 @@ async fn dns_setup_via_llm() -> E2EResult<()> {
 }
 
 /// Request type: A-record query for an instructed name → instructed IP.
-/// Validated with hickory-client, an independent DNS implementation, so the
+/// Validated with hickory-net, an independent DNS implementation, so the
 /// model's answer must be a spec-correct packet with the right query ID.
 #[tokio::test]
 async fn dns_a_record_query() -> E2EResult<()> {
@@ -59,23 +60,25 @@ async fn dns_a_record_query() -> E2EResult<()> {
 async fn query_a(addr: &str, name: &str, expected_ip: &str) -> E2EResult<()> {
     let address: SocketAddr = addr.parse()?;
     // Generous timeout: the answer is a live model round-trip.
-    let stream =
-        UdpClientStream::<tokio::net::UdpSocket>::with_timeout(address, FIRST_BYTE_TIMEOUT);
-    let (mut client, bg) = AsyncClient::connect(stream).await?;
+    let stream = UdpClientStream::builder(address, TokioRuntimeProvider::new())
+        .with_timeout(Some(FIRST_BYTE_TIMEOUT))
+        .with_max_retries(1)
+        .build();
+    let (mut client, bg) = Client::<TokioRuntimeProvider>::from_sender(stream);
     tokio::spawn(bg);
 
     let response = client
         .query(Name::from_str(name)?, DNSClass::IN, RecordType::A)
         .await?;
 
-    let answers = response.answers();
+    let answers = &response.answers;
     if answers.is_empty() {
         return Err(format!("DNS response for {} carried no answers", name).into());
     }
     let ips: Vec<String> = answers
         .iter()
-        .filter_map(|record| match record.data() {
-            Some(RData::A(ip)) => Some(ip.to_string()),
+        .filter_map(|record| match &record.data {
+            RData::A(ip) => Some(ip.to_string()),
             _ => None,
         })
         .collect();

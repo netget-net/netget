@@ -18,7 +18,7 @@ use actions::{DoqClientProtocol, DOQ_CONNECTED_EVENT, DOQ_ERROR_EVENT, DOQ_RESPO
 use anyhow::{bail, ensure, Context, Result};
 use futures::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt};
 use hickory_proto::{
-    op::{Message, MessageType, Query},
+    op::{Message, MessageType, OpCode, Query},
     rr::{Name, RecordType},
 };
 use serde_json::{json, Value};
@@ -194,11 +194,13 @@ pub fn build_query(data: &Value) -> Result<Message> {
         !matches!(kind, RecordType::AXFR | RecordType::IXFR),
         "DoQ zone transfers are not implemented"
     );
-    let mut message = Message::new();
-    message
-        .set_id(0)
-        .set_recursion_desired(data["recursion_desired"].as_bool().unwrap_or(true))
-        .add_query(Query::query(Name::from_str(domain)?, kind));
+    let mut message = Message::new(0, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = data["recursion_desired"].as_bool().unwrap_or(true);
+    // Absolute, as every name on the wire is: the decoded response's question then compares
+    // equal to this one (hickory 0.26's `Name` equality distinguishes relative from absolute).
+    let mut name = Name::from_str(domain)?;
+    name.set_fqdn(true);
+    message.add_query(Query::query(name, kind));
     Ok(message)
 }
 
@@ -313,9 +315,9 @@ fn query_future(
         }.await;
         let (outcome,event) = match result {
             Ok((message,stream)) => {
-                let records = |records: &[hickory_proto::rr::Record]| records.iter().map(|r|json!({"name":r.name().to_utf8(),"type":r.record_type().to_string(),"class":r.dns_class().to_string(),"ttl":r.ttl(),"data":r.data().and_then(crate::utils::display::try_display)})).collect::<Vec<_>>();
-                let event = Event::new(&DOQ_RESPONSE_EVENT,json!({"query_id":0,"stream_id":stream,"domain":data["domain"],"query_type":data["query_type"],"response_code":message.response_code().to_string(),"answers":records(message.answers()),"authorities":records(message.name_servers()),"additionals":records(message.additionals())}));
-                (Ok(ClientSendOutcome::Executed{detail:format!("DNS {} ({} answers)",message.response_code(),message.answers().len())}),event)
+                let records = |records: &[hickory_proto::rr::Record]| records.iter().map(|r|json!({"name":r.name.to_utf8(),"type":r.record_type().to_string(),"class":r.dns_class.to_string(),"ttl":r.ttl,"data":crate::utils::display::try_display(&r.data)})).collect::<Vec<_>>();
+                let event = Event::new(&DOQ_RESPONSE_EVENT,json!({"query_id":0,"stream_id":stream,"domain":data["domain"],"query_type":data["query_type"],"response_code":message.response_code.to_string(),"answers":records(&message.answers),"authorities":records(&message.authorities),"additionals":records(&message.additionals)}));
+                (Ok(ClientSendOutcome::Executed{detail:format!("DNS {} ({} answers)",message.response_code,message.answers.len())}),event)
             }
             Err(e) => {
                 Log::new(Some(&ctx.status_tx)).warn(format!("DoQ query failed: {e:#}"));
@@ -327,6 +329,19 @@ fn query_future(
         if let Some(command) = command { command_support::reply(command,outcome); }
         (depth,event)
     }.boxed()
+}
+
+/// Whether a response repeats the query's question section: same names (case-insensitive, and
+/// whether or not a name carries the root label — a query built from `"zone.example"` is
+/// relative until it is encoded, and every name decoded off the wire is absolute; hickory 0.26's
+/// `Name` equality tells the two apart), types and classes, in order.
+fn same_questions(response: &[Query], query: &[Query]) -> bool {
+    response.len() == query.len()
+        && response.iter().zip(query).all(|(r, q)| {
+            r.name().eq_ignore_root(q.name())
+                && r.query_type() == q.query_type()
+                && r.query_class() == q.query_class()
+        })
 }
 
 /// Execute one ordinary DNS exchange. Deadline and cancellation cover open/write/read/FIN.
@@ -364,7 +379,7 @@ pub async fn exchange(
                 return Err(e);
             }
         };
-        if response.queries() != query.queries() || response.op_code() != query.op_code() {
+        if !same_questions(&response.queries, &query.queries) || response.op_code != query.op_code {
             connection.close(PROTOCOL_ERROR, b"DoQ question or opcode mismatch");
             bail!("DoQ response question or opcode does not match the query");
         }
