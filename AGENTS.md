@@ -142,10 +142,11 @@ netget --mcp   # then call list_protocols / get_protocol_docs
 
 Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/protocol/metadata.rs`):
 
-- **Stable** — **five as of 31 October 2026: `coap`, `dns`, `modbus`, `smb` and `redis`.** Before
+- **Stable** — **seven as of 8 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot` and
+  `doh`.** Before
   16 September 2026 there were none, and three protocols had held the rating and lost it, each
   for the same reason: nobody had said what it required, so "Stable" meant whoever set it felt
-  good about the code. The bar below is what replaced that, and these five are the ones
+  good about the code. The bar below is what replaced that, and these seven are the ones
   measured against it rather than against a feeling. Each carries its own justification in
   `metadata()` — read `e2e_testing` and `notes` there, and the "Maturity: the six conditions"
   section at the foot of each `src/server/<p>/CLAUDE.md`, before quoting any of the ratings:
@@ -245,9 +246,10 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
 
   **Of the two-client Betas, only `mongodb` still fails condition 2 or 3** (re-derived
   1 November 2026): it has a fuzz target (`fuzz_targets/bson_document.rs`) and no pcap-oracle
-  test. Seven that were in this list now hold conditions 1, 2, 3 and 6, which leaves each of
-  them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
-  re-verified — from Stable; neither was measured in that pass:
+  test. Seven that were in this list held conditions 1, 2, 3 and 6 that day, which left each
+  of them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
+  re-verified — from Stable; `dot` and `doh` have since been measured (below), the other five
+  have not:
 
   - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
     `tests/helpers/recording_relay.rs` and the oracle reads what crossed (etcdctl's six
@@ -261,7 +263,22 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
     DNS inside the TLS was dissected, so a TLS oracle cannot pass on the record layer alone.
     Their fuzz target was already `fuzz_targets/dns_message.rs` (`hickory_proto`'s
-    `Message::from_vec`, with a `compression_pointer_loop`).
+    `Message::from_vec`, with a `compression_pointer_loop`). **Both went Stable on 8 November
+    2026**, and the pass found condition 1 had been true of one client: the "second peer" in
+    each was rustls or reqwest with hickory — the server's own codec — doing the DNS, and kdig
+    drove A records only. `dig +tls` / `+https` (BIND 9.20) is the second client now, and both
+    read every record type. Conditions 4 and 5 found the same defect in both: each server had
+    its own copy of the loop that turns the model's answer into a reply, and both broke the
+    promises their failure sections made — DoT wrote nothing for an answer with no sendable
+    action, DoH answered it `500` — while the DNS server, which they delegate their actions to,
+    had fixed all of it. They answer through `dns::StreamQuery` now, the DNS server's own
+    `Reply::resolve`/`finish`. **Delegating the vocabulary is not delegating the behaviour**:
+    check what a delegating protocol does *after* the model answers. The same pass found that
+    hickory's encoder does not fail at 65535 octets — it truncates, sets TC and returns `Ok` —
+    so the DNS server's own TCP path sent an oversize answer as a NOERROR carrying half an
+    RRset; it is SERVFAIL now. And BIND's dig writes no TLS key log (`SSLKEYLOGFILE` feeds
+    `named`'s logging), so only kdig's sessions reach the oracle. `doq` (DNS over QUIC) has the
+    same delegated shape and was not examined.
   - `mqtt` and `kafka` had the oracle and gained `mqtt_packet` and `kafka_request`. Writing the
     Kafka one found that `kafka-protocol`'s gzip, zstd and lz4 decompressors have no output
     bound — a 64 KiB Produce batch inflated to 64 MiB — now `MAX_INFLATED_PRODUCE_BYTES`.
@@ -298,7 +315,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (65 servers as of 6 November 2026, after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (66 servers as of 8 November 2026, after `smtp`, `pop3` and `tftp` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -320,6 +337,29 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
   guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
   named, `afp-showmount`, had never run at all on an ephemeral port.
+
+  **`smtp`, `pop3` and `tftp` went to Beta on 8 November 2026, each on two clients already on
+  every machine** — python3's stdlib `smtplib`/`poplib` and curl for the mail protocols, curl
+  and the system `tftp(1)` for TFTP (`tests/server/<p>/real_client_test.rs`; each header lists
+  the verbs each client drives). None had a real client before. For SMTP and POP3 the clients
+  found the defects; TFTP's clients passed on a loopback with a fast mock, and its defects
+  were in what happens when a packet is late, repeated or from elsewhere, which
+  `tests/server/tftp/retransmit_test.rs` provokes from raw sockets. SMTP raised one model call per message line, judged the message on an
+  event carrying only `"."`, and `trim()`med each line before comparing it with `"."`, so a
+  body line `" ."` ended the message and the rest was read as commands; it now reads the
+  message itself (only `<CRLF>.<CRLF>` ends it, dots unstuffed, `SIZE` advertised and
+  enforced) and raises one event. POP3 counted the transparency dots in `RETR`'s octet count,
+  disagreeing with its own `LIST`, and ended `send_pop3_message` lines with a bare CR. TFTP
+  sent each DATA block once and died on any stray datagram, could not encode netascii, started
+  a second transfer for every retransmitted RRQ, bound its transfer sockets to `0.0.0.0`
+  whatever address it was given, and made the model write files as hex a block per call; it
+  now retransmits, serves a whole text file from one answer (`send_tftp_file`) and dedupes
+  requests. **The lesson from the mail protocols: a protocol's own raw-socket suite is written by
+  someone who already knows where the message ends; a real client is not. The lesson from
+  TFTP: a real client on loopback never loses a packet, so a lockstep protocol's evidence
+  also needs a test that does.** `ftp` was considered and left
+  Experimental: it has no data connection (no `PASV`/`EPSV`/`PORT`), so a real client can log
+  in and do nothing else.
 
   **Do not read the rest of this section as the list. Generate it:**
 

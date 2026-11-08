@@ -52,9 +52,19 @@ the `RETR` assembly (the client waits for a `.` that never comes).
 - LLM interprets each command dynamically
 - State machine (Authorization → Transaction → Update) managed by LLM
 
+## `real_client_test.rs` - two independent clients
+
+python3's stdlib `poplib` (14 LLM calls: every transaction command on one connection) and
+curl's libcurl POP3 (11: a listing and a retrieval, each its own connection), each failing
+rather than skipping when its client is absent. One mock rule per verb, keyed on the
+`answer_with` hint, so `verify_mocks` counts what each client drove. The message served has a
+line starting with `.` and multi-byte UTF-8, so the test sees both the unstuffing and that
+`RETR`'s octet count equals the `LIST` size. The pcap oracle reads poplib's session through
+`helpers::recording_relay`.
+
 ## Client Library
 
-**Manual TCP Client** - No POP3 library used
+**Manual TCP Client** for every file except `real_client_test.rs`
 
 - `tokio::net::TcpStream` for connections
 - `BufReader::read_line()` for reading responses

@@ -118,8 +118,12 @@ watching it fail.
 instead take the structured fields above, from which NetGet builds that text). NetGet normalises newlines
 to CRLF, byte-stuffs any line beginning with `.` (RFC 1939 §3 - without this a message
 containing such a line is truncated at that point) and appends the terminating `.` line.
-`send_pop3_retr`'s `size` is optional; omit it and the advertised octet count is the real
-length of what gets written.
+`send_pop3_retr`'s `size` is optional; omit it and the advertised octet count is the message's
+size — its CRLF text *before* byte-stuffing, the number `LIST` gives for it
+(`pop3_message_octets`); the dots are transport the client removes (RFC 1939 §3). Counting the stuffed body announced every message with a line
+starting `.` one octet larger per such line than its own `LIST` entry; poplib's `retr`
+status line showed it. `send_pop3_message` ends its line with exactly one CRLF whatever ending
+the model wrote; a message ending in `\n` used to be written with a bare CR.
 
 ## POP3 Protocol
 
@@ -174,6 +178,15 @@ exit path (EOF, read error, `close_connection`, refused greeting) through the si
 - **No protocol-specific state** - POP3 doesn't use `ProtocolConnectionInfo::Pop3`
 - Connection lifecycle managed by tokio tasks
 - Session state (authenticated, current mailbox) implicit in LLM conversation context
+
+## Maturity: Beta
+
+Two independent clients complete real sessions in `tests/server/pop3/real_client_test.rs`,
+and both fail rather than skip when the client is absent: python3's stdlib `poplib` (CAPA,
+USER, PASS, STAT, LIST, `LIST n`, UIDL, RETR of a dot-stuffed UTF-8 message, `TOP n 0`, DELE,
+NOOP, RSET, QUIT) and curl's libcurl POP3 (CAPA, USER, PASS, LIST, RETR, QUIT, each URL its own
+connection). The pcap oracle reads poplib's session through a recording relay. `UIDL n` is
+driven by neither. What the clients found is in that file's header.
 
 ## Limitations
 

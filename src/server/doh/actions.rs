@@ -122,42 +122,39 @@ impl Protocol for DohProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             // DoH is normally served on TCP/443, which is a privileged port.
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(443))
             .well_known_port(443)
             .implementation("hickory-proto + hyper + tokio-rustls; DNS actions and action execution are delegated to the DNS protocol")
             .llm_control("Same as DNS (delegates to DNS protocol)")
             .e2e_testing(
-                "TWO independent peers, neither #[ignore]d and neither able to skip. \
-                 (1) tests/server/doh/real_client_test.rs drives the real kdig binary (Knot DNS \
-                 3.6, a C implementation sharing no code with this tree) through BOTH RFC 8484 \
-                 encodings it chose for itself -- `+https` POSTing application/dns-message and \
-                 `+https-get` sending GET ?dns=<base64url>. kdig is a resolver, not a decoder: \
-                 it picks the transaction id, matches the reply against it, confirms the \
-                 question section and renders the answer through its own presentation writer. \
-                 Two queries for different names with different addresses, so a reply bound to \
-                 the wrong question is visible. The test FAILS, naming `brew install knot`, \
-                 when kdig is absent. \
-                 (2) tests/server/doh/e2e_test.rs: reqwest (hyper + rustls) is an independent \
-                 HTTP/2 and TLS implementation and exercises both encodings, the latter sent \
-                 with mixed case and a charset parameter. It asserts the 200 status, the \
-                 Content-Type, that the transaction id and question are echoed, and the address \
-                 by value. \
-                 THAT SECOND TEST WAS HALF CIRCULAR AND IS NO LONGER THE WHOLE RATING. reqwest \
-                 proves an HTTP server answers, not that the DNS on top is right, and the DNS \
-                 message is decoded with hickory-proto -- the codec this server encodes with. \
-                 ALPN was also unproven, because that client connects with \
-                 http2_prior_knowledge() and skips ALPN entirely; kdig negotiates it, and \
-                 changing the advertised protocol from h2 to http/1.1 now fails the test with \
-                 kdig's own TLS alert. Verified the same way for the transaction id: answering \
-                 with a fixed id instead of the client's fails the test. \
-                 UNPROVEN: certificate validation of any kind. The certificate is self-signed, \
-                 and kdig is run with a path-only authority so it keeps the opportunistic \
-                 profile -- naming an authority makes it verify, and an IP literal there is \
-                 rejected as SNI by rustls outright. PCAP ORACLE: kdig runs with SSLKEYLOGFILE through a recording relay; tshark decrypts both sessions and must dissect HTTP/2 and DNS in the server's direction (the GET request's base64url query is not dissected; the reply is). FUZZ: fuzz/fuzz_targets/dns_message.rs (hickory-proto's Message::from_vec).",
+                "STABLE, November 2026, on the six conditions; see 'Maturity: the six conditions' in \
+                 src/server/doh/AGENTS.md. (1) TWO independent resolvers, neither #[ignore]d and \
+                 neither able to skip: tests/server/doh/real_client_test.rs drives kdig (Knot \
+                 DNS, GnuTLS) and dig (ISC BIND 9.20, OpenSSL), each negotiating h2 by ALPN, \
+                 through both RFC 8484 encodings (POST application/dns-message and GET \
+                 ?dns=<base64url>) for two names with two addresses, then AAAA, MX (preference \
+                 4660), TXT, CNAME and NXDOMAIN; dig runs with EDNS and a COOKIE offered and \
+                 reads the OPT the server echoes. Verified by breaking it: a fixed transaction \
+                 id makes both discard the reply; advertising http/1.1 instead of h2 fails \
+                 kdig's handshake. tests/server/doh/e2e_test.rs (reqwest) proves the HTTP \
+                 transport, not the DNS in it. (2) PCAP ORACLE: kdig's sessions cross a \
+                 recording relay with SSLKEYLOGFILE; tshark decrypts them and must dissect \
+                 HTTP/2 and DNS in the server's direction (dig writes no key log; the GET \
+                 request's base64url query is not dissected, its reply is). (3) FUZZ: \
+                 fuzz/fuzz_targets/dns_message.rs, dns_screen then Message::from_vec, with a \
+                 pointer-chain bomb in its corpus. (4) BOUNDS: tests/server/doh/bounds_test.rs \
+                 and connection_bounds_test.rs, each verified by removal. (6) No #[ignore] and \
+                 no skip gate. UNPROVEN: certificate validation of any kind, client auth, \
+                 HTTP/1.1 (not implemented).",
             )
-            .notes("GET/POST, HTTP/2 only (no HTTP/1.1), self-signed certs, any request path accepted. Advertises ALPN h2 - without it a negotiating client falls back to HTTP/1.1, which this server does not speak")
+            .notes(
+                "GET/POST, HTTP/2 only (no HTTP/1.1), self-signed certs, any request path accepted. \
+                 Advertises ALPN h2. Answers through dns::StreamQuery, the DNS server's own answer \
+                 rules: a DNS message in a 200 for every DNS outcome, SERVFAIL included; \
+                 ignore_query is a 404, an undecodable body 400, a body over 65535 bytes 413.",
+            )
             .max_inbound_bytes(crate::server::doh::MAX_DOH_BODY_BYTES as usize)
             .request_only("DNS over HTTPS only answers queries; a server cannot send a peer anything unprompted")
             .history(crate::protocol::metadata::HistoryMode::Off)
