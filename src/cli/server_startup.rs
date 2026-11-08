@@ -50,11 +50,17 @@ fn is_bound_addr(addr: &SocketAddr) -> bool {
 
 /// Check if an error is due to address already in use
 fn is_addr_in_use_error(err: &anyhow::Error) -> bool {
-    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
-        io_err.kind() == std::io::ErrorKind::AddrInUse
-    } else {
-        false
-    }
+    // Anywhere in the chain: most protocols add context ("failed to bind …") around the
+    // `io::Error`, and some format it into a string of their own.
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::AddrInUse)
+            || cause
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("address already in use")
+    })
 }
 
 /// Start a specific server by ID
@@ -359,6 +365,48 @@ pub fn legacy_bind_ip(host: Option<&str>) -> Result<std::net::IpAddr> {
     }
 }
 
+/// Turn a bind that failed because the port is taken into an error that names the port, says
+/// who holds it when it is one of this process's own servers, and says what to do instead.
+///
+/// The protocol's own error is the operating system's — `Address already in use (os error 48)`
+/// — which names neither the port nor a way out, and is what an MCP caller, the model's
+/// `open_server` result and `--server --port` all used to report. Any other error is returned
+/// unchanged.
+async fn explain_port_in_use(
+    state: &AppState,
+    error: anyhow::Error,
+    host: Option<&str>,
+    port: Option<u16>,
+) -> anyhow::Error {
+    let Some(port) = port.filter(|p| *p != 0) else {
+        return error;
+    };
+    if !is_addr_in_use_error(&error) {
+        return error;
+    }
+    let host = host.unwrap_or("127.0.0.1");
+    let holder = state
+        .get_all_servers()
+        .await
+        .into_iter()
+        .find(|s| s.local_addr.is_some_and(|a| a.port() == port))
+        .map(|s| {
+            format!(
+                " by this NetGet's server #{} ({})",
+                s.id.as_u32(),
+                s.protocol_name
+            )
+        })
+        .unwrap_or_else(|| " by another process".to_string());
+    // One message rather than a context chain: a caller printing it with plain `{}` (the
+    // server's `Error` status, a log line) would otherwise see only the outermost layer.
+    anyhow::anyhow!(
+        "cannot listen on {host}:{port}: the port is already in use{holder} ({error:#}). Choose \
+         another port, or pass port 0 for one the OS assigns (with no port at all, a protocol \
+         with a well-known port takes it, or an OS-assigned one when it is taken)"
+    )
+}
+
 pub async fn start_server_from_action(
     state: &AppState,
     // NEW: Flexible binding parameters (all optional)
@@ -613,11 +661,18 @@ pub async fn start_server_from_action(
     };
 
     if requires_privileges {
+        let remedy = match &privilege_requirement {
+            crate::protocol::metadata::PrivilegeRequirement::PrivilegedPort(_) => {
+                " Use a port of 1024 or above, or 0 for one the OS assigns."
+            }
+            _ => "",
+        };
         let error_msg = format!(
-            "Cannot start {} server: {}. Current capabilities: {}",
+            "Cannot start {} server: {}. Current capabilities: {}.{}",
             protocol,
             privilege_requirement.description(),
-            system_caps.description()
+            system_caps.description(),
+            remedy
         );
         return Err(anyhow::anyhow!(error_msg));
     }
@@ -785,7 +840,7 @@ pub async fn start_server_from_action(
         listen_addr,
         mac_address: final_mac,
         interface: final_interface,
-        host: final_host,
+        host: final_host.clone(),
         port: final_port,
         llm_client,
         state: Arc::new(state.clone()),
@@ -842,6 +897,7 @@ pub async fn start_server_from_action(
             Ok(server_id)
         }
         Err(e) => {
+            let e = explain_port_in_use(state, e, final_host.as_deref(), final_port).await;
             // The server never came up, so nothing about it is inspectable or
             // controllable: it has no listener, no connections and no task. Leaving
             // the instance registered only makes `list_servers` accumulate zombie

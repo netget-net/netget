@@ -1319,7 +1319,8 @@ impl NetGetMcpService {
             Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to start server: {e}"
+                    "Failed to start server: {e}{}",
+                    search_hint(&params.protocol, "server")
                 ))]))
             }
         }
@@ -1392,7 +1393,7 @@ impl NetGetMcpService {
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to start server: {}",
-                    e
+                    error_text(&e)
                 ))]));
             }
         };
@@ -1840,7 +1841,7 @@ impl NetGetMcpService {
             Ok(outcome) => Ok(CallToolResult::success(vec![Content::text(
                 outcome.summary,
             )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(error_text(&e))])),
         }
     }
 
@@ -1907,7 +1908,7 @@ impl NetGetMcpService {
             Ok(outcome) => Ok(CallToolResult::success(vec![Content::text(
                 outcome.summary,
             )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(error_text(&e))])),
         }
     }
 
@@ -2117,7 +2118,7 @@ impl NetGetMcpService {
         let app_state = &self.state.app_state;
         let export = match crate::llm::rule_export::export_rules(app_state, owner, fallback).await {
             Ok(export) => export,
-            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(error_text(&e))])),
         };
         let mut out = crate::llm::rule_export::describe_export(&export);
         if let Some(path) = params.save_to.as_deref() {
@@ -2156,7 +2157,7 @@ impl NetGetMcpService {
                 Ok(outcome) => out.push_str(&format!("Applied: {}\n", outcome.summary)),
                 Err(e) => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "{out}Applying failed: {e}"
+                        "{out}Applying failed: {e:#}"
                     ))]))
                 }
             }
@@ -2195,7 +2196,8 @@ impl NetGetMcpService {
             Ok((protocol, _)) => params.protocol = protocol.protocol_name().to_string(),
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to start client: {e}"
+                    "Failed to start client: {e}{}",
+                    search_hint(&params.protocol, "client")
                 ))]))
             }
         }
@@ -2263,7 +2265,7 @@ impl NetGetMcpService {
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to start client: {}",
-                    e
+                    error_text(&e)
                 ))]));
             }
         };
@@ -3328,6 +3330,26 @@ fn parse_scheduled_tasks(
         }
     }
     Ok(Some(parsed))
+}
+
+/// What to try after a protocol name that resolved to nothing: `protocol` takes a name, and a
+/// description ("webserver", "message queue") is what `list_protocols`' search is for.
+fn search_hint(input: &str, kind: &str) -> String {
+    format!(
+        "\nThe protocol argument takes a protocol name. To search by what it does, call \
+         list_protocols with {{\"type\": \"{kind}\", \"query\": {}}}.",
+        serde_json::Value::String(input.to_string())
+    )
+}
+
+/// An error as a tool result shows it: the whole cause chain, outermost first.
+///
+/// `Display` on an `anyhow::Error` prints only the outermost context, which is usually the
+/// part that says *what* failed and never *why*: a client pointed at a closed port read
+/// "Failed to connect to Redis at 127.0.0.1:1" with the "Connection refused" that explains it
+/// dropped. The alternate form joins every cause with ": ".
+fn error_text(error: &anyhow::Error) -> String {
+    format!("{error:#}")
 }
 
 /// Build a short one-line summary of a request (event data) for the log list.
