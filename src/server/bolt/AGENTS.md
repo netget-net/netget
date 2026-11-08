@@ -136,6 +136,11 @@ same hint still got its rows. The hint also says that `mode` is only the access 
 asked for: cypher-shell asks for write on every query, and a first version of the hint that gave
 "a write they forbid" as an example refusal had the model answer `SELECT` with
 `Neo.ClientError.Security.Forbidden` "Write operations are not allowed" five runs in five.
+The hint names the result's columns exactly when it can read them off the final top-level
+`RETURN` (`actions::return_columns`: the `AS` alias, otherwise the item's text, `None` for
+`RETURN *` or unbalanced text): asked `RETURN count(m) AS movies` and told only "the names after
+RETURN", llama3.1:8b named the column `count(m)` or `count` on 13 replayed seeds in 20, and
+`exactly ["movies"]` on none (`eval-results/2026-11-08-weak-cases-replay/`).
 `send_bolt_failure`'s example message (`Invalid input 'RETRUN'…`)
 is copied for the message text; the eval case passes either way.
 
