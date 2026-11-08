@@ -1,6 +1,6 @@
 # DoQ client
 
-Feature `doq`; reusable authenticated QUIC connection with ALPN `doq`, zero DNS IDs,
+Compiled into every native build (no Cargo feature); reusable authenticated QUIC connection with ALPN `doq`, zero DNS IDs,
 length-prefixed DNS messages, and one FIN-terminated bidirectional stream per query.
 The client accepts structured `send_dns_query` (domain, query_type,
 recursion_desired), `wait_for_more` and `disconnect` actions.

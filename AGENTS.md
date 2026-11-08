@@ -277,8 +277,12 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     hickory's encoder does not fail at 65535 octets — it truncates, sets TC and returns `Ok` —
     so the DNS server's own TCP path sent an oversize answer as a NOERROR carrying half an
     RRset; it is SERVFAIL now. And BIND's dig writes no TLS key log (`SSLKEYLOGFILE` feeds
-    `named`'s logging), so only kdig's sessions reach the oracle. `doq` (DNS over QUIC) has the
-    same delegated shape and was not examined.
+    `named`'s logging), so only kdig's sessions reach the oracle. `doq` (DNS over QUIC) had the
+    same delegated shape and the same kind of private loop — an answer with nothing sendable
+    reset the stream, several messages were merged into one, an answer past 65535 octets went
+    out as a NOERROR with TC, and types other than A/AAAA/MX/TXT/CNAME/ANY were answered NOTIMP
+    without asking the model, which held `send_dns_records` — and answers through
+    `StreamQuery` too (8 November 2026); it is still Experimental (`src/server/doq/AGENTS.md`).
   - `mqtt` and `kafka` had the oracle and gained `mqtt_packet` and `kafka_request`. Writing the
     Kafka one found that `kafka-protocol`'s gzip, zstd and lz4 decompressors have no output
     bound — a 64 KiB Produce batch inflated to 64 MiB — now `MAX_INFLATED_PRODUCE_BYTES`.
