@@ -139,7 +139,7 @@ Parsing flow:
 A name-compression pointer may aim at another pointer, so a chain of pointers each aiming two
 bytes back, hidden in a NULL record's RDATA, is followed in full by every name that enters it at
 its far end. `hickory-proto` 0.26.3, the version in `Cargo.lock`, follows pointers in a loop
-(`rr/domain/name.rs`, `read_inner`), so a chain costs it no stack — the longest the 14-bit
+(`read_inner`, `name.rs:1239`), so a chain costs it no stack — the longest the 14-bit
 offset allows, ~8 180 hops, decodes on a 64 KiB thread in a debug build. The releases before it
 recurse once per hop (0.24.4 `name.rs:1203`, 0.25.2 `name.rs:1366`, upstream advisory
 GHSA-gpvg-fj8x-74vm), and against those a debug build overflowed a 2 MiB tokio worker at 1 702
