@@ -298,7 +298,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (65 servers as of 6 November 2026, after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (68 servers as of 8 November 2026, after `smtp`, `pop3` and `tftp` went to Beta, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -320,6 +320,25 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   also showed **a peer's new release can quietly stop testing anything**: Nmap 7.99 changed a
   guest AFP login to DHCAST128, so `afp-ls` printed nothing, and the script the test also
   named, `afp-showmount`, had never run at all on an ephemeral port.
+
+  **`smtp`, `pop3` and `tftp` went to Beta on 8 November 2026, each on two clients already on
+  every machine** — python3's stdlib `smtplib`/`poplib` and curl for the mail protocols, curl
+  and the system `tftp(1)` for TFTP (`tests/server/<p>/real_client_test.rs`; each header lists
+  the verbs each client drives). None had a real client before, and every one had defects only
+  a real client exposed. SMTP raised one model call per message line, judged the message on an
+  event carrying only `"."`, and `trim()`med each line before comparing it with `"."`, so a
+  body line `" ."` ended the message and the rest was read as commands; it now reads the
+  message itself (only `<CRLF>.<CRLF>` ends it, dots unstuffed, `SIZE` advertised and
+  enforced) and raises one event. POP3 counted the transparency dots in `RETR`'s octet count,
+  disagreeing with its own `LIST`, and ended `send_pop3_message` lines with a bare CR. TFTP
+  sent each DATA block once and died on any stray datagram, could not encode netascii, started
+  a second transfer for every retransmitted RRQ, bound its transfer sockets to `0.0.0.0`
+  whatever address it was given, and made the model write files as hex a block per call; it
+  now retransmits, serves a whole text file from one answer (`send_tftp_file`) and dedupes
+  requests. **The common lesson: a protocol's own raw-socket suite is written by someone who
+  already knows where the message ends; a real client is not.** `ftp` was considered and left
+  Experimental: it has no data connection (no `PASV`/`EPSV`/`PORT`), so a real client can log
+  in and do nothing else.
 
   **Do not read the rest of this section as the list. Generate it:**
 
