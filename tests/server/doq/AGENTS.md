@@ -43,11 +43,20 @@ Verified 8 November 2026 on macOS arm64 with kdig 3.6.2 and dnsproxy 0.85.0.
 
 ## What breaking each fix shows
 
-Each answer fix was reverted once and the test watched to fail: resetting the stream for an
-answer with nothing sendable fails `answers_follow_the_dns_servers_rules` (the exchange errors
-instead of reading SERVFAIL), as does merging several messages (two A records) and sending an
-oversize answer as it comes (a NOERROR with TC); refusing non-core types with NOTIMP fails it at
-the SRV query; a reset on the exchange deadline fails
-`exchange_deadline_answers_inside_it_and_servfails_past_it`.
+Every fix was reverted at once (8 November 2026) and the suite run against it; each named test
+failed for its own reason, and nothing else did:
+
+| Reverted | Fails |
+|---|---|
+| reset the stream for an answer with nothing sendable | `an_answer_with_nothing_sendable_is_servfail` (stream reset, code 0), `decision_logs_…`, both real-client tests |
+| merge the answers of several messages | `two_messages_answer_with_the_first` (two A records) |
+| `Reply::finish`'s TC check skipping a message already marked TC | `an_answer_past_65535_octets_is_servfail` (NOERROR with TC), and `server::dns::security_test` over TCP |
+| NOTIMP for types outside A/AAAA/MX/TXT/CNAME/ANY | `any_record_type_reaches_the_model`, and kdig and dnsproxy at the SRV query |
+| no `bind_to_query` | `an_answer_built_for_another_question_answers_this_one` (NetGet's client refuses the question) |
+| reset at the exchange deadline instead of SERVFAIL | `exchange_deadline_answers_inside_it_and_servfails_past_it` (reset, code 5) |
+| no `RESPONSE_WRITE_TIMEOUT` | `an_answer_the_peer_never_takes_is_reset_after_the_write_timeout` |
+
+The OPT echo for an EDNS query comes from `StreamQuery` itself and was not reverted separately;
+the server's earlier loop never set one.
 
 The rating is Experimental; `src/server/doq/AGENTS.md` ("Maturity") says what is missing.
