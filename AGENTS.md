@@ -323,7 +323,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (66 servers as of 8 November 2026, after `smtp`, `pop3` and `tftp` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (67 servers as of 8 November 2026, after `smtp`, `pop3`, `tftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),

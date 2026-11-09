@@ -58,4 +58,4 @@ failed for its own reason, and nothing else did:
 
 The OPT echo for an EDNS query comes from `StreamQuery` itself and was not reverted separately.
 
-The rating is Experimental; `src/server/doq/AGENTS.md` ("Maturity") says what is missing.
+The rating is Beta; `src/server/doq/AGENTS.md` ("Maturity") says what is missing.

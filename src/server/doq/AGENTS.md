@@ -107,7 +107,7 @@ start. Without them a self-signed `localhost` certificate is generated, which no
 client accepts — give a client the certificate (`ca_cert_path` on NetGet's DoQ client,
 `+tls-ca` on kdig).
 
-## Maturity: Experimental
+## Maturity: Beta
 
 What holds against the six Stable conditions (root `AGENTS.md`), as of 8 November 2026:
 
@@ -122,7 +122,8 @@ What holds against the six Stable conditions (root `AGENTS.md`), as of 8 Novembe
 5. Both AGENTS.md files verified against source — this pass.
 6. No `#[ignore]` and no skip gate — **yes**.
 
-Beta asks for human review of real-client evidence that now exists; Stable needs conditions 2
-and 3 as well. The rating is left for the maintainer.
+It is Beta (8 November 2026) on condition 1: two independent clients complete real DoQ
+exchanges and the tests fail rather than skip without them. Stable needs conditions 2 and 3 as
+well. EDNS padding (RFC 9250 section 5.4) is not implemented.
 
 Reference: <https://www.rfc-editor.org/rfc/rfc9250.html>
