@@ -262,7 +262,12 @@ fn the_scan_finds_real_client_tests() {
 #[test]
 fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
     let loop_text = evidence_loop();
-    let filters: BTreeSet<&str> = loop_text.split_whitespace().collect();
+    // A trailing `::` only anchors a filter at a module boundary (`client/snmp::real_server_test::`,
+    // `openvpn::`), so it is dropped before comparing.
+    let filters: BTreeSet<&str> = loop_text
+        .split_whitespace()
+        .map(|f| f.trim_end_matches("::"))
+        .collect();
     let baseline: BTreeSet<&str> = NOT_RUN_ANYWHERE.iter().copied().collect();
 
     let mut missing = Vec::new();
@@ -276,7 +281,7 @@ fn every_real_client_test_is_named_in_the_ci_evidence_loop() {
         // protocol's), or `openvpn::`'s deliberate whole-protocol filter.
         let named = filters.contains(name.as_str())
             || filters.contains(format!("server::{name}").as_str())
-            || filters.contains(format!("{protocol}::").as_str());
+            || filters.contains(protocol);
         match (named, baseline.contains(name.as_str())) {
             (false, false) => missing.push(format!("{name}  (drives {bins:?})")),
             (true, true) => baseline_now_run.push(name),
