@@ -4,10 +4,12 @@ pub mod actions;
 pub mod wire;
 
 use crate::llm::action_helper::call_llm;
+use crate::llm::actions::executor::ExecutionResult;
 use crate::llm::ActionResult;
 use crate::logging::emit::Log;
 use crate::protocol::{Event, SpawnContext};
 use crate::server::connection::ConnectionId;
+use crate::server::dns::StreamQuery;
 use crate::state::server::{ConnectionState, ConnectionStatus, ProtocolConnectionInfo};
 use actions::{DoqProtocol, DOQ_QUERY_EVENT};
 use anyhow::{bail, Context, Result};
@@ -175,166 +177,45 @@ impl DoqServer {
         let _ = ctx.status_tx.send("__UPDATE_UI__".into());
     }
 
+    /// One DNS transaction on one client-initiated bidirectional stream (RFC 9250 §4.2): read
+    /// the query up to its FIN, answer it, send the answer and FIN. A STOP_SENDING from the
+    /// client at any point before the answer goes out abandons the work (§4.3.1).
     async fn transaction(
         mut send: quinn::SendStream,
         mut recv: quinn::RecvStream,
         connection: &quinn::Connection,
         ctx: &SpawnContext,
         id: ConnectionId,
-        deadline: Duration,
+        exchange: Duration,
     ) {
-        let end = tokio::time::Instant::now() + deadline;
-        let exchange = async {
-            let frame = match recv.read_to_end(MAX_FRAME_BYTES).await {
-                Ok(frame) => frame,
-                // Reset by the client is cancellation, not malformed input. Other
-                // streams continue on the same connection.
-                Err(quinn::ReadToEndError::Read(quinn::ReadError::Reset(_))) => return Ok(None),
-                Err(quinn::ReadToEndError::TooLong) => {
-                    connection.close(PROTOCOL_ERROR, b"DoQ frame too large");
-                    return Ok(None);
-                }
-                Err(e) => return Err(anyhow::Error::from(e)),
-            };
-            let query = match decode(&frame, MessageType::Query) {
-                Ok(message) => message,
-                Err(_) => {
-                    connection.close(PROTOCOL_ERROR, b"invalid DoQ query");
-                    return Ok(None);
-                }
-            };
-            ctx.state
-                .update_connection_stats(
-                    ctx.server_id,
-                    id,
-                    Some(frame.len() as u64),
-                    None,
-                    Some(1),
-                    None,
-                )
-                .await;
-            let response = if query.queries.len() != 1 {
-                error_response(&query, ResponseCode::FormErr)
-            } else if query.op_code != OpCode::Query
-                || query.queries[0].query_class() != DNSClass::IN
-                || !matches!(
-                    query.queries[0].query_type(),
-                    RecordType::A
-                        | RecordType::AAAA
-                        | RecordType::MX
-                        | RecordType::TXT
-                        | RecordType::CNAME
-                        | RecordType::ANY
-                )
-            {
-                error_response(&query, ResponseCode::NotImp)
-            } else {
-                let q = &query.queries[0];
-                let event = Event::new(
-                    &DOQ_QUERY_EVENT,
-                    json!({
-                        "query_id":0,"domain":q.name().to_utf8(),"query_type":q.query_type().to_string(),
-                        "query_class":q.query_class().to_string(),"recursion_desired":query.recursion_desired,
-                        "stream_id":u64::from(recv.id()),"peer_addr":connection.remote_address().to_string(),
-                    }),
-                );
-                Log::new(Some(&ctx.status_tx)).debug(format!(
-                    "DoQ {} {} stream {}",
-                    q.query_type(),
-                    q.name(),
-                    recv.id()
-                ));
-                Log::new(Some(&ctx.status_tx)).trace(format!("DoQ query: {}", event.data));
-                match call_llm(
-                    &ctx.llm_client,
-                    &ctx.state,
-                    ctx.server_id,
-                    Some(id),
-                    &event,
-                    &DoqProtocol::new(),
-                )
-                .await
-                {
-                    Ok(result) => {
-                        if !result.failures.is_empty() {
-                            Log::new(Some(&ctx.status_tx)).error(format!(
-                                "DoQ stream {} decision=fail_closed_action_error: {} action(s) failed; answering SERVFAIL",
-                                recv.id(), result.failures.len()
-                            ));
-                            return Ok(Some(encode(&error_response(
-                                &query,
-                                ResponseCode::ServFail,
-                            ))?));
-                        }
-                        for message in result.messages {
-                            Log::new(Some(&ctx.status_tx)).info(message);
-                        }
-                        let mut messages = Vec::new();
-                        for result in result.protocol_results {
-                            if let ActionResult::Output(bytes) = result {
-                                messages.push(Message::from_vec(&bytes)?);
-                            }
-                        }
-                        if messages.is_empty() {
-                            Log::new(Some(&ctx.status_tx)).info(format!(
-                                "DoQ stream {} decision=model_silent; cancelling query with DOQ_NO_ERROR",
-                                recv.id()
-                            ));
-                            // A dropped query is an explicit transaction cancellation, not an
-                            // empty DNS stream or an indefinitely dangling request.
-                            return Ok(None);
-                        }
-                        let mut response = messages.remove(0);
-                        for message in messages {
-                            response.add_answers(message.answers.iter().cloned());
-                        }
-                        response.metadata.id = 0;
-                        response.metadata.message_type = MessageType::Response;
-                        response.metadata.op_code = query.op_code;
-                        response.metadata.recursion_desired = query.recursion_desired;
-                        response.queries = query.queries.to_vec();
-                        let decision = if matches!(
-                            response.response_code,
-                            ResponseCode::NXDomain | ResponseCode::Refused
-                        ) {
-                            "model_reject"
-                        } else {
-                            "model_answer"
-                        };
-                        Log::new(Some(&ctx.status_tx)).info(format!(
-                            "DoQ stream {} decision={decision} rcode={}",
-                            recv.id(),
-                            response.response_code
-                        ));
-                        response
-                    }
-                    Err(e) => {
-                        let category = if crate::utils::WireFailure::classify(&e).is_overloaded() {
-                            "overloaded"
-                        } else {
-                            "unavailable"
-                        };
-                        Log::new(Some(&ctx.status_tx)).error(format!(
-                            "DoQ stream {} decision=fail_closed_llm_error category={category}; answering SERVFAIL: {e}", recv.id()
-                        ));
-                        error_response(&query, ResponseCode::ServFail)
-                    }
-                }
-            };
-            Ok::<_, anyhow::Error>(Some(encode(&response)?))
-        };
-        // While a handler runs, STOP_SENDING promptly drops the work rather than
-        // retaining its LLM request until the exchange deadline.
-        let result = tokio::select! {
+        let log = Log::new(Some(&ctx.status_tx));
+        let stream = recv.id();
+        let end = tokio::time::Instant::now() + exchange;
+        let ending = tokio::select! {
             _ = send.stopped() => {
-                Log::new(Some(&ctx.status_tx)).info(format!("DoQ decision=peer_cancelled stream {}", send.id()));
-                let _ = recv.stop(REQUEST_CANCELLED); return;
+                log.info(format!("DoQ stream {stream} decision=peer_cancelled"));
+                // Dropping `send` after STOP_SENDING resets it with the client's own code.
+                let _ = recv.stop(REQUEST_CANCELLED);
+                return;
             }
-            result = tokio::time::timeout_at(end, exchange) => result,
+            ending = Self::exchange(&mut recv, connection, ctx, id, end) => ending,
         };
-        match result {
-            Ok(Ok(Some(frame))) => {
-                let sent = tokio::time::timeout_at(end, async {
+        match ending {
+            Ending::Reply(message) => {
+                let frame = match frame(&message) {
+                    Ok(frame) => frame,
+                    Err(e) => {
+                        log.error(format!(
+                            "DoQ stream {stream} answer cannot be framed ({e}); resetting \
+                             with DOQ_INTERNAL_ERROR decision=fail_closed_send_error"
+                        ));
+                        let _ = send.reset(INTERNAL_ERROR);
+                        return;
+                    }
+                };
+                // The answer is ready; the peer's flow control decides when it can go. A peer
+                // that grants no credit does not keep the stream past this.
+                let sent = tokio::time::timeout(RESPONSE_WRITE_TIMEOUT, async {
                     send.write_all(&frame).await?;
                     send.finish()?;
                     Ok::<_, anyhow::Error>(())
@@ -352,39 +233,239 @@ impl DoqServer {
                         )
                         .await;
                 } else {
-                    Log::new(Some(&ctx.status_tx)).error(format!(
-                        "DoQ stream {} decision=fail_closed_send_error; resetting stream",
-                        send.id()
+                    log.error(format!(
+                        "DoQ stream {stream} answer not accepted by the peer within \
+                         {RESPONSE_WRITE_TIMEOUT:?}; resetting with DOQ_INTERNAL_ERROR \
+                         decision=fail_closed_send_error"
                     ));
                     let _ = send.reset(INTERNAL_ERROR);
                 }
             }
-            Ok(Ok(None)) => {
-                let _ = send.reset(NO_ERROR);
+            Ending::Reset(code) => {
+                let _ = recv.stop(code);
+                let _ = send.reset(code);
+            }
+            Ending::Closed => {}
+        }
+    }
+
+    /// Read the query and decide what the stream ends with.
+    async fn exchange(
+        recv: &mut quinn::RecvStream,
+        connection: &quinn::Connection,
+        ctx: &SpawnContext,
+        id: ConnectionId,
+        end: tokio::time::Instant,
+    ) -> Ending {
+        let log = Log::new(Some(&ctx.status_tx));
+        let stream = recv.id();
+        let peer = connection.remote_address();
+        let frame = match tokio::time::timeout_at(end, recv.read_to_end(MAX_FRAME_BYTES)).await {
+            Ok(Ok(frame)) => frame,
+            // RFC 9250 §4.3.1: a RESET_STREAM before the FIN abandons the transaction, and the
+            // server answers it with a RESET_STREAM of its own. Other streams go on.
+            Ok(Err(quinn::ReadToEndError::Read(quinn::ReadError::Reset(_)))) => {
+                log.debug(format!(
+                    "DoQ stream {stream} reset by {peer} before its query ended \
+                     decision=peer_cancelled"
+                ));
+                return Ending::Reset(NO_ERROR);
+            }
+            // More bytes than one frame: a second message, or a length that lies (§4.3.3).
+            // Flow control does not prevent it — quinn extends credit as the stream is read.
+            Ok(Err(quinn::ReadToEndError::TooLong)) => {
+                log.warn(format!(
+                    "DoQ stream {stream} from {peer} carries more than one \
+                     {MAX_FRAME_BYTES}-byte frame; closing with DOQ_PROTOCOL_ERROR \
+                     decision=fail_closed_protocol_error"
+                ));
+                connection.close(PROTOCOL_ERROR, b"DoQ frame too large");
+                return Ending::Closed;
             }
             Ok(Err(e)) => {
-                Log::new(Some(&ctx.status_tx)).error(format!(
-                    "DoQ stream {} decision=fail_closed_response_error: {e}",
-                    send.id()
-                ));
-                let _ = send.reset(INTERNAL_ERROR);
+                log.debug(format!("DoQ stream {stream} from {peer} read failed: {e}"));
+                return Ending::Reset(INTERNAL_ERROR);
             }
             Err(_) => {
-                Log::new(Some(&ctx.status_tx)).error(format!(
-                    "DoQ stream {} decision=fail_closed_timeout; resetting stream",
-                    send.id()
+                log.warn(format!(
+                    "DoQ stream {stream} from {peer}: no complete query and FIN within the \
+                     exchange deadline; resetting with DOQ_UNSPECIFIED_ERROR \
+                     decision=fail_closed_read_timeout"
                 ));
-                let _ = recv.stop(UNSPECIFIED_ERROR);
-                let _ = send.reset(UNSPECIFIED_ERROR);
+                return Ending::Reset(UNSPECIFIED_ERROR);
+            }
+        };
+        // RFC 9250 §4.3.3: a non-zero id, a length that disagrees with the stream, a second
+        // message and EDNS TCP keepalive are protocol errors, which close the connection.
+        let query = match decode(&frame, MessageType::Query) {
+            Ok(message) => message,
+            Err(e) => {
+                log.warn(format!(
+                    "DoQ stream {stream} from {peer}: {e:#}; closing with DOQ_PROTOCOL_ERROR \
+                     decision=fail_closed_protocol_error"
+                ));
+                connection.close(PROTOCOL_ERROR, b"invalid DoQ query");
+                return Ending::Closed;
+            }
+        };
+        ctx.state
+            .update_connection_stats(
+                ctx.server_id,
+                id,
+                Some(frame.len() as u64),
+                None,
+                Some(1),
+                None,
+            )
+            .await;
+        let reply = StreamQuery::new(&query, "DoQ");
+        match tokio::time::timeout_at(end, Self::answer(&query, &reply, ctx, id, stream, peer))
+            .await
+        {
+            Ok(ending) => ending,
+            // RFC 9250 §4.3.2: a server failure is a SERVFAIL on the stream, not a reset.
+            Err(_) => {
+                log.error(format!(
+                    "DoQ stream {stream} from {peer}: not answered within the exchange \
+                     deadline; answering SERVFAIL decision=fail_closed_timeout"
+                ));
+                reply
+                    .servfail()
+                    .map_or(Ending::Reset(INTERNAL_ERROR), Ending::Reply)
+            }
+        }
+    }
+
+    /// Answer a decoded query through the DNS server's own rules ([`StreamQuery`]).
+    async fn answer(
+        query: &Message,
+        reply: &StreamQuery<'_>,
+        ctx: &SpawnContext,
+        id: ConnectionId,
+        stream: quinn::StreamId,
+        peer: SocketAddr,
+    ) -> Ending {
+        let log = Log::new(Some(&ctx.status_tx));
+        let spec = |rcode, why: String| {
+            reply
+                .spec_reply(rcode, &why, peer, &log)
+                .map_or(Ending::Reset(INTERNAL_ERROR), Ending::Reply)
+        };
+        if query.queries.is_empty() {
+            return reply
+                .formerr_without_question(peer, &log)
+                .map_or(Ending::Reset(INTERNAL_ERROR), Ending::Reply);
+        }
+        if query.queries.len() > 1 {
+            return spec(
+                ResponseCode::FormErr,
+                format!(
+                    "{} questions in one query, and a DoQ stream answers one",
+                    query.queries.len()
+                ),
+            );
+        }
+        let q = &query.queries[0];
+        if query.op_code != OpCode::Query {
+            return spec(
+                ResponseCode::NotImp,
+                format!("opcode {:?} is not implemented", query.op_code),
+            );
+        }
+        if q.query_class() != DNSClass::IN {
+            return spec(
+                ResponseCode::NotImp,
+                format!("class {} is not served", q.query_class()),
+            );
+        }
+        if matches!(q.query_type(), RecordType::AXFR | RecordType::IXFR) {
+            return spec(
+                ResponseCode::NotImp,
+                format!(
+                    "{} zone transfer is not implemented over DoQ",
+                    q.query_type()
+                ),
+            );
+        }
+        let event = Event::new(
+            &DOQ_QUERY_EVENT,
+            json!({
+                "query_id": 0,
+                "domain": q.name().to_string(),
+                "query_type": q.query_type().to_string(),
+                "query_class": q.query_class().to_string(),
+                "recursion_desired": query.recursion_desired,
+                "stream_id": u64::from(stream),
+                "peer_addr": peer.to_string(),
+            }),
+        );
+        log.debug(format!(
+            "DoQ {} {} stream {stream} from {peer}",
+            q.query_type(),
+            q.name()
+        ));
+        log.trace(format!("DoQ query: {}", event.data));
+        let result = call_llm(
+            &ctx.llm_client,
+            &ctx.state,
+            ctx.server_id,
+            Some(id),
+            &event,
+            &DoqProtocol::new(),
+        )
+        .await
+        .map(|mut execution| {
+            bind_to_query(&mut execution, query);
+            execution
+        });
+        // The DNS server's rules decide what goes back: the first message an action produced,
+        // finished (the OPT echoed for an EDNS query, SERVFAIL for an answer past 65535
+        // octets); nothing for `ignore_query`, which on DoQ resets the stream with
+        // DOQ_NO_ERROR so the transaction ends rather than dangles; SERVFAIL for a backend
+        // failure and for an answer with nothing sendable in it. The id is zero because every
+        // action's `query_id` is (`DoqProtocol::execute_action`), and `frame` refuses any other.
+        match reply.answer(result, peer, id, &log) {
+            Some(message) => Ending::Reply(message),
+            None => {
+                log.info(format!(
+                    "DoQ stream {stream} answered with ignore_query; resetting with DOQ_NO_ERROR"
+                ));
+                Ending::Reset(NO_ERROR)
             }
         }
     }
 }
 
-fn error_response(query: &Message, code: ResponseCode) -> Message {
-    let mut response = Message::new(0, MessageType::Response, query.op_code);
-    response.metadata.recursion_desired = query.recursion_desired;
-    response.metadata.response_code = code;
-    response.add_queries(query.queries.iter().cloned());
-    response
+/// Make every DNS message an action produced answer *this* stream's query: its question,
+/// opcode and RD flag copied from the query (RFC 1035 §4.1.1), its id the query's zero
+/// (RFC 9250 §4.2.1). An action builds its question from the `domain` and type the model
+/// wrote, so without this an A action answering an ANY query carries an A question, which a
+/// client that checks the question — NetGet's own DoQ client does — refuses as a protocol
+/// error. Bytes that are not a DNS message are left alone for [`StreamQuery`] to refuse.
+fn bind_to_query(execution: &mut ExecutionResult, query: &Message) {
+    for result in &mut execution.protocol_results {
+        let ActionResult::Output(bytes) = result else {
+            continue;
+        };
+        let Ok(mut message) = crate::utils::dns_screen::decode_dns_message(bytes) else {
+            continue;
+        };
+        message.metadata.id = 0;
+        message.metadata.op_code = query.op_code;
+        message.metadata.recursion_desired = query.recursion_desired;
+        message.queries = query.queries.clone();
+        if let Ok(bound) = message.to_vec() {
+            *bytes = bound;
+        }
+    }
+}
+
+/// How a transaction's stream ends.
+enum Ending {
+    /// A DNS message to frame, send and FIN.
+    Reply(Vec<u8>),
+    /// STOP_SENDING and RESET_STREAM with this DoQ error code.
+    Reset(quinn::VarInt),
+    /// The connection is closed (a protocol error); there is no stream left to end.
+    Closed,
 }

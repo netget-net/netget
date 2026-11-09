@@ -223,7 +223,10 @@ elif t=='dns_query' and e['domain']=='huge.test.':
     h=bytes.fromhex('%04x8180'%e['query_id'])+bytes([0,1,1,44,0,0,0,0])+bytes([4])+b'huge'+bytes([4])+b'test'+bytes([0,0,16,0,1])
     d=(h+(bytes([0xc0,12,0,16,0,1,0,0,0,60,1,0,255])+b'x'*255)*300).hex()
 else: d=None
-print(json.dumps({'actions':[{'type':'send_dns_response','data':d}] if d else []}))"#;
+if t=='dns_query' and e['domain']=='records.test.':
+    acts=[{'type':'send_dns_records','query_id':e['query_id'],'domain':e['domain'],'query_type':'TXT','answers':[{'type':'TXT','text':['x'*255]*3} for _ in range(100)]}]
+else: acts=[{'type':'send_dns_response','data':d}] if d else []
+print(json.dumps({'actions':acts}))"#;
 
 /// The model's hand-assembled bytes are answered SERVFAIL, with the client's own id, when
 /// they do not parse. Sent as given, the short answer would reach the client with id 0x0042
@@ -280,6 +283,25 @@ async fn model_bytes_that_are_not_dns_are_answered_servfail() {
         r[0].response_code,
         ResponseCode::ServFail,
         "an answer past 65535 octets over TCP must be SERVFAIL, not a truncated NOERROR: {:?}",
+        r[0].metadata
+    );
+    assert!(r[0].answers.is_empty());
+
+    // The same through a structured action: 100 TXT records of three 255-octet strings, ~77 KB.
+    // Here the action's own encoder is what stops at 65535 and sets TC, so the message the
+    // server finishes already says TC, and an answer cut short went out as NOERROR on every
+    // stream transport until the check looked at the bit rather than at who set it.
+    let r = tcp(
+        &mut stream,
+        &query(0x7777, "records.test.", RecordType::TXT),
+        1,
+    )
+    .await;
+    assert_eq!(r[0].id, 0x7777);
+    assert_eq!(
+        r[0].response_code,
+        ResponseCode::ServFail,
+        "send_dns_records past 65535 octets over TCP: {:?}",
         r[0].metadata
     );
     assert!(r[0].answers.is_empty());

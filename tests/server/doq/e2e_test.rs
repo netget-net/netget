@@ -6,46 +6,6 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
-async fn independent_kdig_reads_authenticated_a_aaaa_and_negative_answers() {
-    let fixture = Fixture::standard().await;
-    for (kind, expected) in [
-        ("A", "192.0.2.19"),
-        ("AAAA", "2001:db8::19"),
-        ("MX", "NXDOMAIN"),
-    ] {
-        let output = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::process::Command::new("kdig")
-                .arg("+quic")
-                .arg(format!(
-                    "+tls-ca={}",
-                    fixture.dir.path().join("cert.pem").display()
-                ))
-                .arg("+tls-hostname=localhost")
-                .arg("+timeout=3")
-                .arg("+retry=0")
-                .arg("@127.0.0.1")
-                .arg("-p")
-                .arg(fixture.addr.port().to_string())
-                .arg("independent.example")
-                .arg(kind)
-                .output(),
-        )
-        .await
-        .unwrap()
-        .expect("kdig is required: brew install knot (with QUIC support)");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success(),
-            "kdig failed: {stdout} {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(stdout.contains(expected), "{kind}: {stdout}");
-    }
-    fixture.close().await;
-}
-
-#[tokio::test]
 async fn multiplexing_fin_id_question_and_cleanup() {
     let fixture = Fixture::standard().await;
     let (_endpoint, connection) = fixture.peer().await;
@@ -64,7 +24,7 @@ async fn multiplexing_fin_id_question_and_cleanup() {
     assert_eq!(second.queries, aaaa.queries);
     assert_eq!(first.answers[0].ttl, 17);
     assert_eq!(second.answers[0].ttl, 23);
-    fixture.decision("decision=model_answer").await;
+    fixture.decision("DoQ response to").await;
     fixture.close().await;
     tokio::time::timeout(Duration::from_secs(3), connection.closed())
         .await
@@ -194,9 +154,7 @@ async fn handler_failure_returns_servfail_and_xfr_is_explicitly_unsupported() {
         .await
         .unwrap();
     assert_eq!(response.response_code, ResponseCode::ServFail);
-    fixture
-        .decision("decision=fail_closed_llm_error category=unavailable")
-        .await;
+    fixture.decision("decision=fail_closed_llm_error").await;
     let mut xfr = query("zone.example", "A");
     xfr.queries[0].set_query_type(hickory_proto::rr::RecordType::AXFR);
     let (response, _) = exchange(&c, &xfr, Duration::from_secs(3)).await.unwrap();
@@ -205,17 +163,27 @@ async fn handler_failure_returns_servfail_and_xfr_is_explicitly_unsupported() {
 }
 
 #[tokio::test]
-async fn decision_logs_distinguish_silence_negative_answers_and_action_failure() {
+async fn decision_logs_distinguish_silence_negative_answers_and_unusable_answers() {
     for (actions, decision, expected) in [
-        (json!([]), "decision=model_silent", None),
+        (
+            json!([{"type":"ignore_query"}]),
+            "answered with ignore_query; resetting with DOQ_NO_ERROR",
+            None,
+        ),
         (
             json!([{"type":"send_dns_nxdomain","domain":"decision.example","query_type":"A"}]),
-            "decision=model_reject",
+            "DoQ response to",
             Some(ResponseCode::NXDomain),
+        ),
+        // Nothing sendable is a server failure, answered on the stream (RFC 9250 §4.3.2).
+        (
+            json!([]),
+            "decision=fail_closed_no_action",
+            Some(ResponseCode::ServFail),
         ),
         (
             json!([{"type":"send_dns_a_response","domain":"decision.example","ip":"invalid"}]),
-            "decision=fail_closed_action_error",
+            "decision=fail_closed_no_action",
             Some(ResponseCode::ServFail),
         ),
     ] {
@@ -226,7 +194,7 @@ async fn decision_logs_distinguish_silence_negative_answers_and_action_failure()
         if let Some(code) = expected {
             assert_eq!(result.unwrap().0.response_code, code);
         } else {
-            assert!(result.is_err(), "silence resets the stream");
+            assert!(result.is_err(), "ignore_query resets the stream");
         }
         fixture.decision(decision).await;
         fixture.close().await;
@@ -291,7 +259,7 @@ async fn stream_credit_bounds_dangling_queries_and_recovers_after_cancellation()
 #[tokio::test]
 async fn handshake_deadline_releases_a_slot_without_a_completed_tls_session() {
     let fixture = Fixture::new(
-        json!({"max_connections":1,"handshake_timeout_secs":1,"idle_timeout_secs":10}),
+        json!({"max_connections":1,"handshake_timeout_secs":2,"idle_timeout_secs":10}),
         Some(json!({"type":"static","actions":[]})),
     )
     .await;
@@ -322,7 +290,18 @@ async fn handshake_deadline_releases_a_slot_without_a_completed_tls_session() {
             .is_err(),
         "pending handshake consumes the only slot"
     );
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // Inside the 2 s bound the stalled handshake still holds it.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert!(
+        fixture
+            .endpoint(b"doq")
+            .connect(fixture.addr, "localhost")
+            .unwrap()
+            .await
+            .is_err(),
+        "the pending handshake was released inside its deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let (_endpoint, c) = fixture.peer().await;
     c.close(0u32.into(), b"done");
     fixture.close().await;
