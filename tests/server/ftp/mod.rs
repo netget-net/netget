@@ -1,7 +1,9 @@
 mod batching_test;
 mod connection_bounds_test;
+mod data_connection_test;
 mod decision_tag_test;
 mod llm_failure_test;
 mod one_reply_test;
 mod peer_injection_test;
+mod real_client_test;
 mod test;
