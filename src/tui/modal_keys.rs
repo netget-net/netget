@@ -322,7 +322,7 @@ async fn run_form_action(
             let ticket = ActionTicket::next();
             form.pending = Some(ticket);
             form.error = None;
-            let model = form.clone();
+            let model = (**form).clone();
             crate::tui::actions::spawn_form_apply(app, model, state, ticket);
         }
         _ => {}
