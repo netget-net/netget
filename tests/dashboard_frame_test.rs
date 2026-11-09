@@ -1412,3 +1412,99 @@ async fn a_card_letter_for_the_other_kind_says_where_it_works() {
         "n on a server says what it does, where, and what to use instead: {said}"
     );
 }
+
+/// A verb with more parameters than the composer holds at 80×24: the box
+/// scrolls to the selected field, says there is more, and keeps the
+/// validation error above the buttons. It used to render through ratatui's
+/// `Wrap` with no scroll, so the last fields and the error fell off the box.
+#[test]
+fn a_composer_with_many_parameters_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::llm::actions::{ActionDefinition, Parameter};
+    use netget::tui::modal::composer::ComposerModel;
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let parameters: Vec<Parameter> = (1..=14)
+        .map(|n| Parameter {
+            name: format!("param_{n:02}"),
+            type_hint: "string".into(),
+            description: format!("the {n}th header of the request, sent as written"),
+            required: n == 14,
+        })
+        .collect();
+    let action = ActionDefinition {
+        name: "send_request".into(),
+        description: "Send one request with every header the protocol defines".into(),
+        parameters,
+        example: serde_json::json!({"type": "send_request"}),
+        log_template: None,
+    };
+    let mut composer = ComposerModel::new(ClientId::new(2), "test", vec![action]);
+    composer.choose();
+    composer.move_selection(13);
+    composer.error = Some("'param_14' is required — fill it in before [ Send ]".into());
+    app.modals.push(Modal::Composer(Box::new(composer)));
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains("▸ param_14")),
+        "the selected field, the last of 14, is in view:\n{text}"
+    );
+    assert!(
+        text.contains("before [ Send ]"),
+        "the validation error is in view, whole:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(text.contains("[ Send ]"), "the buttons stay:\n{text}");
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}
+
+/// The routing draft at 80×24 with more static actions than the box holds:
+/// the selected action stays in view and the draft's error stays above the
+/// buttons, as in the instance form.
+#[test]
+fn a_routing_draft_with_many_actions_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::tui::modal::routing::{DraftFocus, HandlerKind, RoutingModel};
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let state = netget::state::AppState::new();
+    let mut model = RoutingModel::new(UiKey::Server(ServerId::new(1)), "TCP", None, &state);
+    model.add();
+    {
+        let draft = model.draft.as_mut().expect("draft open");
+        draft.pattern = "tcp_data_received".into();
+        draft.kind = HandlerKind::Static;
+        draft.actions = (1..=16)
+            .map(|n| serde_json::json!({"type": "send_tcp_data", "data": format!("line {n:02}")}))
+            .collect();
+        draft.focus = DraftFocus::Actions;
+        draft.selected_action = 15;
+        draft.error = Some(
+            "action 16 (send_tcp_data) is missing a field the protocol requires: encoding".into(),
+        );
+    }
+    app.modals.push(Modal::Routing(Box::new(model)));
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        text.contains("line 16"),
+        "the selected action, the last of 16, is in view:\n{text}"
+    );
+    assert!(
+        text.contains("requires: encoding"),
+        "the draft's error is in view, whole:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(
+        text.contains("[ Save response ]"),
+        "the buttons stay:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}

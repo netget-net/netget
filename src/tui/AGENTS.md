@@ -134,7 +134,7 @@ the list badge, the inspector overview, the feed, and the status bar.
 | `keymap.rs` | global keys, focus cycling, per-pane keys, mouse |
 | `modal_keys.rs` | input handling for every modal |
 | `hit.rs` | per-frame hit-test registry for the mouse |
-| `render/` | one file per pane plus `overlay.rs` for modals |
+| `render/` | one file per pane plus `overlay.rs` for modals; the form, the composer and the routing draft draw through its `draw_scrolled` (pre-wrapped rows scrolled to the selection, "↑↓ more fields" on the box's edge, the error pinned above the buttons) |
 | `modal/` | forms, composer, routing editor, intercept answer, picker, help, wireshark |
 | `wrap.rs` | word wrapping in terminal cells, one row per piece — the stream, card errors, the empty state, form help |
 | `wireshark.rs` | protocol → dissector/capture-filter table; leads with `wireshark -r <file>` when NetGet is writing the instance's own pcap (`ServerRow::capture` / `ClientRow::capture`, from `src/capture/`) and otherwise says how to turn that on |
@@ -192,7 +192,8 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   errored server, a client with verbs), every tab for both kinds at the minimum size, and
   what the selection does when its instance vanishes; and what must never be cut at 80×24 —
   a failure in the stream, an instance's error, the empty state's guidance, the selected
-  field and the error of a create form longer than the box, a parked request's time left,
+  field and the error of a create form, a composer verb or a routing draft longer than the
+  box, a parked request's time left,
   the no-model warning on an LLM driver. **Start here for any layout change**;
   `--nocapture` prints the frames.
 - `tests/dashboard_rail_test.rs` — the summary line, driver detection/rebuild, and the
@@ -245,7 +246,7 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   or `mv` once the difference is the one intended. Every dashboard pty test waits on
   the text its last key must paint through one `PtyScreen`; never add a fixed sleep.
 - Candidates not done: fold-all / unfold-all keys once many cards are open; per-peer
-  throughput; an `[ answer all ]` shortcut when several requests are parked. The composer
-  and the routing draft still render through ratatui's `Wrap` with no scroll, so a verb with
-  more parameters than the box holds clips the last ones (and the error below them) the way
-  the form did; `wrap.rs` plus an explicit scroll is the shape the form now uses.
+  throughput; an `[ answer all ]` shortcut when several requests are parked. The routing
+  table (not its draft) and the intercept modal still render through ratatui's `Wrap` with no
+  scroll; past a screenful of rules or payload they clip, and `draw_scrolled` is the shape to
+  move them to.
