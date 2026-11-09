@@ -397,10 +397,26 @@ pub struct AccessActivity {
     /// Actions put on the wire by hand (`send_to_client`, `send_to_peer`), recorded as
     /// `injected_action` entries.
     pub injected: u64,
-    /// Events per [`answered_by`] value; entries that record none count under `"unrecorded"`.
+    /// Events per [`answered_by`] value; entries that record none count under `"unrecorded"`,
+    /// and events nothing could answer (the model unreachable, a timeout) under
+    /// [`FAILED_EVENT_KEY`].
     pub answered_by: std::collections::BTreeMap<String, u64>,
     /// Unix milliseconds of the most recent entry.
     pub last_unix_ms: Option<u64>,
+}
+
+/// The [`AccessActivity::answered_by`] key for events whose handling failed outright.
+pub const FAILED_EVENT_KEY: &str = "failed";
+
+/// Whether an access-log response records an event whose handling failed outright — the
+/// single `{"type": "FAILED: <event id>", "error": …}` entry written in place of actions
+/// when the model could not be reached or did not answer.
+pub fn is_failed_event_response(response: &[serde_json::Value]) -> bool {
+    matches!(response, [only] if only
+        .get("type")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| t.starts_with(crate::llm::actions::executor::FAILED_ACTION_TYPE_PREFIX))
+        && only.get("error").is_some())
 }
 
 /// The access-log event type `send_to_client` records an injected action under.
@@ -3667,6 +3683,13 @@ impl AppState {
             if entry.event_type == INJECTED_ACTION_EVENT {
                 // The entry's request is the action itself; its response is usually empty.
                 activity.injected += 1;
+            } else if entry.answered_by.is_none() && is_failed_event_response(&entry.response) {
+                // Nothing answered it: the response slot holds why, not actions.
+                activity.events += 1;
+                *activity
+                    .answered_by
+                    .entry(FAILED_EVENT_KEY.to_string())
+                    .or_default() += 1;
             } else {
                 activity.events += 1;
                 activity.actions += entry.response.len() as u64;

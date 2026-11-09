@@ -215,6 +215,35 @@ port was an error ("requires 'port' parameter") for every protocol without a `de
 — most of them — while `get_protocol_docs` said `0` was the default; the docs now render the
 resolved default for this process, and the `start_server` schema says the same.
 
+## What `start_server` / `start_client` return
+
+An agent acts on the tool result alone, so the result carries what the next step needs:
+
+- **The address first.** `start_server`'s first line is `Server #N (<Protocol>) listening on
+  <ip>:<port>.` (or `started (no listening socket).`), read from the server's bound
+  `local_addr`; the startup path's own `[SERVER] Starting … / listening on …` lines, which
+  repeated it, are dropped, and the protocol's own log lines follow. `start_client` leads with
+  `Client #N (<Protocol>) connected to <addr>.`
+- **A model that will not answer, said at once.** When some event of the new instance can
+  reach the model (`EventHandlerConfig::may_reach_model`: no `*` rule answered by a static,
+  script or manual handler, and for a server a non-empty instruction), the tool asks the
+  backend whether it works — `check_model` for a configured model, the model listing
+  otherwise — bounded by `MODEL_PROBE_TIMEOUT` (3s), and adds one `WARNING:` line when it
+  cannot be reached, does not have the model, or has none. The instance still starts: the
+  operator may be about to start the backend. Without this a server reported a clean start
+  and then failed every request closed, with nothing in any result saying why. The agent
+  queue and the bridge are not asked.
+- **Errors keep their cause.** Tool errors print the whole `anyhow` chain (`{:#}`), so a
+  client pointed at a closed port reads `Failed to connect to Redis at 127.0.0.1:1:
+  Connection refused (os error 61)`, not the outer context alone.
+- **A taken port names itself.** `server_startup::explain_port_in_use` turns the protocol's
+  `Address already in use (os error 48)` into `cannot listen on 127.0.0.1:6379: the port is
+  already in use by this NetGet's server #3 (Redis) … Choose another port, or pass port 0 …`
+  ("by another process" otherwise), for MCP, the model's `open_server` and `--server --port`
+  alike. A privileged-port refusal says to use 1024 or above, or 0.
+
+`tests/mcp_first_try_test.rs` drives each of these with `--ollama-url` at a closed port.
+
 ## Client control surface
 
 `start_client` / `list_clients` / `client_status` / `stop_client` mirror the
@@ -494,11 +523,18 @@ dashboard's per-band request panes use). Client entries come from
 `llm_budget::call_llm_for_client` and from injected `send_to_client` actions
 (event type `injected_action`).
 
-Two limitations worth knowing: only successfully-handled events are logged — a
-request whose LLM call errors out produces no entry; and a **client** entry records
-the actions that were *produced*, not executed, because execution happens later
-inside the client's own connection loop, which does not report back. The
-`send_to_client` path is honest about outcomes via `ClientSendOutcome`.
+**A server event whose handling failed outright is logged too**
+(`action_helper::record_failed_event_access_log`): its response is one
+`{"type": "FAILED: <event id>", "error": "<why>"}` entry and it records no `answered_by`.
+`list_access_logs` and the recent events in `server_status` print the reason beside it
+(`FAILED: redis_command (cannot connect to Ollama at http://127.0.0.1:1 …)`), and the
+activity counters count it as failed (`app_state::is_failed_event_response`), not as an
+answer with one action.
+
+One limitation worth knowing: a **client** entry records the actions that were *produced*,
+not executed, because execution happens later inside the client's own connection loop, which
+does not report back. The `send_to_client` path is honest about outcomes via
+`ClientSendOutcome`.
 
 ## Local listeners (`list_local_listeners`)
 
@@ -557,7 +593,10 @@ request meeting Ollama's 404.
 model and the endpoint. The conversation layer does not retry it and does not wrap it in
 "failed to generate valid response after retries" (`backend_error::LlmContextExt`); the
 access-log failure entry, the ERROR log line and `get_status`'s `Last LLM backend failure`
-all carry its text. The peer still gets only a `WireFailure` category.
+all carry its text. `OllamaClient::record_backend_outcome` records every one for
+`get_status` — an unreachable endpoint and a timeout included, which are raised before any
+response exists and so never pass through `report_backend_failure` — and a later success
+clears it. The peer still gets only a `WireFailure` category.
 
 ## LLM Backend
 

@@ -17,7 +17,10 @@ instance whoever answered it. `--ready-file <PATH>` writes a JSON report of ever
 address (and every client's target and status) once all of them have started — atomically, and
 after removing any stale file at the path, so its appearance is the readiness signal for a
 process started on port 0; a run that fails to start never writes it, and MCP and the TUI
-refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. The test
+refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. `--server <p>`
+takes `--port`, `--host`, `--server-params` and `--server-handlers` (MCP's `event_handlers`
+shape, as `--client-handlers` is for `--client`); when a `*` rule answers every event the run
+asks no model and needs none (`tests/cli_server_direct_test.rs`). The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.
@@ -278,8 +281,12 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     hickory's encoder does not fail at 65535 octets — it truncates, sets TC and returns `Ok` —
     so the DNS server's own TCP path sent an oversize answer as a NOERROR carrying half an
     RRset; it is SERVFAIL now. And BIND's dig writes no TLS key log (`SSLKEYLOGFILE` feeds
-    `named`'s logging), so only kdig's sessions reach the oracle. `doq` (DNS over QUIC) has the
-    same delegated shape and was not examined.
+    `named`'s logging), so only kdig's sessions reach the oracle. `doq` (DNS over QUIC) had the
+    same delegated shape and the same kind of private loop — an answer with nothing sendable
+    reset the stream, several messages were merged into one, an answer past 65535 octets went
+    out as a NOERROR with TC, and types other than A/AAAA/MX/TXT/CNAME/ANY were answered NOTIMP
+    without asking the model, which held `send_dns_records` — and answers through
+    `StreamQuery` too (8 November 2026); it is still Experimental (`src/server/doq/AGENTS.md`).
   - `mqtt` and `kafka` had the oracle and gained `mqtt_packet` and `kafka_request`. Writing the
     Kafka one found that `kafka-protocol`'s gzip, zstd and lz4 decompressors have no output
     bound — a 64 KiB Produce batch inflated to 64 MiB — now `MAX_INFLATED_PRODUCE_BYTES`.
@@ -316,7 +323,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (66 servers as of 8 November 2026, after `smtp`, `pop3` and `tftp` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (68 servers as of 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -358,9 +365,25 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   requests. **The lesson from the mail protocols: a protocol's own raw-socket suite is written by
   someone who already knows where the message ends; a real client is not. The lesson from
   TFTP: a real client on loopback never loses a packet, so a lockstep protocol's evidence
-  also needs a test that does.** `ftp` was considered and left
-  Experimental: it has no data connection (no `PASV`/`EPSV`/`PORT`), so a real client can log
-  in and do nothing else.
+  also needs a test that does.**
+
+  **`ftp` followed the same day, once it had a data connection to be judged on.** It had none
+  (no `PASV`, `EPSV`, `PORT` or `EPRT`; `TYPE` was a reply the model made up and changed
+  nothing; listings and files went out on the control connection), so a real client could log
+  in and do nothing else. The server now answers the setup verbs and `TYPE`/`MODE`/`STRU`
+  itself, binds passive listeners on the configured host only, refuses a `PORT`/`EPRT` naming
+  any host but the client (the bounce attack), and writes the `150` … `226`/`425`/`426`
+  sequence around the handler's listing or file; an upload reaches the handler whole, bounded
+  by `max_upload_bytes`. python3's stdlib `ftplib` and curl drive it through every listing
+  verb, both types in both directions and all four channel kinds
+  (`tests/server/ftp/real_client_test.rs`), and each data-connection bound is tested from both
+  sides. The same pass made an unanswered FTP command `451` instead of silence, and fixed the
+  FTP **client** ending a command with a bare CR. **It also found the evidence ratchet matching
+  filters as substrings**: `tests/real_client_evidence_is_run_test.rs` accepted
+  `tftp::real_client_test` in the CI loop as naming `ftp::real_client_test`, so FTP's evidence
+  would have read as run while CI ran only TFTP's. Filters are matched whole now, and FTP's is
+  `server::ftp::real_client_test`, because the bare form is a substring of TFTP's in
+  `cargo test`'s filter too.
 
   **Do not read the rest of this section as the list. Generate it:**
 

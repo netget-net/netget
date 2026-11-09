@@ -112,13 +112,13 @@ impl Protocol for DoqProtocol {
             ),
             parameter(
                 "exchange_timeout_secs",
-                "Whole query/handler/write deadline, 1..300 seconds",
+                "Deadline for a query to arrive whole (FIN included) and be answered, 1..300 seconds: past it a query still arriving has its stream reset with DOQ_UNSPECIFIED_ERROR and one being answered gets SERVFAIL",
                 json!(30),
                 Some(json!(EXCHANGE_TIMEOUT.as_secs())),
             ),
             parameter(
                 "idle_timeout_secs",
-                "QUIC idle timeout, 1..3600 seconds",
+                "QUIC idle timeout (the effective one is the lower of the two endpoints'), 1..3600 seconds",
                 json!(300),
                 Some(json!(IDLE_TIMEOUT.as_secs())),
             ),
@@ -130,7 +130,7 @@ impl Protocol for DoqProtocol {
             ),
             parameter(
                 "max_streams",
-                "Maximum active query streams per connection, 1..32",
+                "Maximum query streams a connection may have open at once, granted as QUIC stream credit, 1..32",
                 json!(32),
                 Some(json!(MAX_STREAMS)),
             ),
@@ -140,13 +140,13 @@ impl Protocol for DoqProtocol {
         use crate::protocol::metadata::{
             DevelopmentState, PrivilegeRequirement, ProtocolMetadataV2,
         };
-        ProtocolMetadataV2::builder().state(DevelopmentState::Experimental)
+        ProtocolMetadataV2::builder().state(DevelopmentState::Beta)
             .privilege_requirement(PrivilegeRequirement::PrivilegedPort(853)).well_known_udp_port(853)
             .max_inbound_bytes(super::wire::MAX_FRAME_BYTES)
-            .implementation("quinn 0.11, rustls 0.23 and existing hickory-proto 0.24 DNS codec")
-            .llm_control("Typed A/AAAA/MX/TXT/CNAME/NXDOMAIN responses per QUIC query stream")
-            .e2e_testing("Loopback framing, bounds, certificate validation, command/event and cleanup tests; independent-peer evidence recorded in tests/server/doq/AGENTS.md")
-            .notes("Single-question QUERY only; no AXFR/IXFR, DNSSEC signing, recursive resolver, 0-RTT, automatic padding or server-initiated messages. PEM certificate/key supported; generated localhost certificate otherwise.")
+            .implementation("quinn 0.11 and rustls 0.23 for QUIC; queries answered through the DNS server's own rules (dns::StreamQuery) on hickory-proto 0.26")
+            .llm_control("The DNS server's query actions (A, AAAA, CNAME, MX, TXT, NXDOMAIN, REFUSED, any records, ignore_query) per QUIC query stream; no raw send_dns_response")
+            .e2e_testing("Knot kdig +quic (libngtcp2, certificate and hostname verified) and AdGuard dnsproxy as a DoQ upstream client (quic-go + miekg/dns), both hard-failing when absent; loopback framing, every declared bound from both sides, answer outcomes and cleanup in tests/server/doq/")
+            .notes("Single-question IN-class QUERY only (others FORMERR or NOTIMP without the model); no AXFR/IXFR, DNSSEC signing, recursive resolver, 0-RTT, EDNS padding (RFC 9250 section 5.4 asks for padding) or server-initiated messages. PEM certificate/key supported; generated localhost certificate otherwise. Beta on two independent real clients (kdig and dnsproxy); not Stable: no pcap oracle and no fuzz target of its own for the DoQ framing.")
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)
             .build()

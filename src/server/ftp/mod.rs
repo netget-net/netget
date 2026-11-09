@@ -1,9 +1,14 @@
 //! FTP server implementation
 //!
-//! File Transfer Protocol (RFC 959) server with LLM-controlled responses.
-//! Supports basic FTP commands: USER, PASS, SYST, PWD, CWD, LIST, RETR, STOR, QUIT, etc.
+//! File Transfer Protocol (RFC 959, RFC 2428) server with LLM-controlled responses.
+//!
+//! The handler answers every command on the control connection and supplies every listing and
+//! file. The server owns the mechanics: the data-connection setup verbs (`PASV`, `EPSV`,
+//! `PORT`, `EPRT`) and `TYPE`/`MODE`/`STRU` are answered here (`data.rs`), and a transfer's
+//! `150` ... `226` sequence is written around the handler's payload.
 
 pub mod actions;
+pub mod data;
 
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -35,11 +40,18 @@ impl FtpServer {
         server_id: crate::state::ServerId,
         first_byte_timeout_secs: Option<u64>,
         idle_timeout_secs: Option<u64>,
+        data_limits: data::DataLimits,
     ) -> Result<SocketAddr> {
         // Both bounds are tunable because their right value is a property of who is on the
         // other end, which only the operator knows. The defaults serve NetGet's own FTP client
         // waiting on a human; a listener exposed to strangers wants the first one much lower.
         let deadlines = ReadDeadlines::resolve(first_byte_timeout_secs, idle_timeout_secs);
+        let config = SessionConfig {
+            deadlines,
+            data: data_limits,
+            // Passive listeners bind the host the server was configured with, never wider.
+            bind_ip: listen_addr.ip(),
+        };
         let listener =
             crate::server::socket_helpers::create_reusable_tcp_listener(listen_addr).await?;
         let local_addr = listener.local_addr()?;
@@ -117,7 +129,7 @@ impl FtpServer {
                                     state_clone.clone(),
                                     status_clone.clone(),
                                     protocol_clone,
-                                    deadlines,
+                                    config,
                                 )
                                 .await
                                 {
@@ -185,6 +197,15 @@ impl FtpServer {
 /// construction — as is every later LLM round-trip, which happens after a line has been read.
 const FIRST_COMMAND_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Everything one session needs from the server's configuration.
+#[derive(Clone, Copy)]
+struct SessionConfig {
+    deadlines: ReadDeadlines,
+    data: data::DataLimits,
+    /// The configured bind host, where passive listeners are opened.
+    bind_ip: std::net::IpAddr,
+}
+
 /// The two read deadlines for one connection, resolved from the server's startup parameters.
 ///
 /// Carried as one value so threading them from `spawn_with_llm_actions` down to the command
@@ -242,6 +263,21 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 /// later rather than recording a permanent failure. Fixed text, so there is no placeholder an
 /// internal error could reach.
 const CONNECTION_CAP_REFUSAL: &[u8] = b"421 Too many connections, closing control connection\r\n";
+
+/// What a greeting the handler did not answer is replaced with before the connection closes.
+///
+/// 421 is the greeting RFC 959 gives a server declining the session. Fixed text, so nothing a
+/// handler or an error produced can reach the wire.
+const GREETING_UNANSWERED: &[u8] =
+    b"421 Service not available, closing control connection (netget: no greeting was produced)\r\n";
+
+/// What a command the handler did not answer — no usable action, or an action the executor
+/// refused — is answered with.
+///
+/// `451 Requested action aborted: local error in processing` is RFC 959's transient failure
+/// for an action the server could not carry out. A client reads it as a failed command and
+/// goes on; silence would leave it waiting for a reply until its own timeout.
+const COMMAND_UNANSWERED: &[u8] = b"451 Requested action aborted: local error in processing\r\n";
 
 /// Largest control line the server will accumulate before giving up on the peer.
 ///
@@ -400,6 +436,20 @@ fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, 
         return ("model_answer", format!("reply {}", codes.join(",")));
     }
 
+    // A listing or file outside a transfer has no data connection to go to.
+    if result
+        .protocol_results
+        .iter()
+        .any(|r| actions::transfer_bytes(r).is_some())
+    {
+        return (
+            "fail_closed_bad_action",
+            "send_ftp_list/send_ftp_data answer only LIST, NLST, MLSD and RETR; this command \
+             has no data connection"
+                .to_string(),
+        );
+    }
+
     // Only a top-level `CloseConnection` is honoured by the command loop, so only a top-level
     // one is reported here.
     if result
@@ -475,7 +525,13 @@ where
         let line = match tokio::time::timeout(Duration::ZERO, reader.fill_buf()).await {
             Ok(Ok(buf)) => match buf.iter().position(|&b| b == b'\n') {
                 Some(idx) if idx < MAX_COMMAND_LINE => {
-                    String::from_utf8_lossy(&buf[..=idx]).into_owned()
+                    let line = String::from_utf8_lossy(&buf[..=idx]).into_owned();
+                    // A setup or transfer command is answered on its own path, so a batch
+                    // ends before it and leaves it to be read next.
+                    if data::Verb::of(&line) != data::Verb::Other {
+                        break;
+                    }
+                    line
                 }
                 _ => break,
             },
@@ -507,8 +563,13 @@ impl FtpSession {
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         protocol: Arc<FtpProtocol>,
-        deadlines: ReadDeadlines,
+        config: SessionConfig,
     ) -> Result<()> {
+        let ends = data::ControlEnds {
+            bind_ip: config.bind_ip,
+            local: stream.local_addr()?,
+            peer: stream.peer_addr()?,
+        };
         let (read_half, write_half) = tokio::io::split(stream);
         let write_half = Arc::new(Mutex::new(write_half));
 
@@ -549,7 +610,8 @@ impl FtpSession {
                 &app_state,
                 &status_tx,
                 protocol,
-                deadlines,
+                config,
+                ends,
             )
             .await
         }
@@ -644,13 +706,12 @@ impl FtpSession {
                     )),
                     "fail_closed_bad_action" => log.error(format!(
                         "FTP greeting on connection {connection_id} \
-                         decision=fail_closed_bad_action ({detail}); the client is waiting for a \
-                         220 that will never arrive"
+                         decision=fail_closed_bad_action ({detail}); refused with 421 and closed"
                     )),
                     _ => log.warn(format!(
                         "FTP greeting on connection {connection_id} decision=model_silent \
                          ({detail}); an FTP client may send no command until it has read a \
-                         greeting"
+                         greeting, so it is refused with 421 and closed"
                     )),
                 }
 
@@ -665,6 +726,27 @@ impl FtpSession {
                     }
                 }
                 one_reply.log_drops(&log, connection_id, "greeting");
+
+                // A client sends nothing until it has read a greeting, so a greeting the
+                // handler did not produce would hang it until its own timeout. A silent or
+                // refused answer is declined the way a failed one is: 421, then close.
+                // `wait_for_more` is excluded: there is no line to wait for, but it is the
+                // handler's declared choice, and the first-command deadline still bounds it.
+                if !one_reply.completed
+                    && matches!(decision, "model_silent" | "fail_closed_bad_action")
+                {
+                    let _ = Self::write_out(
+                        write_half,
+                        GREETING_UNANSWERED,
+                        app_state,
+                        server_id,
+                        connection_id,
+                    )
+                    .await;
+                    return Err(anyhow::anyhow!(
+                        "FTP greeting had no reply ({decision}); refused with 421"
+                    ));
+                }
             }
             Err(e) => {
                 // Logging it was an improvement on silence for *us*; the client still sat
@@ -746,14 +828,28 @@ impl FtpSession {
         let n = commands.len();
 
         if completions == 0 && !closes {
-            // Nothing answered any of them: the same outcome a single command gets.
+            // Nothing answered any of them: the same outcome a single command gets, once per
+            // command, so the client's replies still line up with what it sent.
             let line = format!(
                 "FTP {commands:?} on connection {connection_id} decision={decision} ({detail})"
             );
             match decision {
-                "model_wait_for_more" => log.info(line),
-                "fail_closed_bad_action" => log.error(line),
-                _ => log.warn(line),
+                "model_wait_for_more" => {
+                    log.info(line);
+                    return Ok(true);
+                }
+                "fail_closed_bad_action" => log.error(format!("{line}; each answered 451")),
+                _ => log.warn(format!("{line}; each answered 451")),
+            }
+            for _ in commands {
+                Self::write_out(
+                    write_half,
+                    COMMAND_UNANSWERED,
+                    app_state,
+                    server_id,
+                    connection_id,
+                )
+                .await?;
             }
             return Ok(true);
         }
@@ -806,7 +902,8 @@ impl FtpSession {
         app_state: &Arc<AppState>,
         status_tx: &mpsc::UnboundedSender<String>,
         protocol: Arc<FtpProtocol>,
-        deadlines: ReadDeadlines,
+        config: SessionConfig,
+        ends: data::ControlEnds,
     ) -> Result<()>
     where
         R: tokio::io::AsyncRead + Unpin,
@@ -814,8 +911,10 @@ impl FtpSession {
     {
         use tokio::io::BufReader;
 
+        let deadlines = config.deadlines;
         let mut reader = BufReader::new(read_half);
         let log = Log::new(Some(status_tx));
+        let mut data_state = data::DataState::default();
 
         let mut answered_one = false;
         loop {
@@ -881,6 +980,48 @@ impl FtpSession {
             let command = line.trim();
             // FileOnly: the ftp_command event template surfaces the command on the TUI.
             log.debug(format!("FTP received: {}", command));
+
+            let verb = data::Verb::of(command);
+            if verb.is_setup() {
+                // Data-connection setup and representation type: answered here, because each
+                // reply names a socket only the server can open or changes how it frames bytes.
+                let answer = data::answer_setup(verb, command, &mut data_state, &ends).await;
+                log.info(format!(
+                    "FTP {command:?} on connection {connection_id} decision={} ({})",
+                    answer.decision,
+                    answer.reply.trim_end()
+                ));
+                Self::write_out(
+                    write_half,
+                    answer.reply.as_bytes(),
+                    app_state,
+                    server_id,
+                    connection_id,
+                )
+                .await?;
+                continue;
+            }
+            if verb.is_transfer() {
+                let keep_going = Transfer {
+                    verb,
+                    command,
+                    write_half,
+                    connection_id,
+                    server_id,
+                    llm_client: &llm_client,
+                    app_state,
+                    protocol: &protocol,
+                    log: &log,
+                    ends: &ends,
+                    limits: &config.data,
+                }
+                .run(&mut data_state)
+                .await?;
+                if !keep_going {
+                    return Ok(());
+                }
+                continue;
+            }
 
             // With batching on (off by default - see `write_batch_answer`), every further
             // command line already here is answered in the same call.
@@ -953,12 +1094,11 @@ impl FtpSession {
                         )),
                         "fail_closed_bad_action" => log.error(format!(
                             "FTP {command:?} on connection {connection_id} \
-                             decision=fail_closed_bad_action ({detail}); nothing was written and \
-                             the client is left waiting"
+                             decision=fail_closed_bad_action ({detail}); answered 451"
                         )),
                         _ => log.warn(format!(
                             "FTP {command:?} on connection {connection_id} \
-                             decision=model_silent ({detail})"
+                             decision=model_silent ({detail}); answered 451"
                         )),
                     }
 
@@ -989,35 +1129,28 @@ impl FtpSession {
                         }
                     }
                     one_reply.log_drops(&log, connection_id, "reply");
+                    if !one_reply.completed
+                        && matches!(decision, "model_silent" | "fail_closed_bad_action")
+                    {
+                        Self::write_out(
+                            write_half,
+                            COMMAND_UNANSWERED,
+                            app_state,
+                            server_id,
+                            connection_id,
+                        )
+                        .await?;
+                    }
                 }
                 Err(e) => {
-                    // Do not leave the client hanging with no diagnostic: RFC 959 421 tells it
-                    // the service is unavailable and the control connection is closing.
-                    //
-                    // The peer gets the `WireFailure` *category* — the same one the greeting
-                    // path uses — never the error text. `prefixed_text()` returns
-                    // `&'static str`, so nothing derived from `e` can reach the wire; `e`
-                    // itself goes to the log, which is where an operator looks.
-                    let failure = crate::utils::WireFailure::classify(&e);
-                    let notice = failure.prefixed_text();
-                    let decision = if failure.is_overloaded() {
-                        "fail_closed_llm_overloaded"
-                    } else {
-                        "fail_closed_llm_error"
-                    };
-                    log.error(format!(
-                        "FTP {command:?} on connection {connection_id} decision={decision}, \
-                         refused with 421 ({notice}): {e}"
-                    ));
-                    let reply = format!(
-                        "421 Service not available, closing control connection ({notice})\r\n"
-                    );
-                    let _ = Self::write_out(
+                    Self::refuse_backend_failure(
+                        &e,
+                        command,
                         write_half,
-                        reply.as_bytes(),
                         app_state,
                         server_id,
                         connection_id,
+                        &log,
                     )
                     .await;
                     return Ok(());
@@ -1027,6 +1160,412 @@ impl FtpSession {
 
         Ok(())
     }
+
+    /// Answer a command whose handler call failed: `421`, and the caller closes.
+    ///
+    /// RFC 959's 421 tells the client the service is unavailable and the control connection is
+    /// closing, rather than leaving it hanging with no diagnostic. The peer gets the
+    /// `WireFailure` *category*, never the error text: `prefixed_text()` returns
+    /// `&'static str`, so nothing derived from `e` can reach the wire; `e` itself goes to the
+    /// log, which is where an operator looks.
+    #[allow(clippy::too_many_arguments)]
+    async fn refuse_backend_failure<W>(
+        e: &anyhow::Error,
+        command: &str,
+        write_half: &Arc<Mutex<W>>,
+        app_state: &AppState,
+        server_id: crate::state::ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        log: &Log<'_>,
+    ) where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let failure = crate::utils::WireFailure::classify(e);
+        let notice = failure.prefixed_text();
+        let decision = if failure.is_overloaded() {
+            "fail_closed_llm_overloaded"
+        } else {
+            "fail_closed_llm_error"
+        };
+        log.error(format!(
+            "FTP {command:?} on connection {connection_id} decision={decision}, refused with \
+             421 ({notice}): {e}"
+        ));
+        let reply = format!("421 Service not available, closing control connection ({notice})\r\n");
+        let _ = Self::write_out(
+            write_half,
+            reply.as_bytes(),
+            app_state,
+            server_id,
+            connection_id,
+        )
+        .await;
+    }
 }
 
-// Stub types needed for non-feature compilation
+/// One transfer command (`LIST`, `NLST`, `MLSD`, `RETR`, `STOR`, `APPE`) and everything it
+/// needs from the session.
+///
+/// RFC 959 §5.4 fixes the reply sequences: a download is refused with `450`/`550` *before* any
+/// `150`, and once `150` is written its completion is `226`, `425` (no data connection), `426`
+/// (the data connection broke) or `451`. So the handler is asked first, and only an answer that
+/// carries a payload opens the data connection. An upload has to be read before there is
+/// anything to ask about, so its `150` comes first and the handler's reply is the completion.
+struct Transfer<'a, W> {
+    verb: data::Verb,
+    command: &'a str,
+    write_half: &'a Arc<Mutex<W>>,
+    connection_id: crate::server::connection::ConnectionId,
+    server_id: crate::state::ServerId,
+    llm_client: &'a OllamaClient,
+    app_state: &'a Arc<AppState>,
+    protocol: &'a Arc<FtpProtocol>,
+    log: &'a Log<'a>,
+    ends: &'a data::ControlEnds,
+    limits: &'a data::DataLimits,
+}
+
+impl<W> Transfer<'_, W>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    async fn reply(&self, bytes: &[u8]) -> std::io::Result<()> {
+        FtpSession::write_out(
+            self.write_half,
+            bytes,
+            self.app_state,
+            self.server_id,
+            self.connection_id,
+        )
+        .await
+    }
+
+    /// Count data-connection bytes on the control connection's row, so the dashboard's
+    /// counters show the transfer.
+    async fn count_data(&self, received: u64, sent: u64) {
+        self.app_state
+            .update_connection_stats(
+                self.server_id,
+                self.connection_id,
+                (received > 0).then_some(received),
+                (sent > 0).then_some(sent),
+                None,
+                None,
+            )
+            .await;
+    }
+
+    fn line(&self, decision: &str, detail: impl std::fmt::Display) -> String {
+        format!(
+            "FTP {:?} on connection {} decision={decision} ({detail})",
+            self.command, self.connection_id
+        )
+    }
+
+    /// Run the transfer. `Ok(false)` when the control connection is to close.
+    async fn run(self, state: &mut data::DataState) -> Result<bool> {
+        // One prepared channel, one transfer, whatever the outcome.
+        let Some(channel) = state.channel.take() else {
+            self.log.info(self.line(
+                "refused_no_data_connection",
+                "no PASV, EPSV, PORT or EPRT before it; answered 425",
+            ));
+            self.reply(b"425 Use PASV, EPSV, PORT or EPRT first\r\n")
+                .await?;
+            return Ok(true);
+        };
+        let transfer_type = state.transfer_type;
+        if self.verb.is_upload() {
+            self.upload(channel, transfer_type).await
+        } else {
+            self.download(channel, transfer_type).await
+        }
+    }
+
+    fn event(&self, transfer_type: data::TransferType) -> Event {
+        let mut event = command_event(self.command);
+        event.data["transfer_type"] = serde_json::json!(transfer_type.event_name());
+        event
+    }
+
+    /// Open the data connection, answering `425` when it cannot be.
+    async fn open(&self, channel: data::DataChannel) -> Result<Option<tokio::net::TcpStream>> {
+        match data::open(channel, self.ends, self.limits).await {
+            Ok(stream) => Ok(Some(stream)),
+            Err(why) => {
+                self.log
+                    .warn(self.line("refused_data_connection", format!("{why}; answered 425")));
+                self.reply(b"425 Can't open data connection\r\n").await?;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn download(
+        self,
+        channel: data::DataChannel,
+        transfer_type: data::TransferType,
+    ) -> Result<bool> {
+        let event = self.event(transfer_type);
+        let result = match call_llm(
+            self.llm_client,
+            self.app_state,
+            self.server_id,
+            Some(self.connection_id),
+            &event,
+            self.protocol.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                FtpSession::refuse_backend_failure(
+                    &e,
+                    self.command,
+                    self.write_half,
+                    self.app_state,
+                    self.server_id,
+                    self.connection_id,
+                    self.log,
+                )
+                .await;
+                return Ok(false);
+            }
+        };
+
+        let (decision, detail) = classify_ftp_outcome(&result);
+        let mut payload: Option<Vec<u8>> = None;
+        let mut replies: Vec<Vec<u8>> = Vec::new();
+        let mut closes = false;
+        for r in &result.protocol_results {
+            if let Some(bytes) = actions::transfer_bytes(r) {
+                payload.get_or_insert_with(Vec::new).extend(bytes);
+                continue;
+            }
+            match r {
+                ActionResult::Output(d) => replies.push(d.clone()),
+                ActionResult::CloseConnection => closes = true,
+                _ => {}
+            }
+        }
+
+        let Some(payload) = payload else {
+            // No listing or file: the handler refused, or did not answer.
+            if let Some(refusal) = replies
+                .iter()
+                .find(|d| reply_code_of(d).is_some_and(|c| c >= 400))
+            {
+                self.log.info(self.line(
+                    "model_answer",
+                    format!("reply {}", reply_code_of(refusal).unwrap_or(0)),
+                ));
+                self.reply(refusal).await?;
+            } else if closes {
+                self.log.info(self.line("model_reject", detail));
+                return Ok(false);
+            } else {
+                // A 1xx or 2xx with no payload would claim a transfer that has nothing to
+                // send; silence would leave the client waiting. Either way the honest answer
+                // is that the action could not be carried out.
+                let decision = if decision == "model_answer" {
+                    "fail_closed_no_payload"
+                } else {
+                    decision
+                };
+                self.log
+                    .warn(self.line(decision, format!("{detail}; answered 451")));
+                self.reply(COMMAND_UNANSWERED).await?;
+            }
+            return Ok(!closes);
+        };
+
+        // The handler may name its own completion text; anything else it wrote around the
+        // payload would break the sequence the server is writing, and is dropped.
+        let completion = replies
+            .iter()
+            .find(|d| matches!(reply_code_of(d), Some(226 | 250)))
+            .cloned();
+        let dropped = replies.len() - usize::from(completion.is_some());
+        if dropped > 0 {
+            self.log.warn(self.line(
+                "transfer_reply_dropped",
+                format!("{dropped} reply(ies) beside the payload were not sent"),
+            ));
+        }
+        let wire = if transfer_type == data::TransferType::Ascii && !self.verb.is_listing() {
+            data::to_network_ascii(&payload)
+        } else {
+            payload
+        };
+
+        let what = if self.verb.is_listing() {
+            "directory listing".to_string()
+        } else {
+            format!("{} ({} bytes)", argument_of(self.command), wire.len())
+        };
+        self.reply(data::opening_reply(transfer_type, &what).as_bytes())
+            .await?;
+        let Some(mut stream) = self.open(channel).await? else {
+            return Ok(!closes);
+        };
+        match data::send_all(&mut stream, &wire, self.limits.idle).await {
+            Ok(()) => {
+                drop(stream);
+                self.count_data(0, wire.len() as u64).await;
+                self.log.info(self.line(
+                    "model_answer",
+                    format!("{} bytes on the data connection, then 226", wire.len()),
+                ));
+                let completion =
+                    completion.unwrap_or_else(|| b"226 Transfer complete\r\n".to_vec());
+                self.reply(&completion).await?;
+            }
+            Err(why) => {
+                self.log
+                    .warn(self.line("transfer_aborted", format!("{why}; answered 426")));
+                self.reply(b"426 Connection closed; transfer aborted\r\n")
+                    .await?;
+            }
+        }
+        Ok(!closes)
+    }
+
+    async fn upload(
+        self,
+        channel: data::DataChannel,
+        transfer_type: data::TransferType,
+    ) -> Result<bool> {
+        self.reply(data::opening_reply(transfer_type, &argument_of(self.command)).as_bytes())
+            .await?;
+        let Some(mut stream) = self.open(channel).await? else {
+            return Ok(true);
+        };
+        let raw = match data::receive_all(&mut stream, self.limits).await {
+            data::Upload::Complete(raw) => raw,
+            data::Upload::TooLarge => {
+                drop(stream);
+                self.log.warn(self.line(
+                    "refused_upload_too_large",
+                    format!(
+                        "more than {} bytes; answered 552 without asking the handler",
+                        self.limits.max_upload
+                    ),
+                ));
+                self.reply(b"552 Requested file action aborted: exceeded storage allocation\r\n")
+                    .await?;
+                return Ok(true);
+            }
+            data::Upload::Idle => {
+                drop(stream);
+                self.log.warn(self.line(
+                    "transfer_aborted",
+                    format!(
+                        "the peer sent nothing for {}s; answered 426",
+                        self.limits.idle.as_secs()
+                    ),
+                ));
+                self.reply(b"426 Connection closed; transfer aborted\r\n")
+                    .await?;
+                return Ok(true);
+            }
+            data::Upload::Failed(why) => {
+                drop(stream);
+                self.log
+                    .warn(self.line("transfer_aborted", format!("{why}; answered 426")));
+                self.reply(b"426 Connection closed; transfer aborted\r\n")
+                    .await?;
+                return Ok(true);
+            }
+        };
+        drop(stream);
+        self.count_data(raw.len() as u64, 0).await;
+
+        let content = if transfer_type == data::TransferType::Ascii {
+            data::from_network_ascii(&raw)
+        } else {
+            raw
+        };
+        let mut event = self.event(transfer_type);
+        event.data["upload_bytes"] = serde_json::json!(content.len());
+        match String::from_utf8(content) {
+            Ok(text) => {
+                event.data["upload_is_text"] = serde_json::json!(true);
+                event.data["upload_text"] = serde_json::json!(text);
+            }
+            Err(_) => event.data["upload_is_text"] = serde_json::json!(false),
+        }
+
+        let result = match call_llm(
+            self.llm_client,
+            self.app_state,
+            self.server_id,
+            Some(self.connection_id),
+            &event,
+            self.protocol.as_ref(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                FtpSession::refuse_backend_failure(
+                    &e,
+                    self.command,
+                    self.write_half,
+                    self.app_state,
+                    self.server_id,
+                    self.connection_id,
+                    self.log,
+                )
+                .await;
+                return Ok(false);
+            }
+        };
+
+        let (decision, detail) = classify_ftp_outcome(&result);
+        // After 150 only a completion reply belongs on the wire: the first one the handler
+        // gave, or 451 when it gave none.
+        let completion = result.protocol_results.iter().find_map(|r| match r {
+            ActionResult::Output(d) if reply_code_of(d).is_some_and(|c| c >= 200) => Some(d),
+            _ => None,
+        });
+        let closes = result
+            .protocol_results
+            .iter()
+            .any(|r| matches!(r, ActionResult::CloseConnection));
+        match completion {
+            Some(reply) => {
+                self.log.info(self.line(
+                    "model_answer",
+                    format!("reply {}", reply_code_of(reply).unwrap_or(0)),
+                ));
+                self.reply(reply).await?;
+            }
+            None if closes => {
+                self.log.info(self.line("model_reject", detail));
+                return Ok(false);
+            }
+            None => {
+                let decision = if decision == "model_answer" {
+                    "fail_closed_no_completion"
+                } else {
+                    decision
+                };
+                self.log
+                    .warn(self.line(decision, format!("{detail}; answered 451")));
+                self.reply(COMMAND_UNANSWERED).await?;
+            }
+        }
+        Ok(!closes)
+    }
+}
+
+/// The argument of a command line, for a `150` reply's text, with any control character
+/// removed so it cannot end the reply early.
+fn argument_of(command: &str) -> String {
+    let command = command.trim();
+    let arg = match command.find(char::is_whitespace) {
+        Some(i) => command[i..].trim(),
+        None => "",
+    };
+    arg.chars().filter(|c| !c.is_control()).collect()
+}

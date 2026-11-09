@@ -205,7 +205,12 @@ impl ScriptingEnvironment {
     /// Detect Perl availability and version
     #[cfg(not(target_arch = "wasm32"))]
     fn detect_perl() -> Option<String> {
-        Self::probe("perl", &["--version"]).inspect(|v| debug!("perl detected: {v}"))
+        // `perl --version` answers with a blank line and a nine-line copyright notice, which
+        // this string carries into the startup log and into every prompt that lists the
+        // scripting runtimes. `$^V` is just the version (`v5.40.0`).
+        Self::probe("perl", &["-e", "print $^V"])
+            .map(|v| format!("perl {v}"))
+            .inspect(|v| debug!("perl detected: {v}"))
     }
 
     /// Check if a specific language is available

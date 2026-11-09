@@ -454,8 +454,10 @@ impl DohServer {
                         match base64_url_decode(encoded) {
                             Ok(bytes) => bytes,
                             Err(e) => {
-                                Log::new(Some(&status_tx))
-                                    .warn(format!("Invalid base64url DNS query: {}", e));
+                                Log::new(Some(&status_tx)).warn(format!(
+                                    "Invalid base64url DNS query decision=refused_bad_encoding: {}",
+                                    e
+                                ));
                                 return Ok(error_response(
                                     StatusCode::BAD_REQUEST,
                                     "Invalid DNS query encoding",
@@ -464,8 +466,9 @@ impl DohServer {
                         }
                     }
                     None => {
-                        Log::new(Some(&status_tx))
-                            .warn("Missing dns= parameter in DoH GET request");
+                        Log::new(Some(&status_tx)).warn(
+                            "Missing dns= parameter in DoH GET request decision=refused_no_query",
+                        );
                         return Ok(error_response(
                             StatusCode::BAD_REQUEST,
                             "Missing dns parameter",
@@ -477,15 +480,18 @@ impl DohServer {
                 // Check Content-Type
                 if let Some(content_type) = req.headers().get("content-type") {
                     if !is_dns_message_content_type(content_type) {
-                        Log::new(Some(&status_tx))
-                            .warn(format!("Invalid DoH Content-Type: {:?}", content_type));
+                        Log::new(Some(&status_tx)).warn(format!(
+                            "Invalid DoH Content-Type decision=refused_content_type: {:?}",
+                            content_type
+                        ));
                         return Ok(error_response(
                             StatusCode::BAD_REQUEST,
                             "Invalid Content-Type",
                         ));
                     }
                 } else {
-                    Log::new(Some(&status_tx)).warn("Missing Content-Type in DoH POST");
+                    Log::new(Some(&status_tx))
+                        .warn("Missing Content-Type in DoH POST decision=refused_content_type");
                     return Ok(error_response(
                         StatusCode::BAD_REQUEST,
                         "Missing Content-Type",
@@ -504,7 +510,7 @@ impl DohServer {
                     Ok(collected) => collected.to_bytes().to_vec(),
                     Err(e) => {
                         Log::new(Some(&status_tx)).warn(format!(
-                            "DoH POST body from {} exceeded {} bytes or could not be read: {}",
+                            "DoH POST body from {} exceeded {} bytes or could not be read decision=fail_closed_body_cap: {}",
                             peer_addr, MAX_DOH_BODY_BYTES, e
                         ));
                         return Ok(error_response(
@@ -515,7 +521,10 @@ impl DohServer {
                 }
             }
             _ => {
-                Log::new(Some(&status_tx)).warn(format!("Unsupported DoH method: {}", method));
+                Log::new(Some(&status_tx)).warn(format!(
+                    "Unsupported DoH method decision=refused_method: {}",
+                    method
+                ));
                 return Ok(error_response(
                     StatusCode::METHOD_NOT_ALLOWED,
                     "Only GET and POST are supported",
@@ -542,7 +551,10 @@ impl DohServer {
         let dns_message = match crate::utils::dns_screen::decode_dns_message(&dns_bytes) {
             Ok(msg) => msg,
             Err(e) => {
-                Log::new(Some(&status_tx)).warn(format!("Failed to parse DoH DNS message: {}", e));
+                Log::new(Some(&status_tx)).warn(format!(
+                    "Failed to parse DoH DNS message decision=refused_unparseable_query: {}",
+                    e
+                ));
                 return Ok(error_response(
                     StatusCode::BAD_REQUEST,
                     "Invalid DNS message",

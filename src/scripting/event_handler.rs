@@ -449,6 +449,25 @@ impl EventHandlerConfig {
         self.handlers.push(handler);
     }
 
+    /// Whether some event can be answered by the model: an `llm` rule ahead of the first
+    /// catch-all, or no catch-all at all — a `*` with no `match` conditions answered by a
+    /// static, script or manual handler is what keeps every event off the model.
+    pub fn may_reach_model(&self) -> bool {
+        let mut seen_llm = false;
+        for handler in &self.handlers {
+            if matches!(handler.handler, EventHandlerType::Llm { .. }) {
+                seen_llm = true;
+                continue;
+            }
+            if matches!(handler.event_pattern, EventPattern::Wildcard)
+                && handler.data_match.is_none()
+            {
+                return seen_llm;
+            }
+        }
+        true
+    }
+
     /// The first handler whose pattern names `event_type_id`, ignoring `match` conditions.
     ///
     /// This answers "is there a rule that may answer this kind of event", for callers with no

@@ -874,7 +874,7 @@ struct Reply<'a> {
 }
 
 /// The DNS server's answer rules, for a protocol that carries DNS messages over a stream of its
-/// own — DoT (RFC 7858) and DoH (RFC 8484).
+/// own — DoT (RFC 7858), DoH (RFC 8484) and DoQ (RFC 9250).
 ///
 /// Those servers delegate their actions to [`DnsProtocol`], so the model is offered the same
 /// vocabulary on all three. What they did not share was what happens *after* the model answers,
@@ -882,15 +882,17 @@ struct Reply<'a> {
 /// held no sendable action (so the resolver waited out its timeout), sent every message an
 /// answer produced (two replies with one id on a pinned connection), and put bytes that were not
 /// a DNS message on the wire; DoH answered the same three cases with an HTTP 500, a first-wins
-/// reply and unchecked bytes. This is the DNS server's own path — `Reply::resolve` and
+/// reply and unchecked bytes; DoQ reset the stream for an answer with nothing sendable in it,
+/// merged the answers of several messages into one and sent an answer cut short at 65535
+/// octets as NOERROR. This is the DNS server's own path — `Reply::resolve` and
 /// `Reply::finish` with the TCP limits (no truncation, the OPT echoed for an EDNS query) — so
-/// the three answer alike and a fix to one is a fix to all.
+/// the four answer alike and a fix to one is a fix to all.
 pub struct StreamQuery<'a> {
     reply: Reply<'a>,
 }
 
 impl<'a> StreamQuery<'a> {
-    /// `label` names the transport in the log lines (`"DoT"`, `"DoH"`).
+    /// `label` names the transport in the log lines (`"DoT"`, `"DoH"`, `"DoQ"`).
     pub fn new(query: &'a DnsMessage, label: &'static str) -> Self {
         let dnssec_ok = query.edns.as_ref().is_some_and(|e| e.flags().dnssec_ok);
         Self {
@@ -924,6 +926,30 @@ impl<'a> StreamQuery<'a> {
             .rcode_only(ResponseCode::FormErr)
             .into_iter()
             .next()
+    }
+
+    /// A reply carrying only `rcode`, the question and (for an EDNS query) an OPT, for a query
+    /// the transport answers without the model (`decision=spec_reply`) — `why` says what the
+    /// query asked for that is not served. `None` only if the reply cannot be encoded.
+    pub fn spec_reply(
+        &self,
+        rcode: ResponseCode,
+        why: &str,
+        peer_addr: SocketAddr,
+        log: &Log<'_>,
+    ) -> Option<Vec<u8>> {
+        log.info(format!(
+            "{} query from {peer_addr}: {why}; {rcode} decision=spec_reply",
+            self.reply.label
+        ));
+        self.reply.rcode_only(rcode).into_iter().next()
+    }
+
+    /// SERVFAIL for this query, echoing its id and question, for a failure the transport
+    /// detects itself (a deadline passed while the model was answering). The caller logs the
+    /// decision. `None` only if the reply cannot be encoded.
+    pub fn servfail(&self) -> Option<Vec<u8>> {
+        self.reply.servfail().into_iter().next()
     }
 
     /// The message to send for what `call_llm` returned, or `None` when the model chose
@@ -961,6 +987,9 @@ impl Reply<'_> {
     fn rcode_only(&self, rcode: ResponseCode) -> Vec<Vec<u8>> {
         let mut message = transfer::response_shell(self.query, rcode);
         message.metadata.authoritative = false;
+        // RFC 1035 §4.1.1: the opcode is copied into the response — a NOTIMP for an UPDATE
+        // says UPDATE.
+        message.metadata.op_code = self.query.op_code;
         for q in &self.query.queries {
             message.add_query(q.clone());
         }
@@ -1110,11 +1139,10 @@ impl Reply<'_> {
         // sets TC and returns `Ok`. Over UDP the check below replaces any answer that large
         // anyway. Over a stream there is nothing to retry on, so TC there is a partial answer
         // passed off as NOERROR — the resolver caches half an RRset. The answer did not fit the
-        // transport, and SERVFAIL says so.
-        if self.transport == Transport::Tcp
-            && !message.metadata.truncation
-            && bytes.get(2).is_some_and(|flags| flags & 0x02 != 0)
-        {
+        // transport, and SERVFAIL says so. The bit is checked whoever set it: an action's own
+        // encoder (`send_dns_records` with more than 65535 octets of records) cuts the answer
+        // before it reaches here, so the message arrives already marked TC.
+        if self.transport == Transport::Tcp && bytes.get(2).is_some_and(|flags| flags & 0x02 != 0) {
             log.error(format!(
                 "{label} answer does not fit a 65535-octet message; answering SERVFAIL \
                  decision=fail_closed_oversize_answer"

@@ -131,18 +131,30 @@ pub async fn activity_section(
     };
 
     let mut out = String::from("\n### Activity\n\n");
+    let failed_key = crate::state::app_state::FAILED_EVENT_KEY;
     let breakdown: Vec<String> = activity
         .answered_by
         .iter()
+        .filter(|(by, _)| by.as_str() != failed_key)
         .map(|(by, n)| format!("{by} {n}"))
         .collect();
+    let failed = activity.answered_by.get(failed_key).copied().unwrap_or(0);
+    let mut parts = Vec::new();
+    if !breakdown.is_empty() {
+        parts.push(format!("answered by: {}", breakdown.join(", ")));
+    }
+    if failed > 0 {
+        parts.push(format!(
+            "{failed} failed with no answer — each recent event below says why"
+        ));
+    }
     out.push_str(&format!(
         "- **Events handled**: {}{}\n",
         activity.events,
-        if breakdown.is_empty() {
+        if parts.is_empty() {
             String::new()
         } else {
-            format!(" (answered by: {})", breakdown.join(", "))
+            format!(" ({})", parts.join("; "))
         }
     ));
     out.push_str(&format!(
@@ -174,8 +186,8 @@ pub async fn activity_section(
 
     if recent.is_empty() {
         out.push_str(
-            "\nNo events recorded yet. An event is recorded once it has been answered; one \
-             whose model call failed leaves no entry.\n",
+            "\nNo events recorded yet. An event is recorded once it has been answered, or once \
+             answering it has failed.\n",
         );
         return out;
     }
