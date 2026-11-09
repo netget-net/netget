@@ -1567,5 +1567,5 @@ fn argument_of(command: &str) -> String {
         Some(i) => command[i..].trim(),
         None => "",
     };
-    arg.chars().filter(|c| !c.is_control()).collect()
+    crate::utils::sanitize::strip_controls(arg)
 }
