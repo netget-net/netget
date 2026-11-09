@@ -653,9 +653,10 @@ fn traffic_text(rx: u64, tx: u64, metrics: Option<&Throughput>) -> String {
 fn driver_rows(instance: InstanceRef<'_>, no_model: bool, width: usize, rows: &mut Vec<Row>) {
     let driver = driver_of(instance.routing());
     if driver == crate::tui::driver::Driver::Llm && no_model {
-        // "The model answers" is false when there is no model: every event the
-        // instance gets fails closed. Say so where the driver is shown, whole —
-        // it is a warning, so it wraps rather than losing its end.
+        // "The model answers" is false while there is no model: every event the
+        // instance gets fails closed until one can be auto-selected. Say so where
+        // the driver is shown, whole — it is a warning, so it wraps rather than
+        // losing its end.
         let mut row = Row::new(Some(instance.key()), 1);
         row.spans = vec![
             ("driver ".to_string(), Tone::Dim),
@@ -1455,8 +1456,14 @@ pub fn rows(
 }
 
 /// The driver row of an LLM-driven instance when no model is selected.
-pub const NO_MODEL_FOR_LLM_DRIVER: &str =
-    "No model is selected: every event fails closed until /model picks one.";
+///
+/// Not "fails closed until /model": with no model stored, every event that
+/// reaches the model first asks the endpoint for one
+/// (`model_selection::ensure_state_model`), so a model pulled or an Ollama
+/// started later is auto-selected by the next event without anyone typing
+/// `/model`. What is true now is that it fails closed while none is there.
+pub const NO_MODEL_FOR_LLM_DRIVER: &str = "No model is selected: each event asks the LLM \
+     endpoint for one and fails closed while none is installed or reachable. /model picks one.";
 
 /// What the canvas says when nothing is running, one paragraph per entry.
 const EMPTY_STATE: [&str; 6] = [

@@ -33,12 +33,12 @@ sparkline, a **driver badge**), the requests parked for you (each with the time 
 before it fails closed, from its rule's `timeout_secs`), a facts line (status, uptime,
 traffic, rate), the instance's error when it has one (wrapped whole under the facts — it is
 usually why nothing works), the driver (an LLM driver with no model selected says its events
-fail closed), then its **buttons as an aligned grid** — every cell as wide
-as the widest label, as many per row as fit — and its **sections**: `peers` (each peer
-with `[ disconnect ]` on its row and, beneath it, **the conversation on that connection**:
-one row per message in `←` and per message out `→`, oldest first, the latest few with an
-"… N earlier" row that lifts the cap, each row opening the full entry, then
-`[ send message ]`; `[ + <proto> client ]` at the foot), `rules` (each rule with delete /
+fail closed while the endpoint has none to auto-select), then its **buttons as an aligned
+grid** — every cell as wide as the widest label, as many per row as fit — and its
+**sections**: `peers` (each peer with `[ disconnect ]` on its row and, beneath it, **the
+conversation on that connection**: one row per message in `←` and per message out `→`,
+oldest first, the latest few with an "… N earlier" row that lifts the cap, each row opening
+the full entry, then `[ send message ]`; `[ + <proto> client ]` at the foot), `rules` (each rule with delete /
 ↑ / ↓ beside it and `+ add rule` below), `config` (each setting opens the form); a client
 has `send` (its verbs) and `connections` (each attempt with its conversation and
 `[ send message ]`) instead of `peers`. `cards::payload_summary` turns a request or an
@@ -134,7 +134,7 @@ the list badge, the inspector overview, the feed, and the status bar.
 | `keymap.rs` | global keys, focus cycling, per-pane keys, mouse |
 | `modal_keys.rs` | input handling for every modal |
 | `hit.rs` | per-frame hit-test registry for the mouse |
-| `render/` | one file per pane plus `overlay.rs` for modals |
+| `render/` | one file per pane plus `overlay.rs` for modals; the form, the composer and the routing draft draw through its `draw_scrolled` (pre-wrapped rows scrolled to the selection, "↑↓ more fields" on the box's edge, the error pinned above the buttons) |
 | `modal/` | forms, composer, routing editor, intercept answer, picker, help, wireshark |
 | `wrap.rs` | word wrapping in terminal cells, one row per piece — the stream, card errors, the empty state, form help |
 | `wireshark.rs` | protocol → dissector/capture-filter table; leads with `wireshark -r <file>` when NetGet is writing the instance's own pcap (`ServerRow::capture` / `ClientRow::capture`, from `src/capture/`) and otherwise says how to turn that on |
@@ -146,8 +146,13 @@ by `actions::run`, whatever produced it — a letter, a menu entry, Enter on an 
 
 Creating a server, connecting a client, sending through one, applying a routing change: all
 network I/O, all spawned, all reporting back through `uimsg::UiMsg`. Awaiting one inline
-froze the whole dashboard for the kernel's SYN-retry window once. `handle_ui_msg` closes the
-originating modal on success and leaves it open showing the error on failure.
+froze the whole dashboard for the kernel's SYN-retry window once. Each spawned action carries
+a `uimsg::ActionTicket`; a form or routing editor that submits holds its ticket while the work
+is in flight, and `handle_ui_msg` routes the result to the modal holding it — wherever it sits
+in the stack — closing it on success and leaving it open showing the error on failure. A result
+no modal holds (`c` connecting a client, a protocol started on defaults from the picker, a
+modal closed meanwhile) goes to the stream, so it can never close or annotate a form opened for
+something else while it was in flight.
 
 ## Peer text is made terminal-safe at ingestion, not per renderer
 
@@ -187,7 +192,8 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   errored server, a client with verbs), every tab for both kinds at the minimum size, and
   what the selection does when its instance vanishes; and what must never be cut at 80×24 —
   a failure in the stream, an instance's error, the empty state's guidance, the selected
-  field and the error of a create form longer than the box, a parked request's time left,
+  field and the error of a create form, a composer verb or a routing draft longer than the
+  box, a parked request's time left,
   the no-model warning on an LLM driver. **Start here for any layout change**;
   `--nocapture` prints the frames.
 - `tests/dashboard_rail_test.rs` — the summary line, driver detection/rebuild, and the
@@ -240,10 +246,7 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   or `mv` once the difference is the one intended. Every dashboard pty test waits on
   the text its last key must paint through one `PtyScreen`; never add a fixed sleep.
 - Candidates not done: fold-all / unfold-all keys once many cards are open; per-peer
-  throughput; an `[ answer all ]` shortcut when several requests are parked. The composer
-  and the routing draft still render through ratatui's `Wrap` with no scroll, so a verb with
-  more parameters than the box holds clips the last ones (and the error below them) the way
-  the form did; `wrap.rs` plus an explicit scroll is the shape the form now uses.
-- A result from a spawned action closes or annotates *whichever* modal of its kind is on top
-  (`keymap::handle_ui_msg` matches on the modal's type, not its identity): a slow `c` connect
-  that finishes while an edit form for another instance is open lands in that form.
+  throughput; an `[ answer all ]` shortcut when several requests are parked. The routing
+  table (not its draft) and the intercept modal still render through ratatui's `Wrap` with no
+  scroll; past a screenful of rules or payload they clip, and `draw_scrolled` is the shape to
+  move them to.

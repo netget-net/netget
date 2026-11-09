@@ -307,11 +307,27 @@ fn a_client_line_points_at_its_remote_and_defaults_to_the_model() {
 }
 
 #[test]
-fn fit_truncates_with_an_ellipsis_by_chars() {
+fn fit_truncates_with_an_ellipsis_by_terminal_cells() {
     assert_eq!(fit("hello", 10), "hello");
     assert_eq!(fit("hello world", 5), "hell…");
     assert_eq!(fit("héllo wörld", 6), "héllo…");
     assert_eq!(fit("x", 0), "");
+
+    // Wide graphemes take two cells each (eight of them are sixteen), so a
+    // seven-cell column holds three and the ellipsis, not six.
+    let wide = "日本語のテキスト";
+    let fitted = fit(wide, 7);
+    assert_eq!(fitted, "日本語…");
+    assert!(netget::tui::wrap::cells(&fitted) <= 7);
+    // One that would straddle the ellipsis is left out whole.
+    assert_eq!(fit(wide, 6), "日本…");
+    // Exactly as wide as the column: untouched.
+    assert_eq!(fit("日本", 4), "日本");
+
+    // Combining marks take no cell: four cells of text fit four cells.
+    let combining = "e\u{301}e\u{301}e\u{301}e\u{301}";
+    assert_eq!(fit(combining, 4), combining);
+    assert_eq!(fit(combining, 3), "e\u{301}e\u{301}…");
 }
 
 // -------------------------------------------------------------- the driver

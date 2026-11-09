@@ -1202,6 +1202,29 @@ fn an_llm_driven_instance_with_no_model_says_its_events_fail_closed() {
         text.contains("No model is selected"),
         "the LLM driver row warns:\n{text}"
     );
+    // Wide enough not to wrap, so the warning reads as one sentence. It must
+    // not promise that only /model ends the failures: every event that
+    // reaches the model asks the endpoint for one first, so a model pulled
+    // later is auto-selected by the next event.
+    let warning: Vec<String> = netget::tui::cards::rows(
+        &snapshot,
+        &netget::tui::cards::CardState::default(),
+        &std::collections::HashMap::new(),
+        400,
+    )
+    .iter()
+    .map(|row| row.text())
+    .filter(|text| text.contains("No model is selected"))
+    .collect();
+    assert!(!warning.is_empty());
+    for line in &warning {
+        assert!(
+            line.contains("asks the LLM endpoint for one")
+                && line.contains("fails closed while none is installed or reachable")
+                && !line.contains("until /model"),
+            "the warning says when events fail closed, truthfully: {line}"
+        );
+    }
 
     snapshot.no_model = false;
     app.absorb_snapshot(snapshot);
@@ -1229,4 +1252,259 @@ fn help_describes_the_stream_as_it_is() {
         text.contains("PageUp"),
         "how to reach the stream's lines is listed:\n{text}"
     );
+}
+
+/// A spawned action's result reaches the modal that started it and no other.
+/// `c` on a server connects a client with no modal open; if the connect is slow
+/// and the user opens another instance's edit form meanwhile, the result must
+/// go to the stream, not close that form or write its error into it.
+#[test]
+fn a_spawned_result_lands_only_in_the_modal_that_started_it() {
+    use netget::tui::keymap::handle_ui_msg;
+    use netget::tui::modal::form::FormModel;
+    use netget::tui::modal::Modal;
+    use netget::tui::uimsg::{ActionTicket, UiMsg};
+
+    let mut app = app();
+    let snapshot = populated();
+    let server = snapshot.servers[0].clone();
+    app.absorb_snapshot(snapshot);
+
+    // The user's edit form, opened while a `c` connect (ticket nobody holds) runs.
+    app.modals
+        .push(Modal::Form(Box::new(FormModel::for_edit_server(&server))));
+    let connect = ActionTicket::next();
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket: connect,
+            result: Err("connect to 127.0.0.1:8080: Connection refused".into()),
+        },
+    );
+    let Some(Modal::Form(form)) = app.modals.last() else {
+        panic!("the unrelated edit form stays open after a failed connect");
+    };
+    assert!(
+        form.error.is_none(),
+        "the connect's error is not written into it: {:?}",
+        form.error
+    );
+    assert!(
+        app.activity
+            .entries
+            .iter()
+            .any(|e| e.event.text.contains("Connection refused")),
+        "the connect's error goes to the stream"
+    );
+
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket: ActionTicket::next(),
+            result: Ok("client #3 connected to 127.0.0.1:8080".into()),
+        },
+    );
+    assert!(
+        matches!(app.modals.last(), Some(Modal::Form(_))),
+        "a successful connect does not close the unrelated form"
+    );
+
+    // The form's own apply: its ticket, its error, wherever it sits in the stack.
+    let ticket = ActionTicket::next();
+    if let Some(Modal::Form(form)) = app.modals.last_mut() {
+        form.pending = Some(ticket);
+    }
+    app.modals.push(Modal::Help { scroll: 0 });
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket,
+            result: Err("bind 127.0.0.1:23: Address already in use".into()),
+        },
+    );
+    assert!(matches!(app.modals.last(), Some(Modal::Help { .. })));
+    let Some(Modal::Form(form)) = app.modals.first() else {
+        panic!("the form is still there");
+    };
+    assert_eq!(
+        form.error.as_deref(),
+        Some("bind 127.0.0.1:23: Address already in use"),
+        "its own failure is shown in it"
+    );
+    assert!(!form.busy(), "and it can be submitted again");
+
+    let ticket = ActionTicket::next();
+    if let Some(Modal::Form(form)) = app.modals.first_mut() {
+        form.pending = Some(ticket);
+    }
+    handle_ui_msg(
+        &mut app,
+        UiMsg::ActionDone {
+            ticket,
+            result: Ok("server #1 updated".into()),
+        },
+    );
+    assert!(
+        !app.modals.iter().any(|m| matches!(m, Modal::Form(_))),
+        "its own success closes it"
+    );
+    assert!(matches!(app.modals.last(), Some(Modal::Help { .. })));
+}
+
+/// `c` belongs to a server's card and `n` to a client's. Pressed on the other
+/// kind they used to do nothing and say nothing; now they say what they do and
+/// where, the way a disabled button says why.
+#[tokio::test]
+async fn a_card_letter_for_the_other_kind_says_where_it_works() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use netget::tui::keymap::handle_key;
+
+    let mut app = app();
+    app.absorb_snapshot(populated());
+    app.focus = Focus::Cards;
+    let state = netget::state::AppState::new();
+    let handler = netget::events::EventHandler::new(
+        state.clone(),
+        netget::llm::OllamaClient::new("http://127.0.0.1:1"),
+    );
+    let (status_tx, _status_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let row_of = |app: &DashboardApp, client: bool| {
+        app.rows()
+            .iter()
+            .position(|r| match r.key {
+                Some(UiKey::Client(_)) => client,
+                Some(UiKey::Server(_)) => !client,
+                None => false,
+            })
+            .expect("a card of that kind")
+    };
+    let press = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    let last_line = |app: &DashboardApp| {
+        app.activity
+            .entries
+            .back()
+            .map(|e| e.event.text.clone())
+            .unwrap_or_default()
+    };
+
+    app.cards.row = row_of(&app, true);
+    let before = app.activity.entries.len();
+    handle_key(&mut app, press('c'), &state, &handler, &status_tx).await;
+    assert!(app.modals.is_empty(), "nothing opened");
+    assert_eq!(app.activity.entries.len(), before + 1, "one line says why");
+    let said = last_line(&app);
+    assert!(
+        said.starts_with("c: ") && said.contains("server's card") && said.contains("is a client"),
+        "c on a client says what it does and where: {said}"
+    );
+
+    app.cards.row = row_of(&app, false);
+    handle_key(&mut app, press('n'), &state, &handler, &status_tx).await;
+    assert!(app.modals.is_empty(), "nothing opened");
+    let said = last_line(&app);
+    assert!(
+        said.starts_with("n: ")
+            && said.contains("client's card")
+            && said.contains("is a server")
+            && said.contains("[ send message ]"),
+        "n on a server says what it does, where, and what to use instead: {said}"
+    );
+}
+
+/// A verb with more parameters than the composer holds at 80×24: the box
+/// scrolls to the selected field, says there is more, and keeps the
+/// validation error above the buttons. It used to render through ratatui's
+/// `Wrap` with no scroll, so the last fields and the error fell off the box.
+#[test]
+fn a_composer_with_many_parameters_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::llm::actions::{ActionDefinition, Parameter};
+    use netget::tui::modal::composer::ComposerModel;
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let parameters: Vec<Parameter> = (1..=14)
+        .map(|n| Parameter {
+            name: format!("param_{n:02}"),
+            type_hint: "string".into(),
+            description: format!("the {n}th header of the request, sent as written"),
+            required: n == 14,
+        })
+        .collect();
+    let action = ActionDefinition {
+        name: "send_request".into(),
+        description: "Send one request with every header the protocol defines".into(),
+        parameters,
+        example: serde_json::json!({"type": "send_request"}),
+        log_template: None,
+    };
+    let mut composer = ComposerModel::new(ClientId::new(2), "test", vec![action]);
+    composer.choose();
+    composer.move_selection(13);
+    composer.error = Some("'param_14' is required — fill it in before [ Send ]".into());
+    app.modals.push(Modal::Composer(Box::new(composer)));
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains("▸ param_14")),
+        "the selected field, the last of 14, is in view:\n{text}"
+    );
+    assert!(
+        text.contains("before [ Send ]"),
+        "the validation error is in view, whole:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(text.contains("[ Send ]"), "the buttons stay:\n{text}");
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}
+
+/// The routing draft at 80×24 with more static actions than the box holds:
+/// the selected action stays in view and the draft's error stays above the
+/// buttons, as in the instance form.
+#[test]
+fn a_routing_draft_with_many_actions_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::tui::modal::routing::{DraftFocus, HandlerKind, RoutingModel};
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let state = netget::state::AppState::new();
+    let mut model = RoutingModel::new(UiKey::Server(ServerId::new(1)), "TCP", None, &state);
+    model.add();
+    {
+        let draft = model.draft.as_mut().expect("draft open");
+        draft.pattern = "tcp_data_received".into();
+        draft.kind = HandlerKind::Static;
+        draft.actions = (1..=16)
+            .map(|n| serde_json::json!({"type": "send_tcp_data", "data": format!("line {n:02}")}))
+            .collect();
+        draft.focus = DraftFocus::Actions;
+        draft.selected_action = 15;
+        draft.error = Some(
+            "action 16 (send_tcp_data) is missing a field the protocol requires: encoding".into(),
+        );
+    }
+    app.modals.push(Modal::Routing(Box::new(model)));
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        text.contains("line 16"),
+        "the selected action, the last of 16, is in view:\n{text}"
+    );
+    assert!(
+        text.contains("requires: encoding"),
+        "the draft's error is in view, whole:\n{text}"
+    );
+    assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
+    assert!(
+        text.contains("[ Save response ]"),
+        "the buttons stay:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
 }

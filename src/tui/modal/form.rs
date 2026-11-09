@@ -122,14 +122,20 @@ pub struct FormModel {
     /// editing.
     pub editing: Option<String>,
     pub error: Option<String>,
-    /// An apply is in flight. The work is spawned (it does network I/O), so
-    /// the form stays on screen, refuses a second submit, and says so.
-    pub busy: bool,
+    /// The apply in flight, if any. The work is spawned (it does network
+    /// I/O), so the form stays on screen, refuses a second submit, and says
+    /// so; the result comes back carrying this ticket and lands here only.
+    pub pending: Option<crate::tui::uimsg::ActionTicket>,
     /// `Some(i)` when focus is on the i-th button rather than a field.
     pub focused_button: Option<usize>,
 }
 
 impl FormModel {
+    /// Whether an apply is in flight.
+    pub fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Build a create-form for a freshly picked protocol.
     pub fn for_create(section: Section, protocol: &str, default_port: Option<u16>) -> Self {
         let mut fields = Vec::new();
@@ -327,7 +333,7 @@ impl FormModel {
             selected: 0,
             editing: None,
             error: None,
-            busy: false,
+            pending: None,
             focused_button: None,
         }
     }
@@ -357,7 +363,7 @@ impl FormModel {
             selected: 0,
             editing: None,
             error: None,
-            busy: false,
+            pending: None,
             focused_button: None,
         }
     }

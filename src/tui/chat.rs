@@ -1,11 +1,10 @@
 //! In-memory chat/log history for the dashboard.
 //!
 //! The full-screen alternate screen has no terminal scrollback, so the
-//! dashboard keeps its own ring buffer of entries. Lines arrive on the same
-//! unbounded status channel the rolling TUI drains, with the same `[LEVEL]`
-//! prefix protocol. Unlike the rolling TUI (which drops filtered lines
-//! forever), filtering happens at render time — raising the log level
-//! retroactively reveals recently buffered DEBUG/TRACE lines.
+//! dashboard keeps its own ring buffer of entries. Lines arrive on the
+//! unbounded status channel with a `[LEVEL]` prefix protocol. Filtering
+//! happens at render time, so raising the log level retroactively reveals
+//! recently buffered DEBUG/TRACE lines.
 
 use std::collections::VecDeque;
 
@@ -144,8 +143,8 @@ pub enum Routed {
     /// `__UPDATE_UI__` and other `__` control messages: not content.
     Control,
     /// A `[LEVEL]` log line: the machine talking. Goes to the activity feed
-    /// (an `[ERROR]` is mirrored into the chat too, since the person who
-    /// caused it is looking there).
+    /// as a log entry, filtered by the log level; nothing copies it into the
+    /// conversation, because the stream already shows the two interleaved.
     Activity(LogLevel, String),
     /// The conversation: what the model reasons and says, and command output.
     Chat(EntryKind, String),

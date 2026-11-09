@@ -99,16 +99,32 @@ pub fn client_line(row: &ClientRow) -> InstanceLine {
     }
 }
 
-/// Truncate to `width` columns with an ellipsis, counting chars.
+/// Truncate to `width` terminal cells with an ellipsis.
+///
+/// Counts cells, not chars: a wide (CJK, emoji) grapheme takes two and a
+/// combining mark none, so a truncated label is as wide on screen as the
+/// column it was fitted to. A grapheme is never split, and a wide one that
+/// would straddle the ellipsis is left out whole.
 pub fn fit(text: &str, width: usize) -> String {
-    let count = text.chars().count();
-    if count <= width {
+    use ratatui::style::Style;
+    use ratatui::text::Span;
+    if crate::tui::wrap::cells(text) <= width {
         return text.to_string();
     }
     if width == 0 {
         return String::new();
     }
-    let mut out: String = text.chars().take(width - 1).collect();
+    let room = width - 1;
+    let mut used = 0usize;
+    let mut out = String::new();
+    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
+        let w = crate::tui::wrap::cells(grapheme.symbol);
+        if used + w > room {
+            break;
+        }
+        out.push_str(grapheme.symbol);
+        used += w;
+    }
     out.push('…');
     out
 }

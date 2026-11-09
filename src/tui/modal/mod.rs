@@ -198,7 +198,7 @@ impl Modal {
                 "type to filter · ↑/↓ select · Enter choose · Esc cancel"
             }
             Modal::Form(form) => {
-                if form.busy {
+                if form.busy() {
                     "working… (network call in flight)"
                 } else if form.editing.is_some() {
                     "type to edit · Enter accept · Esc cancel field"
@@ -225,7 +225,7 @@ impl Modal {
                 }
             }
             Modal::Routing(model) => {
-                if model.busy {
+                if model.busy() {
                     "applying…"
                 } else if model.draft.is_some() {
                     "Tab moves through everything · ←/→ change a choice · Enter act · Esc back"

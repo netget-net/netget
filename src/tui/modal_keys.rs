@@ -11,7 +11,7 @@ use crate::state::app_state::AppState;
 use crate::tui::app::DashboardApp;
 use crate::tui::keymap::Outcome;
 use crate::tui::modal::{confirm, Modal, PendingAction};
-use crate::tui::uimsg::{ActionOrigin, UiMsg};
+use crate::tui::uimsg::{ActionTicket, UiMsg};
 
 pub(crate) async fn handle_modal_key(
     app: &mut DashboardApp,
@@ -182,20 +182,8 @@ async fn handle_picker_key(app: &mut DashboardApp, key: KeyEvent, state: &AppSta
                 )),
                 None => app.push_system(format!("Starting {protocol} on defaults…")),
             }
-            let llm = app.llm_client.clone();
-            let status_tx = app.status_tx.clone();
-            let ui_tx = app.ui_tx.clone();
-            let state = state.clone();
-            tokio::spawn(async move {
-                let result = model
-                    .apply(&state, llm, &status_tx)
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = ui_tx.send(UiMsg::ActionDone {
-                    origin: ActionOrigin::Form,
-                    result,
-                });
-            });
+            // No modal holds this ticket: the result goes to the stream.
+            crate::tui::actions::spawn_form_apply(app, model, state, ActionTicket::next());
         }
         _ => {}
     }
@@ -328,26 +316,14 @@ async fn run_form_action(
             });
         }
         ModalAction::FormApply => {
-            if form.busy {
+            if form.busy() {
                 return Outcome::Continue;
             }
-            form.busy = true;
+            let ticket = ActionTicket::next();
+            form.pending = Some(ticket);
             form.error = None;
-            let model = form.clone();
-            let llm = app.llm_client.clone();
-            let status_tx = app.status_tx.clone();
-            let ui_tx = app.ui_tx.clone();
-            let state = state.clone();
-            tokio::spawn(async move {
-                let result = model
-                    .apply(&state, llm, &status_tx)
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = ui_tx.send(UiMsg::ActionDone {
-                    origin: ActionOrigin::Form,
-                    result,
-                });
-            });
+            let model = (**form).clone();
+            crate::tui::actions::spawn_form_apply(app, model, state, ticket);
         }
         _ => {}
     }
@@ -962,10 +938,11 @@ async fn run_routing_action(
             app.modals.pop();
         }
         ModalAction::RoutingSave => {
-            if model.busy {
+            if model.busy() {
                 return Outcome::Continue;
             }
-            model.busy = true;
+            let ticket = ActionTicket::next();
+            model.pending = Some(ticket);
             model.error = None;
             let snapshot = model.clone();
             let llm = app.llm_client.clone();
@@ -977,10 +954,7 @@ async fn run_routing_action(
                     .apply(&state, llm, &status_tx)
                     .await
                     .map_err(|e| e.to_string());
-                let _ = ui_tx.send(UiMsg::ActionDone {
-                    origin: ActionOrigin::Routing,
-                    result,
-                });
+                let _ = ui_tx.send(UiMsg::ActionDone { ticket, result });
             });
         }
         // Draft/form actions are handled by their own modals.

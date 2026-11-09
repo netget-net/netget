@@ -98,77 +98,20 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     // The instance form: fields, then Apply / Cancel.
     if let Some(Modal::Form(form)) = app.modals.last() {
-        // The error sits above the buttons, outside the scrolled fields: it
-        // answers the [ Apply ] just pressed, so it must be on screen whichever
-        // field is selected and however many fields the protocol declares.
-        let error_rows: Vec<String> = form
-            .error
-            .as_ref()
-            .map(|e| crate::tui::wrap::wrap(&format!("✗ {e}"), inner.width as usize))
-            .unwrap_or_default();
-        let error_height = (error_rows.len() as u16).min(inner.height.saturating_sub(3) / 2);
-        let rows = ratatui::layout::Layout::default()
-            .direction(ratatui::layout::Direction::Vertical)
-            .constraints([
-                ratatui::layout::Constraint::Min(2),
-                ratatui::layout::Constraint::Length(error_height),
-                ratatui::layout::Constraint::Length(1),
-            ])
-            .split(inner);
-        let (lines, offsets, (top, bottom)) = form_lines_with_offsets(app, form, rows[0].width);
-        // Scroll so the selected field and its help are in view.
-        let viewport = rows[0].height;
-        let mut scroll = bottom.saturating_sub(viewport);
-        if top < scroll {
-            scroll = top;
-        }
+        let body = form_lines_with_offsets(app, form, inner.width);
+        let error = form.error.clone();
         let buttons = form.buttons();
         let focused = form.focused_action();
-        let total = lines.len() as u16;
-        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rows[0]);
-        for (index, offset) in offsets.iter().enumerate() {
-            if *offset < scroll || *offset - scroll >= viewport {
-                continue;
-            }
-            app.hits.push(
-                ratatui::layout::Rect {
-                    x: rows[0].x,
-                    y: rows[0].y + (*offset - scroll),
-                    width: rows[0].width,
-                    height: 1,
-                },
-                HitTarget::ModalRow(index),
-            );
-        }
-        // Say there is more, above or below, on the box's top edge.
-        let above = scroll > 0;
-        let below = total > scroll + viewport;
-        if above || below {
-            let hint = match (above, below) {
-                (true, true) => " ↑↓ more fields ",
-                (true, false) => " ↑ more fields ",
-                _ => " ↓ more fields ",
-            };
-            let width = (hint.chars().count() as u16).min(rect.width.saturating_sub(2));
-            frame.render_widget(
-                Paragraph::new(Span::styled(hint, app.styles.dimmed)),
-                ratatui::layout::Rect {
-                    x: rect.x + rect.width.saturating_sub(width + 1),
-                    y: rect.y,
-                    width,
-                    height: 1,
-                },
-            );
-        }
-        if error_height > 0 {
-            let lines: Vec<Line> = error_rows
-                .into_iter()
-                .take(error_height as usize)
-                .map(|row| Line::from(Span::styled(row, app.styles.error)))
-                .collect();
-            frame.render_widget(Paragraph::new(lines), rows[1]);
-        }
-        draw_button_row(frame, app, rows[2], &buttons, focused);
+        draw_scrolled(
+            frame,
+            app,
+            rect,
+            inner,
+            body,
+            error.as_deref(),
+            &buttons,
+            focused,
+        );
         return;
     }
 
@@ -181,7 +124,8 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
             let kind_focused = draft.focus == DraftFocus::Kind;
             let buttons = draft.buttons();
             let focused = draft.focused_action();
-            let body = draft_body_lines(app, model, draft);
+            let error = draft.error.clone();
+            let body = draft_body_lines(app, model, draft, inner.width);
 
             let rows = ratatui::layout::Layout::default()
                 .direction(ratatui::layout::Direction::Vertical)
@@ -189,7 +133,6 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
                     ratatui::layout::Constraint::Length(1),
                     ratatui::layout::Constraint::Length(2),
                     ratatui::layout::Constraint::Min(3),
-                    ratatui::layout::Constraint::Length(1),
                 ])
                 .split(inner);
             draw_kind_segments(frame, app, rows[0], kind, kind_focused);
@@ -198,8 +141,19 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
                     .wrap(Wrap { trim: false }),
                 rows[1],
             );
-            frame.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), rows[2]);
-            draw_button_row(frame, app, rows[3], &buttons, focused);
+            // The body scrolls to whatever has focus and the error stays above
+            // the buttons, as in the instance form: a long pattern list or
+            // many static actions used to push both off the bottom of the box.
+            draw_scrolled(
+                frame,
+                app,
+                rect,
+                rows[2],
+                body,
+                error.as_deref(),
+                &buttons,
+                focused,
+            );
             return;
         }
 
@@ -283,17 +237,21 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
     if let Some(Modal::Composer(composer)) = app.modals.last() {
         let buttons = composer.buttons();
         let focused = composer.focused_action();
-        let (lines, offsets) = composer_lines_with_offsets(app, composer);
-        let rows = ratatui::layout::Layout::default()
-            .direction(ratatui::layout::Direction::Vertical)
-            .constraints([
-                ratatui::layout::Constraint::Min(3),
-                ratatui::layout::Constraint::Length(1),
-            ])
-            .split(inner);
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-        push_row_hits(app, rows[0], &offsets);
-        draw_button_row(frame, app, rows[1], &buttons, focused);
+        let error = composer.error.clone();
+        let body = composer_lines_with_offsets(app, composer, inner.width);
+        // Scrolled to the selected action or field, the validation error
+        // pinned above the buttons: a verb with more parameters than the box
+        // holds used to lose its last fields and the error below them.
+        draw_scrolled(
+            frame,
+            app,
+            rect,
+            inner,
+            body,
+            error.as_deref(),
+            &buttons,
+            focused,
+        );
         return;
     }
 
@@ -461,6 +419,145 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
     frame.render_widget(paragraph, inner);
 }
 
+/// A modal body as pre-split rows: one `Line` per terminal row (nothing here
+/// is wrapped by ratatui, so the row count is known), the row each selectable
+/// item starts on (for hit-testing), and the first and one-past-last row of
+/// what has focus (kept in view when the body is taller than the box).
+struct ScrolledBody<'a> {
+    lines: Vec<Line<'a>>,
+    offsets: Vec<u16>,
+    selection: (u16, u16),
+}
+
+/// Draw a body that scrolls to its selection, an error pinned above the
+/// buttons, and the buttons, in `area`; say on `rect`'s top edge when there
+/// are rows above or below the view.
+///
+/// The instance form, the composer and the routing draft all draw through
+/// this. The error sits outside the scrolled rows because it answers the
+/// button just pressed: it must be on screen whatever has focus and however
+/// many fields there are. It takes at most half of what the buttons leave.
+#[allow(clippy::too_many_arguments)]
+fn draw_scrolled(
+    frame: &mut Frame,
+    app: &mut DashboardApp,
+    rect: Rect,
+    area: Rect,
+    body: ScrolledBody<'_>,
+    error: Option<&str>,
+    buttons: &[crate::tui::hit::ModalAction],
+    focused: Option<crate::tui::hit::ModalAction>,
+) {
+    let error_rows: Vec<String> = error
+        .map(|e| crate::tui::wrap::wrap(&format!("✗ {e}"), area.width as usize))
+        .unwrap_or_default();
+    let error_height = (error_rows.len() as u16).min(area.height.saturating_sub(3) / 2);
+    let rows = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Min(2),
+            ratatui::layout::Constraint::Length(error_height),
+            ratatui::layout::Constraint::Length(1),
+        ])
+        .split(area);
+    let ScrolledBody {
+        lines,
+        offsets,
+        selection: (top, bottom),
+    } = body;
+    // Scroll so the selection is in view, its top row first when it is
+    // taller than the view.
+    let viewport = rows[0].height;
+    let mut scroll = bottom.saturating_sub(viewport);
+    if top < scroll {
+        scroll = top;
+    }
+    let total = lines.len() as u16;
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rows[0]);
+    for (index, offset) in offsets.iter().enumerate() {
+        if *offset < scroll || *offset - scroll >= viewport {
+            continue;
+        }
+        app.hits.push(
+            Rect {
+                x: rows[0].x,
+                y: rows[0].y + (*offset - scroll),
+                width: rows[0].width,
+                height: 1,
+            },
+            HitTarget::ModalRow(index),
+        );
+    }
+    let above = scroll > 0;
+    let below = total > scroll + viewport;
+    if above || below {
+        let hint = match (above, below) {
+            (true, true) => " ↑↓ more fields ",
+            (true, false) => " ↑ more fields ",
+            _ => " ↓ more fields ",
+        };
+        let width = (hint.chars().count() as u16).min(rect.width.saturating_sub(2));
+        frame.render_widget(
+            Paragraph::new(Span::styled(hint, app.styles.dimmed)),
+            Rect {
+                x: rect.x + rect.width.saturating_sub(width + 1),
+                y: rect.y,
+                width,
+                height: 1,
+            },
+        );
+    }
+    if error_height > 0 {
+        let lines: Vec<Line> = error_rows
+            .into_iter()
+            .take(error_height as usize)
+            .map(|row| Line::from(Span::styled(row, app.styles.error)))
+            .collect();
+        frame.render_widget(Paragraph::new(lines), rows[1]);
+    }
+    draw_button_row(frame, app, rows[2], buttons, focused);
+}
+
+/// The end of what is being typed into a `room`-cell value column, with the
+/// cursor, so the part being edited stays visible however long the value is.
+fn typed_tail(typed: &str, room: usize) -> String {
+    use ratatui::style::Style;
+    let typed = format!("{typed}_");
+    if crate::tui::wrap::cells(&typed) <= room || room <= 1 {
+        return typed;
+    }
+    let span = Span::raw(typed.as_str());
+    let graphemes: Vec<&str> = span
+        .styled_graphemes(Style::default())
+        .map(|g| g.symbol)
+        .collect();
+    let mut used = 0usize;
+    let mut start = graphemes.len();
+    while start > 0 {
+        let w = crate::tui::wrap::cells(graphemes[start - 1]);
+        if used + w > room - 1 {
+            break;
+        }
+        used += w;
+        start -= 1;
+    }
+    format!("…{}", graphemes[start..].concat())
+}
+
+/// Rows of `text` wrapped to `width` cells after `indent`, each in `style`.
+fn wrapped<'a>(
+    text: &str,
+    indent: &str,
+    width: usize,
+    style: ratatui::style::Style,
+) -> Vec<Line<'a>> {
+    let room = width.saturating_sub(crate::tui::wrap::cells(indent)).max(1);
+    crate::tui::wrap::wrap(text, room)
+        .into_iter()
+        .map(|row| Line::from(Span::styled(format!("{indent}{row}"), style)))
+        .collect()
+}
+
 /// Detail for the highlighted protocol, rendered in a fixed pane so the list
 /// above it never moves.
 /// Register one clickable row per selectable item.
@@ -587,7 +684,7 @@ fn form_lines_with_offsets<'a>(
     app: &DashboardApp,
     form: &crate::tui::modal::form::FormModel,
     width: u16,
-) -> (Vec<Line<'a>>, Vec<u16>, (u16, u16)) {
+) -> ScrolledBody<'a> {
     use crate::tui::rail::fit;
     let width = width as usize;
     let mut offsets = Vec::with_capacity(form.fields.len());
@@ -612,17 +709,10 @@ fn form_lines_with_offsets<'a>(
         if !label.ends_with(' ') {
             label.push(' ');
         }
-        let room = width.saturating_sub(2 + label.chars().count());
+        let room = width.saturating_sub(2 + crate::tui::wrap::cells(&label));
         let value_display = if is_selected && form.editing.is_some() {
             // The end of what is being typed, where the cursor is.
-            let typed = format!("{}_", form.editing.as_deref().unwrap_or(""));
-            let count = typed.chars().count();
-            if count > room && room > 1 {
-                let tail: String = typed.chars().skip(count - (room - 1)).collect();
-                format!("…{tail}")
-            } else {
-                typed
-            }
+            typed_tail(form.editing.as_deref().unwrap_or(""), room)
         } else {
             let text = if field.value.is_empty() {
                 field.placeholder.clone()
@@ -653,16 +743,15 @@ fn form_lines_with_offsets<'a>(
             Span::styled(value_display, value_style),
         ]));
         if is_selected {
-            for row in crate::tui::wrap::wrap(&field.help, width.saturating_sub(4)) {
-                lines.push(Line::from(Span::styled(
-                    format!("    {row}"),
-                    app.styles.dimmed,
-                )));
-            }
+            lines.extend(wrapped(&field.help, "    ", width, app.styles.dimmed));
             selected_rows = (top, lines.len() as u16);
         }
     }
-    (lines, offsets, selected_rows)
+    ScrolledBody {
+        lines,
+        offsets,
+        selection: selected_rows,
+    }
 }
 
 /// The handler editor's kind control: one segment per way of answering, the
@@ -713,16 +802,23 @@ fn draw_kind_segments(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The draft editor's body: the pattern chooser, then the selected kind's own
-/// fields. Every row here is a Tab stop; the `▸` marker tracks focus.
+/// The draft editor's body, `width` cells wide: the pattern chooser, then the
+/// selected kind's own fields, with the rows of whatever has focus as the
+/// selection to keep in view. Every row here is a Tab stop; the `▸` marker
+/// tracks focus. The draft's error is not here: the caller pins it above the
+/// buttons.
 fn draft_body_lines<'a>(
     app: &DashboardApp,
     model: &crate::tui::modal::routing::RoutingModel,
     draft: &crate::tui::modal::routing::HandlerDraft,
-) -> Vec<Line<'a>> {
+    width: u16,
+) -> ScrolledBody<'a> {
     use crate::tui::modal::routing::{DraftFocus, HandlerDraft, HandlerKind};
+    use crate::tui::rail::fit;
 
-    let mut lines = Vec::new();
+    let width = width as usize;
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    let mut selection = (0u16, 0u16);
     let marker = |focused: bool| Span::styled(if focused { "▸ " } else { "  " }, app.styles.accent);
     let label = |text: &str, focused: bool| {
         Span::styled(
@@ -734,23 +830,47 @@ fn draft_body_lines<'a>(
             },
         )
     };
+    // What is left for a value after the marker and the label column.
+    let room = width.saturating_sub(2 + 18);
+    // One `▸ label  value` row; the selection when it has focus.
+    let field_row = |lines: &mut Vec<Line<'a>>,
+                     selection: &mut (u16, u16),
+                     name: &str,
+                     focused: bool,
+                     value: String,
+                     style: ratatui::style::Style| {
+        let top = lines.len() as u16;
+        lines.push(Line::from(vec![
+            marker(focused),
+            label(name, focused),
+            Span::styled(value, style),
+        ]));
+        if focused {
+            *selection = (top, top + 1);
+        }
+    };
 
     // --- when ---
     let pattern_focused = draft.focus == DraftFocus::Pattern;
     let pattern_display = if draft.editing.is_some() && pattern_focused {
-        format!("{}_", draft.editing.as_deref().unwrap_or(""))
+        typed_tail(draft.editing.as_deref().unwrap_or(""), room)
     } else if draft.pattern == "*" {
         "* (every event)".to_string()
     } else {
-        draft.pattern.clone()
+        fit(&draft.pattern, room)
     };
-    lines.push(Line::from(vec![
-        marker(pattern_focused),
-        label("when event", pattern_focused),
-        Span::styled(pattern_display, app.styles.info),
-    ]));
+    field_row(
+        &mut lines,
+        &mut selection,
+        "when event",
+        pattern_focused,
+        pattern_display,
+        app.styles.info,
+    );
     if pattern_focused && draft.editing.is_none() {
-        // The chooser: ←/→ walks these; Enter types a pattern by hand.
+        // The chooser: ←/→ walks these; Enter types a pattern by hand. The
+        // selection narrows to the choice that is picked, so walking a long
+        // list keeps it in view.
         let choices = HandlerDraft::pattern_choices(&model.event_ids);
         for choice in choices.iter().take(12) {
             let selected = *choice == draft.pattern;
@@ -761,20 +881,25 @@ fn draft_body_lines<'a>(
                     .event_ids
                     .iter()
                     .find(|(id, _)| id == choice)
-                    .map(|(_, d)| crate::utils::truncate_for_log(d, 56))
+                    .map(|(_, d)| d.clone())
                     .unwrap_or_default()
             };
+            let name = format!("      {choice:<28}");
+            let rest = width.saturating_sub(crate::tui::wrap::cells(&name) + 1);
+            if selected {
+                let top = lines.len() as u16;
+                selection = (top, top + 1);
+            }
             lines.push(Line::from(vec![
-                Span::raw("      "),
                 Span::styled(
-                    format!("{choice:<28}"),
+                    name,
                     if selected {
                         app.styles.selected
                     } else {
                         app.styles.dimmed
                     },
                 ),
-                Span::styled(format!(" {description}"), app.styles.dimmed),
+                Span::styled(format!(" {}", fit(&description, rest)), app.styles.dimmed),
             ]));
         }
     }
@@ -784,133 +909,159 @@ fn draft_body_lines<'a>(
     match draft.kind {
         HandlerKind::Static => {
             let focused = draft.focus == DraftFocus::Actions;
-            lines.push(Line::from(vec![
-                marker(focused),
-                label("response actions", focused),
-                Span::styled(
-                    if draft.actions.is_empty() {
+            field_row(
+                &mut lines,
+                &mut selection,
+                "response actions",
+                focused,
+                fit(
+                    &if draft.actions.is_empty() {
                         "(Enter opens the JSON editor, prefilled with a working example)"
                             .to_string()
                     } else {
                         format!("{} action(s) — Enter edits, d deletes", draft.actions.len())
                     },
-                    if draft.actions.is_empty() {
-                        app.styles.dimmed
-                    } else {
-                        app.styles.info
-                    },
+                    room,
                 ),
-            ]));
+                if draft.actions.is_empty() {
+                    app.styles.dimmed
+                } else {
+                    app.styles.info
+                },
+            );
             for (index, action) in draft.actions.iter().enumerate() {
                 let name = action
                     .get("type")
                     .and_then(|t| t.as_str())
                     .unwrap_or("(no type)");
-                let style = if focused && index == draft.selected_action {
-                    app.styles.selected
-                } else {
-                    app.styles.info
-                };
+                let chosen = focused && index == draft.selected_action;
+                if chosen {
+                    let top = lines.len() as u16;
+                    selection = (top, top + 1);
+                }
+                // The name once, then the fields it carries: repeating the
+                // `type` inside the JSON spent the row on what it already said.
+                let mut fields = action.clone();
+                if let Some(object) = fields.as_object_mut() {
+                    object.remove("type");
+                }
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "      {name}  {}",
-                        crate::utils::truncate_for_log(&action.to_string(), 70)
-                    ),
-                    style,
+                    fit(&format!("      {name}  {fields}"), width),
+                    if chosen {
+                        app.styles.selected
+                    } else {
+                        app.styles.info
+                    },
                 )));
             }
         }
         HandlerKind::Script => {
             let language_focused = draft.focus == DraftFocus::Language;
-            lines.push(Line::from(vec![
-                marker(language_focused),
-                label("language", language_focused),
-                Span::styled(format!("◂ {} ▸", draft.language), app.styles.info),
-            ]));
+            field_row(
+                &mut lines,
+                &mut selection,
+                "language",
+                language_focused,
+                format!("◂ {} ▸", draft.language),
+                app.styles.info,
+            );
             let code_focused = draft.focus == DraftFocus::Code;
-            lines.push(Line::from(vec![
-                marker(code_focused),
-                label("script code", code_focused),
-                Span::styled(
-                    if draft.code.is_empty() {
-                        "(Enter opens the editor)".to_string()
-                    } else {
-                        format!("{} line(s) — Enter edits", draft.code.lines().count())
-                    },
-                    if draft.code.is_empty() {
-                        app.styles.dimmed
-                    } else {
-                        app.styles.info
-                    },
-                ),
-            ]));
+            let top = lines.len() as u16;
+            field_row(
+                &mut lines,
+                &mut selection,
+                "script code",
+                code_focused,
+                if draft.code.is_empty() {
+                    "(Enter opens the editor)".to_string()
+                } else {
+                    format!("{} line(s) — Enter edits", draft.code.lines().count())
+                },
+                if draft.code.is_empty() {
+                    app.styles.dimmed
+                } else {
+                    app.styles.info
+                },
+            );
             for line in draft.code.lines().take(6) {
                 lines.push(Line::from(Span::styled(
-                    format!("      {line}"),
+                    fit(&format!("      {line}"), width),
                     app.styles.dimmed,
                 )));
             }
+            if code_focused {
+                selection = (top, lines.len() as u16);
+            }
             let resident_focused = draft.focus == DraftFocus::Resident;
-            lines.push(Line::from(vec![
-                marker(resident_focused),
-                label("resident", resident_focused),
-                Span::styled(
+            field_row(
+                &mut lines,
+                &mut selection,
+                "resident",
+                resident_focused,
+                fit(
                     if draft.resident {
                         "[x] one process stays alive and keeps state between events"
                     } else {
                         "[ ] a fresh interpreter per event (stateless)"
                     },
-                    app.styles.info,
+                    room,
                 ),
-            ]));
+                app.styles.info,
+            );
         }
         HandlerKind::Llm => {
             let focused = draft.focus == DraftFocus::Instruction;
-            lines.push(Line::from(vec![
-                marker(focused),
-                label("instruction", focused),
-                Span::styled(
-                    if draft.instruction.is_empty() {
-                        "(Enter opens the editor)".to_string()
-                    } else {
-                        crate::utils::truncate_for_log(&draft.instruction, 70)
-                    },
-                    if draft.instruction.is_empty() {
-                        app.styles.dimmed
-                    } else {
-                        app.styles.info
-                    },
-                ),
-            ]));
+            field_row(
+                &mut lines,
+                &mut selection,
+                "instruction",
+                focused,
+                if draft.instruction.is_empty() {
+                    "(Enter opens the editor)".to_string()
+                } else {
+                    fit(&draft.instruction, room)
+                },
+                if draft.instruction.is_empty() {
+                    app.styles.dimmed
+                } else {
+                    app.styles.info
+                },
+            );
         }
         HandlerKind::Manual => {
             let focused = draft.focus == DraftFocus::Timeout;
             let timeout_display = if draft.editing.is_some() && focused {
-                format!("{}_", draft.editing.as_deref().unwrap_or(""))
+                typed_tail(draft.editing.as_deref().unwrap_or(""), room)
             } else {
                 format!("{} seconds", draft.timeout_secs)
             };
-            lines.push(Line::from(vec![
-                marker(focused),
-                label("wait for me", focused),
-                Span::styled(timeout_display, app.styles.info),
-            ]));
-            lines.push(Line::from(Span::styled(
-                "      Each matched event appears under the instance as “⚠ waiting for YOUR \
+            let top = lines.len() as u16;
+            field_row(
+                &mut lines,
+                &mut selection,
+                "wait for me",
+                focused,
+                timeout_display,
+                app.styles.info,
+            );
+            lines.extend(wrapped(
+                "Each matched event appears under the instance as “⚠ waiting for YOUR \
                  answer”. No answer in time fails closed — the peer gets an error, never an \
                  invented success.",
+                "      ",
+                width,
                 app.styles.dimmed,
-            )));
+            ));
+            if focused {
+                selection = (top, lines.len() as u16);
+            }
         }
     }
-    if let Some(error) = &draft.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("✗ {error}"),
-            app.styles.error,
-        )));
+    ScrolledBody {
+        lines,
+        offsets: Vec::new(),
+        selection,
     }
-    lines
 }
 
 /// A pending intercept: what arrived and the answer composed so far.
@@ -1015,59 +1166,81 @@ fn intercept_lines<'a>(
     lines
 }
 
-/// The composer's lines plus the line each selectable row landed on — the
-/// actions while choosing, the parameters once chosen.
+/// The composer's rows, `width` cells wide: the actions while choosing, the
+/// parameters once chosen, each selectable row's offset, and the selection —
+/// the highlighted action, or the selected field with its help — to keep in
+/// view. The validation error is not here: the caller pins it above the
+/// buttons.
 fn composer_lines_with_offsets<'a>(
     app: &DashboardApp,
     composer: &crate::tui::modal::composer::ComposerModel,
-) -> (Vec<Line<'a>>, Vec<u16>) {
+    width: u16,
+) -> ScrolledBody<'a> {
+    use crate::tui::rail::fit;
+    let width = width as usize;
     let mut offsets = Vec::new();
     let mut lines = Vec::new();
+    let mut selection = (0u16, 0u16);
     match composer.chosen {
         None => {
-            lines.push(Line::from(Span::styled(
-                format!("{} actions — pick one:", composer.protocol),
+            lines.extend(wrapped(
+                &format!("{} actions — pick one:", composer.protocol),
+                "",
+                width,
                 app.styles.dimmed,
-            )));
+            ));
             lines.push(Line::from(""));
             for (index, action) in composer.actions.iter().enumerate() {
-                offsets.push(lines.len() as u16);
+                let top = lines.len() as u16;
+                offsets.push(top);
                 let style = if index == composer.selected {
+                    selection = (top, top + 1);
                     app.styles.selected
                 } else {
                     app.styles.normal
                 };
+                let name = format!("  {:<24}", action.name);
+                let room = width.saturating_sub(crate::tui::wrap::cells(&name));
                 lines.push(Line::from(vec![
-                    Span::styled(format!("  {:<24}", action.name), style),
-                    Span::styled(
-                        crate::utils::truncate_for_log(&action.description, 70),
-                        app.styles.dimmed,
-                    ),
+                    Span::styled(name, style),
+                    Span::styled(fit(&action.description, room), app.styles.dimmed),
                 ]));
             }
         }
         Some(index) => {
             let action = &composer.actions[index];
-            lines.push(Line::from(Span::styled(
-                format!("{} — {}", action.name, action.description),
+            lines.extend(wrapped(
+                &format!("{} — {}", action.name, action.description),
+                "",
+                width,
                 app.styles.accent,
-            )));
+            ));
             lines.push(Line::from(""));
             if let Some(raw) = &composer.raw_json {
-                lines.push(Line::from(Span::styled(
+                let top = lines.len() as u16;
+                lines.extend(wrapped(
                     "raw JSON — press [ Raw JSON ] again to go back to fields:",
+                    "",
+                    width,
                     app.styles.dimmed,
-                )));
+                ));
+                selection = (top, lines.len() as u16);
                 for line in raw.lines() {
-                    lines.push(Line::from(Span::styled(line.to_string(), app.styles.info)));
+                    lines.extend(wrapped(line, "", width, app.styles.info));
                 }
             } else {
                 for (i, field) in composer.fields.iter().enumerate() {
-                    offsets.push(lines.len() as u16);
+                    let top = lines.len() as u16;
+                    offsets.push(top);
                     let is_selected = i == composer.selected;
                     let marker = if is_selected { "▸ " } else { "  " };
+                    let label = format!(
+                        "{:<20}",
+                        format!("{}{}", field.name, if field.required { " *" } else { "" })
+                    );
+                    let room = width.saturating_sub(2 + crate::tui::wrap::cells(&label));
                     let value = if is_selected && composer.editing.is_some() {
-                        format!("{}_", composer.editing.as_deref().unwrap_or(""))
+                        typed_tail(composer.editing.as_deref().unwrap_or(""), room)
                     } else if field.kind == crate::tui::modal::composer::FieldKind::Bool {
                         // A checkbox: Enter or Space flips it.
                         if field.value.trim() == "true" {
@@ -1079,30 +1252,30 @@ fn composer_lines_with_offsets<'a>(
                         // A radio group: Enter/Space/←/→ cycle the pick. An
                         // optional field with nothing picked shows every value
                         // unmarked, exactly like the unticked checkbox above.
-                        field
-                            .choices
-                            .iter()
-                            .map(|choice| {
-                                if field.value.trim() == choice {
-                                    format!("(x) {choice}")
-                                } else {
-                                    format!("( ) {choice}")
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("  ")
+                        fit(
+                            &field
+                                .choices
+                                .iter()
+                                .map(|choice| {
+                                    if field.value.trim() == choice {
+                                        format!("(x) {choice}")
+                                    } else {
+                                        format!("( ) {choice}")
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("  "),
+                            room,
+                        )
                     } else if field.value.is_empty() {
-                        field.placeholder.clone()
+                        fit(&field.placeholder, room)
                     } else {
-                        field.value.clone()
+                        fit(&field.value, room)
                     };
                     lines.push(Line::from(vec![
                         Span::styled(marker, app.styles.accent),
                         Span::styled(
-                            format!(
-                                "{:<20}",
-                                format!("{}{}", field.name, if field.required { " *" } else { "" })
-                            ),
+                            label,
                             if is_selected {
                                 app.styles.accent
                             } else {
@@ -1119,29 +1292,26 @@ fn composer_lines_with_offsets<'a>(
                         ),
                     ]));
                     if is_selected {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {}", field.help),
-                            app.styles.dimmed,
-                        )));
+                        lines.extend(wrapped(&field.help, "    ", width, app.styles.dimmed));
+                        selection = (top, lines.len() as u16);
                     }
                 }
                 if composer.fields.is_empty() {
-                    lines.push(Line::from(Span::styled(
+                    lines.extend(wrapped(
                         "(this action takes no parameters — Tab to [ Send ])",
+                        "",
+                        width,
                         app.styles.dimmed,
-                    )));
+                    ));
                 }
             }
         }
     }
-    if let Some(error) = &composer.error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("✗ {error}"),
-            app.styles.error,
-        )));
+    ScrolledBody {
+        lines,
+        offsets,
+        selection,
     }
-    (lines, offsets)
 }
 
 fn band_detail_lines<'a>(app: &DashboardApp, key: crate::tui::app::UiKey) -> Vec<Line<'a>> {

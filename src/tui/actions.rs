@@ -10,7 +10,7 @@ use crate::state::app_state::AppState;
 use crate::tui::app::{DashboardApp, Section, UiKey};
 use crate::tui::cards::InstanceAction;
 use crate::tui::modal::{confirm, Modal, PendingAction};
-use crate::tui::uimsg::{ActionOrigin, UiMsg};
+use crate::tui::uimsg::{ActionTicket, UiMsg};
 
 /// Run `action` against `key`.
 pub async fn run(app: &mut DashboardApp, key: UiKey, action: InstanceAction, state: &AppState) {
@@ -526,15 +526,19 @@ async fn open_client_for_server(
     app.push_system(format!(
         "Connecting a {client_protocol} client to {remote}…"
     ));
-    spawn_form_apply(app, model, state);
+    // No modal holds this ticket, so the result goes to the stream — never
+    // into a form the user opened while the connect was in flight.
+    spawn_form_apply(app, model, state, ActionTicket::next());
 }
 
-/// Apply a create/edit form off the event loop; the result closes the form
-/// (success) or shows in it (failure) via `handle_ui_msg`.
+/// Apply a create/edit form off the event loop. The result comes back with
+/// `ticket`: it closes (success) or shows in (failure) the modal holding that
+/// ticket, and goes to the stream when none does (`handle_ui_msg`).
 pub fn spawn_form_apply(
-    app: &mut DashboardApp,
+    app: &DashboardApp,
     model: crate::tui::modal::form::FormModel,
     state: &AppState,
+    ticket: ActionTicket,
 ) {
     let llm = app.llm_client.clone();
     let status_tx = app.status_tx.clone();
@@ -545,10 +549,7 @@ pub fn spawn_form_apply(
             .apply(&state, llm, &status_tx)
             .await
             .map_err(|e| e.to_string());
-        let _ = ui_tx.send(UiMsg::ActionDone {
-            origin: ActionOrigin::Form,
-            result,
-        });
+        let _ = ui_tx.send(UiMsg::ActionDone { ticket, result });
     });
 }
 
