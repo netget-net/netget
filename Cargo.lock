@@ -9448,7 +9448,7 @@ dependencies = [
 
 [[package]]
 name = "netget-tool"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
