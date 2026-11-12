@@ -39,12 +39,12 @@ jobs:
         # the Dockerfile.
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
             features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             key: darwin-arm64
             ext: tar.gz
           - target: x86_64-apple-darwin
-            runner: macos-14 # cross-compiled from Apple Silicon; Intel runners are scarce
+            runner: macos-15 # cross-compiled from Apple Silicon; Intel runners are scarce
             features: mcp-stdio,mcp-http,sqlite,vendored-openssl,libpcap,bluetooth,pcsc
             key: darwin-x64
             ext: tar.gz
