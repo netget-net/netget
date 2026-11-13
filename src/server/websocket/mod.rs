@@ -73,17 +73,6 @@ pub const MAX_REQUEST_HEAD: usize = 16 * 1024;
 /// `handshake_timeout_secs` startup parameter; past it the peer is answered 408.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Inbound messages a connection may have waiting for its handler before the read loop stops
-/// reading. Handlers answer one message (or one batch) at a time while the frame loop keeps
-/// reading, so without this a peer that sends faster than the model answers grows the queue
-/// without limit — each entry up to `max_message_size`. At either limit the server stops
-/// reading the socket until the handler catches up, and TCP flow control holds the peer back:
-/// nothing is dropped and nothing is refused. The byte limit is checked before each read, so
-/// the queue holds at most this plus one message.
-pub const MAX_QUEUED_INBOUND_MESSAGES: usize = 1024;
-/// See [`MAX_QUEUED_INBOUND_MESSAGES`]: the bytes those messages may hold between them.
-pub const MAX_QUEUED_INBOUND_BYTES: usize = 8 * 1024 * 1024;
-
 pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 pub const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const MAX_SIZE_LIMIT: usize = 64 * 1024 * 1024;
@@ -465,7 +454,7 @@ enum Inbound {
 }
 
 impl Inbound {
-    /// Payload bytes, for the backlog bound and the joined-message bound.
+    /// Payload bytes, for the joined-message bound.
     fn len(&self) -> usize {
         match self {
             Inbound::Text(t) => t.len(),
@@ -559,16 +548,6 @@ impl ConnData {
             Err((_, next)) => next,
         })
     }
-
-    /// Whether the read loop must wait for the handler before reading another message: a
-    /// handler is running and the backlog is at [`MAX_QUEUED_INBOUND_MESSAGES`] or
-    /// [`MAX_QUEUED_INBOUND_BYTES`]. With no handler running the next message is what starts
-    /// one, so it is always read.
-    fn backlog_full(&self) -> bool {
-        self.state == HandlerState::Processing
-            && (self.queued.len() >= MAX_QUEUED_INBOUND_MESSAGES
-                || self.queued.iter().map(Inbound::len).sum::<usize>() >= MAX_QUEUED_INBOUND_BYTES)
-    }
 }
 
 /// Everything a message handler task needs; grouped so the task spawn stays readable.
@@ -581,9 +560,6 @@ struct ConnCtx {
     out_tx: crate::utils::outbox::OutboxSender<WsOut>,
     protocol: Arc<WebSocketProtocol>,
     data: Arc<Mutex<ConnData>>,
-    /// Signalled each time the handler takes messages off `data.queued`, which is what a read
-    /// loop waiting on a full backlog wakes for.
-    drained: tokio::sync::Notify,
     /// `max_message_size`: also the bound on a message joined by `wait_for_websocket_data`.
     max_message: usize,
     subprotocol: Option<String>,
@@ -1034,7 +1010,6 @@ impl WebSocketServer {
                     queued: VecDeque::new(),
                     held: Vec::new(),
                 })),
-                drained: tokio::sync::Notify::new(),
                 max_message,
                 subprotocol,
             },
@@ -1313,15 +1288,6 @@ impl WebSocketServer {
         let activity = Arc::new(crate::server::accept_bounded::ConnectionActivity::new());
 
         loop {
-            // Backpressure: while the handler has a full backlog, read nothing more. The
-            // socket's receive buffer fills and TCP holds the peer back, rather than this
-            // process holding every message the peer can send faster than it is answered.
-            loop {
-                if !ctx.data.lock().await.backlog_full() {
-                    break;
-                }
-                ctx.drained.notified().await;
-            }
             let keepalive_tx = ctx.out_tx.clone();
             let message = tokio::select! {
                 message = stream.next() => message,
@@ -1500,9 +1466,6 @@ impl WebSocketServer {
                     } else {
                         HandlerState::Idle
                     };
-                    // A read loop waiting on a full backlog re-checks it: the queue may have
-                    // been cleared for a cut-off peer, and the loop must go on to read its EOF.
-                    ctx.drained.notify_one();
                     return;
                 };
                 // Join onto what the model deferred with wait_for_websocket_data: the held
@@ -1525,7 +1488,6 @@ impl WebSocketServer {
                         batch.push(more);
                     }
                 }
-                ctx.drained.notify_one();
                 batch
             };
 
@@ -1617,7 +1579,6 @@ impl WebSocketServer {
                         data.state = HandlerState::Idle;
                         data.queued.clear();
                         data.held.clear();
-                        ctx.drained.notify_one();
                         return;
                     }
                 }
@@ -1647,7 +1608,6 @@ impl WebSocketServer {
                     data.state = HandlerState::Idle;
                     data.queued.clear();
                     data.held.clear();
-                    ctx.drained.notify_one();
                     return;
                 }
             }
@@ -1670,7 +1630,6 @@ impl WebSocketServer {
         data.queued.clear();
         data.held.clear();
         data.state = HandlerState::Idle;
-        ctx.drained.notify_one();
     }
 
     /// Emit `websocket_close` for a client-initiated close.

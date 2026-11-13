@@ -824,7 +824,7 @@ impl Protocol for WebSocketProtocol {
                  DeflateStream under tungstenite), corpus with a 64 MiB inflation bomb, a 2^63-1 \
                  frame and a 20 000-fragment message. (4) BOUNDS: limits_test.rs (head size and \
                  time, frame and message limits compressed and not, the joined-message limit, \
-                 the 125-byte floor, the inbound backlog), connection_bounds_test.rs (cap, \
+                 the 125-byte floor), connection_bounds_test.rs (cap, \
                  idle), slow_reader_test.rs (outbox), each verified by removal. (6) No #[ignore] \
                  and no skip gate. UNPROVEN: wss:// (not implemented), browsers, Autobahn.",
             )
@@ -833,9 +833,8 @@ impl Protocol for WebSocketProtocol {
                  false turns it off), honouring window sizes 9-15 and no-context-takeover; \
                  handlers see plain text either way. A frame or message over a limit is Close \
                  1009, a protocol violation 1002, invalid UTF-8 1007; a request head over 16 KiB \
-                 is 431 and one unfinished at handshake_timeout_secs 408. While a handler is busy \
-                 the server stops reading once 1024 messages or 8 MiB are queued, so TCP holds a \
-                 fast peer back. Not implemented: TLS (wss:// — put a TLS terminator in front) and \
+                 is 431 and one unfinished at handshake_timeout_secs 408. Not implemented: TLS \
+                 (wss:// — put a TLS terminator in front) and \
                  every other extension. Pong frames from the client are logged, not surfaced as an \
                  event, so a keepalive pong costs no model call. A connection costs one model call \
                  before the first message (websocket_handshake, whose accept carries any \

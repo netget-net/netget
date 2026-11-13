@@ -238,10 +238,12 @@ asserts both halves of the handshake row: the 503 on the wire, and
 Per connection: **Idle → Processing → Accumulating**, in `ConnData`.
 
 - messages arriving while the model is thinking go on `queued` (no concurrent model call on one
-  connection, no lost message), in arrival order. **The backlog is bounded**:
-  while a handler is running and `queued` holds `MAX_QUEUED_INBOUND_MESSAGES` (1024) messages or
-  `MAX_QUEUED_INBOUND_BYTES` (8 MiB), the read loop reads nothing more until the handler takes
-  some — the socket buffer fills and TCP holds the peer back. Nothing is dropped or refused.
+  connection, no lost message), in arrival order. **No bound is declared on this queue**, and
+  none was added: measured on 13 November 2026, with a handler busy (a `manual` rule parked, or
+  a script sleeping) a peer sending 64 KiB or empty messages as fast as it could stalled after
+  1.6–4.4 MB, and stalled the same with a 1024-message / 8 MiB backpressure bound in the read
+  loop as without it — so the bound could not be shown to do anything and was not kept. What
+  stops the server reading is not identified; it is an open question, not a guarantee.
 - `wait_for_websocket_data` parks the message in `held`, at most one per kind, and moves to
   `Accumulating` once the queue is empty. The next message of the same kind — one already
   queued, or the next to arrive — is joined onto it (text concatenated, binary appended) and
@@ -299,7 +301,6 @@ in `tests/server/websocket/limits_test.rs` (sizes and the handshake),
 | Frame | 1 MiB (`max_frame_size`) | tungstenite for an uncompressed frame, `DeflateStream` for every frame when deflate is on, so a compressed frame is judged as sent; Close **1009** |
 | Message | 1 MiB (`max_message_size`) | tungstenite across fragments; the inflate is bounded while it runs (output stops at the limit + 1), and a compressed message's frames are held to it before inflating; Close **1009** |
 | Joined message (`wait_for_websocket_data`) | `max_message_size` | checked before joining; Close **1009** |
-| Inbound backlog | 1024 messages / 8 MiB | the read loop stops reading while a busy handler's queue is full; TCP pushes back |
 | Outbound queue | 4096 frames / 8 MiB (`utils::outbox`) | a peer that stops reading is cut off and the socket shut down |
 | Upgraded, no frame from the peer | 600s (`idle_timeout_secs`) | `accept_bounded::watch_idle_with_probe` over a `ConnectionActivity`, the probe a Ping, raced against the frame loop; Close **1001** |
 | Connections | 256 | `accept_bounded`; the peer over the cap reads `503` + `Retry-After` |
@@ -455,9 +456,6 @@ in `e2e_test.rs`. Driving them found nothing wrong with those verbs.
 
 **Condition 4 found the defects**, each a bound that was declared or implied and not held:
 
-- The **inbound queue had no bound**: a peer sending faster than its handler answered was read
-  without limit into memory, a message up to `max_message_size` at a time. It is now
-  backpressure — the read loop stops at 1024 messages or 8 MiB queued.
 - **`wait_for_websocket_data` joined messages without limit**, so a handler that kept waiting
   grew one message past `max_message_size`; and a held message was lost when one of the other
   kind arrived and was deferred too. The join is held to `max_message_size` (1009), one held

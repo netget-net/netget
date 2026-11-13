@@ -67,16 +67,21 @@ oracle reads each upgraded one with `require_named("websocket")` and the refused
 | `compressed_frames_past_max_message_size_are_refused_before_inflating` | — | compressed bytes past 4096: refused while collecting |
 | `the_125_byte_floor_applies_to_a_smaller_max_message_size` | 125 under `max_message_size: 1` | 126: Close 1009 |
 | `a_message_joined_by_wait_for_websocket_data_is_held_to_max_message_size` | two held 900-byte parts joined (1800) | a third: Close 1009 |
-| `a_peer_outrunning_its_handler_is_held_back_by_the_byte_bound` | — | 64 KiB messages behind a parked handler: the peer's writes stop well short of 40 MiB |
-| `a_peer_outrunning_its_handler_is_held_back_by_the_message_bound` | — | the same with empty messages |
 | `a_mebibyte_compressed_message_in_one_byte_frames_is_answered_promptly` | the walk to the size bound, timed | — |
 
 Verified by removal: with the deflate layer's frame limit set back to the message limit the
-compressed-frame test fails (the oversized frame is echoed); with the backlog wait removed both
-backlog tests fail (the peer writes the full 96 MiB); with the join check removed the joined
-message test fails (no close); with `read_error_close` mapping nothing the 1009 tests fail on
-EOF without a close frame; with the head check reading the whole buffer before the size test
-the 16 385-byte head is upgraded.
+compressed-frame test fails (the oversized frame is echoed); with the join check removed the
+joined-message test fails (no close); with `read_error_close` mapping nothing every 1009 test
+fails on EOF without a close frame; with the head check made only when a read leaves the head
+unfinished the 16 385-byte head is upgraded. The 408 is written only by the handshake timeout's
+arm. The timed walk is a guard against a superlinear walk, not a removal-checked bound: the
+per-frame drain it was written for costs a constant factor, not the frame count squared, at
+16 KiB reads.
+
+**A backpressure bound on the inbound queue was tried and dropped.** Its tests (a peer writing
+64 KiB or empty messages while a `manual` rule or a sleeping script held the handler) passed
+just the same with the bound removed: the peer stalled after 1.6–4.4 MB either way. What stops
+the server reading while a handler is busy is not identified.
 
 ## Tests
 
