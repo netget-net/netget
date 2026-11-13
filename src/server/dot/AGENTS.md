@@ -16,8 +16,9 @@ DoT contributes the TLS transport and the RFC 7858 framing; every DNS semantic �
 set, action execution, and what is sent after the model answers — is the DNS server's, reached
 through delegation and `dns::StreamQuery` (see below). Two independent resolvers, kdig and dig,
 complete sessions and read every record type the actions write; every bound has a test
-(`tests/server/dot/bounds_test.rs`, `connection_bounds_test.rs`). Not covered: CA-signed or
-custom certificates, mutual TLS, EDNS padding.
+(`tests/server/dot/bounds_test.rs`, `connection_bounds_test.rs`); replies are padded when the
+query asks (`padding_test.rs`, below). Not covered: CA-signed or custom certificates, mutual
+TLS.
 
 ## Library Choices
 
@@ -245,11 +246,17 @@ All limitations from standard DNS protocol apply:
 Connections are capped and every wait is bounded (see "Bounds" below), but there is no
 per-source limit or query-rate limit: one address may hold all 256 connections.
 
-### 5. EDNS0 is echoed, not used
+### 5. EDNS0: echoed, and Padding honoured
 
 A query with an OPT record gets one back (`Reply::finish`, as on the DNS server's TCP path);
-there is no truncation over TLS and no EDNS option is acted on — Client Subnet, COOKIE and
-Padding (RFC 7830, which RFC 8310 recommends for DoT) are ignored.
+there is no truncation over TLS. The one option acted on is Padding (RFC 7830, which RFC 8310
+recommends for DoT): a query carrying it gets every reply — answer, SERVFAIL, FORMERR —
+padded with zero octets to a multiple of 468 octets (RFC 8467 §4.1, counted over the DNS
+message, not its length prefix), and one that cannot reach the next block within 65535 octets is
+sent unpadded rather than refused (`decision=unpadded_over_limit`). A query without Padding gets
+an unpadded reply. kdig pads its queries over TLS by default, so its replies here are padded.
+`tests/server/dot/padding_test.rs` drives it from the wire and with kdig and `dig +padding`.
+Client Subnet and COOKIE are ignored.
 
 ## Bounds
 
@@ -438,8 +445,8 @@ client auth.
 The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source in
 November 2026 rather than inherited. **The rating covers the surface this server implements**:
 RFC 7858 over a self-signed certificate, one query at a time per connection, answered by the
-DNS server's query actions and its answer rules. Certificate provisioning, client
-authentication, EDNS padding (RFC 7830/8467) and pipelined (out-of-order) answers are not
+DNS server's query actions and its answer rules, EDNS padding (RFC 7830/8467) included.
+Certificate provisioning, client authentication and pipelined (out-of-order) answers are not
 implemented, and the DNS server's DNSSEC signing and zone transfers are not offered here.
 
 | # | condition | holds? |

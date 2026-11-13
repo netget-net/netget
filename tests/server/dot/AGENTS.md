@@ -21,6 +21,7 @@ clients accept it through `e2e_test.rs`'s `NoCertificateVerification`, and `kdig
 | `e2e_test.rs` | rustls + hickory-proto, in process | three queries (a new connection each), id and question echoed, each name its own address |
 | `bounds_test.rs` | rustls + hickory-proto, Python script handler | every bound and every answer outcome; see below |
 | `connection_bounds_test.rs` | rustls | the 256-connection cap from both sides, and a body that never finishes closed at `MESSAGE_READ_TIMEOUT` |
+| `padding_test.rs` | rustls + hickory-proto; **kdig** `+tls` and **dig** `+tls +padding` | EDNS(0) Padding: a padded query's answer and SERVFAIL come back as 468-octet multiples, a 65 526-octet answer goes out unpadded, an unpadded query gets no pad; kdig (which pads over TLS by default) and dig read padded replies, `kdig +nopadding` an unpadded one |
 | `llm_failure_test.rs` | rustls, mock model with no rule for the query | SERVFAIL, id and question echoed, no answers |
 
 **The maturity evidence is `real_client_test.rs`.** Both tests **fail** when their binary is
