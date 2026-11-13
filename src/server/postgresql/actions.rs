@@ -49,6 +49,27 @@ impl Protocol for PostgresqlProtocol {
                     example: json!(false),
                     default: None,
                 },
+                crate::llm::actions::ParameterDefinition {
+                    name: "first_byte_timeout_secs".to_string(),
+                    type_hint: "number".to_string(),
+                    description: "Seconds a connected peer may send nothing at all (not even an \
+                                  SSLRequest or StartupMessage) before the server closes it."
+                        .to_string(),
+                    required: false,
+                    example: json!(60),
+                    default: Some(json!(super::FIRST_BYTE_READ_TIMEOUT.as_secs())),
+                },
+                crate::llm::actions::ParameterDefinition {
+                    name: "idle_timeout_secs".to_string(),
+                    type_hint: "number".to_string(),
+                    description: "Seconds a session may go without a statement before the server \
+                                  closes it. A statement waiting on the model or a human never \
+                                  counts as idle."
+                        .to_string(),
+                    required: false,
+                    example: json!(600),
+                    default: Some(json!(super::IDLE_SESSION_TIMEOUT.as_secs())),
+                },
             ]
     }
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
@@ -80,32 +101,50 @@ impl Protocol for PostgresqlProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            // Beta: exercised against two independent clients that share no code with each
-            // other or with pgwire — tokio-postgres (Rust) and psql/libpq (C). Not Stable:
-            // Stable additionally wants spec compliance and scripting support reviewed, which
-            // has not been done here.
+            // Stable, 13 November 2026, against the six conditions in the root AGENTS.md; the
+            // table is at the foot of src/server/postgresql/AGENTS.md. The rating covers the
+            // surface implemented: no authentication or TLS; the simple and extended query
+            // protocols; parameters and results of the types listed there.
             .state(DevelopmentState::Beta)
             .well_known_port(5432)
-            .implementation("pgwire v0.35 protocol library")
-            .llm_control("Query responses (columns, rows, types)")
+            .implementation(
+                "pgwire v0.35 (NetGet's netget-pgwire fork) behind NetGet's frontend-size \
+                 screen, which reads the peer's framing on a loopback relay in front of it",
+            )
+            .llm_control(
+                "Every statement: its rows (columns, types, values), command tag or error, \
+                 given the statement's bound parameters and, for a prepared statement, the \
+                 columns it was already described with",
+            )
             .e2e_testing(
-                "Two independent clients. tokio-postgres (tests/server/postgresql/test.rs, \
-                 extended_query_test.rs, llm_failure_test.rs): simple query, and \
-                 Parse/Bind/Describe/Execute with binary result columns decoded into real Rust \
-                 types. psql 14 / libpq (real_client_test.rs, hard-fails when the binary is \
-                 absent): the sslmode=prefer SSLRequest negotiation tokio-postgres+NoTls never \
-                 sends, the startup handshake, a four-column three-row SELECT asserted on the \
-                 exact text psql rendered (t/f booleans, a real NULL distinguished from an \
-                 empty string), a CommandComplete tag, and an ErrorResponse whose SQLSTATE psql \
-                 prints under VERBOSITY verbose. \
-                 NOT proven: psql 14 sends every statement as a simple Query (no \\bind), so the \
-                 extended protocol and binary formats rest on tokio-postgres alone; no client \
-                 here exercises authentication or TLS (neither is implemented), bound parameter \
-                 values, COPY, LISTEN/NOTIFY, cursors, or multi-statement simple queries. PCAP ORACLE: psql's two sessions and tokio-postgres's prepared-statement session run through a recording relay and tshark's pgsql dissector reads every stream (SSLRequest refusal, startup, rows, command tag, ErrorResponse, Parse/Bind/Describe/Execute with a binary DataRow). FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs drives the frontend decoder of the netget-pgwire fork.",
+                "Two independent clients on each query protocol, none sharing code with \
+                 pgwire, none #[ignore]d, the third-party ones failing rather than skipping \
+                 when absent. SIMPLE: psql 14 / libpq (real_client_test.rs: the sslmode=prefer \
+                 SSLRequest, startup, a four-column three-row SELECT asserted on the text psql \
+                 rendered, a command tag, an ErrorResponse's SQLSTATE) and tokio-postgres \
+                 simple_query (test.rs). EXTENDED: psycopg 3 over libpq \
+                 (psycopg_client_test.rs: int, text and NULL parameters; binary results for \
+                 int4, text, bool, float8, date and timestamp; text results; a parameterised \
+                 write's tag; an error's SQLSTATE; a named prepared statement executed twice) \
+                 and tokio-postgres (extended_query_test.rs, parameters_test.rs: untyped and \
+                 typed parameters, an Execute held to its Describe, unencodable cells failing \
+                 closed). tokio-postgres alone was not enough on the extended path: it decodes \
+                 binary cells with postgres-types, which pgwire encodes them with. PCAP ORACLE: \
+                 psql's sessions, tokio-postgres's prepared statement and psycopg's whole \
+                 session cross a recording relay and tshark's pgsql dissector reads them. \
+                 FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs (the fork's frontend decoder, \
+                 NetGet's frontend screen and placeholder scanner; nested-comment and \
+                 parenthesis bombs). BOUNDS: tests/server/postgresql/bounds_test.rs drives \
+                 every declared bound from the wire on both sides. NOT COVERED: \
+                 authentication and TLS (not implemented), COPY, LISTEN/NOTIFY, transactions \
+                 as state, composite types, multi-statement simple queries (one answer).",
             )
             .notes(
-                "No authentication, no TLS; simple and extended query protocols, text format only",
+                "No authentication, no TLS. Simple and extended query protocols; bound \
+                 parameters reach the model, results honour the client's text or binary \
+                 format. A frontend message is bounded at 1 MiB, refused FATAL 08P01 past it.",
             )
+            .max_inbound_bytes(crate::server::postgresql::guard::MAX_FRONTEND_MESSAGE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(
                 crate::protocol::metadata::SESSION_HISTORY_ENTRIES,
             ))
@@ -219,6 +258,21 @@ impl Server for PostgresqlProtocol {
                 ));
             }
 
+            // Both read deadlines are the operator's to choose: who is on the other end is the
+            // only thing that decides them.
+            let secs = |name: &str| -> anyhow::Result<Option<u64>> {
+                Ok(ctx
+                    .startup_params
+                    .as_ref()
+                    .map(|p| p.get_optional_u64(name))
+                    .transpose()?
+                    .flatten())
+            };
+            let deadlines = super::PgDeadlines::from_secs(
+                secs("first_byte_timeout_secs")?,
+                secs("idle_timeout_secs")?,
+            );
+
             PostgresqlServer::spawn_with_llm_actions(
                 ctx.legacy_listen_addr(),
                 ctx.llm_client,
@@ -226,6 +280,7 @@ impl Server for PostgresqlProtocol {
                 ctx.status_tx,
                 send_first,
                 ctx.server_id,
+                deadlines,
             )
             .await
         })
@@ -596,6 +651,38 @@ pub static POSTGRESQL_QUERY_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             type_hint: "string".to_string(),
             description: "Which response shape the statement needs, from its first keyword. \
                           Absent when the server cannot tell."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "parameters".to_string(),
+            type_hint: "array".to_string(),
+            description: "The values bound to the statement's placeholders: parameters[0] is \
+                          $1, parameters[1] is $2, and so on (null is SQL NULL). Present only \
+                          when the statement has placeholders."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "parameter_types".to_string(),
+            type_hint: "array".to_string(),
+            description: "The PostgreSQL type of each placeholder, in the same order".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "describe_only".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "True when the client is preparing the statement and has not bound \
+                          its parameters yet: it asks only which columns the statement returns. \
+                          Answer with the columns (the rows are not sent)."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "columns".to_string(),
+            type_hint: "array".to_string(),
+            description: "The columns this statement was already described to the client \
+                          with. Answer with exactly these columns, in this order."
                 .to_string(),
             required: false,
         },

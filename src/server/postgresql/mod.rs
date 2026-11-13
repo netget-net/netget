@@ -1,5 +1,6 @@
 //! PostgreSQL server implementation using pgwire
 pub mod actions;
+pub mod guard;
 
 use crate::llm::action_helper::call_llm;
 use crate::llm::actions::protocol_trait::ActionResult;
@@ -65,9 +66,12 @@ impl PostgresqlServer {
         status_tx: mpsc::UnboundedSender<String>,
         _send_first: bool,
         server_id: crate::state::ServerId,
+        deadlines: PgDeadlines,
     ) -> Result<SocketAddr> {
         let listener = TcpListener::bind(listen_addr).await?;
         let actual_addr = listener.local_addr()?;
+        // pgwire is served from a loopback pair behind the frontend-size guard; see `guard.rs`.
+        let backend = Arc::new(guard::Backend::bind().await?);
 
         Log::to(&status_tx).info(format!("PostgreSQL server listening on {}", actual_addr));
 
@@ -109,6 +113,7 @@ impl PostgresqlServer {
                             server_id: server.server_id,
                             remote_addr: addr,
                             describe_cache: Arc::new(TokioMutex::new(Vec::new())),
+                            described: Arc::new(TokioMutex::new(Vec::new())),
                             activity: Arc::new(
                                 crate::server::accept_bounded::ConnectionActivity::new(),
                             ),
@@ -144,6 +149,7 @@ impl PostgresqlServer {
                         let conn_state_owner = server.app_state.clone();
                         let conn_server_id = server.server_id;
                         let conn_status_tx = status_tx.clone();
+                        let conn_backend = Arc::clone(&backend);
                         let conn_handle = tokio::spawn(async move {
                             // Held for the life of the session, so the cap counts live
                             // connections rather than accepts.
@@ -157,13 +163,29 @@ impl PostgresqlServer {
                             // still there for pgwire afterwards. That makes a real
                             // "connected and said nothing" bound possible with no proxy and no
                             // change to the crate's framing.
+                            //
+                            // Every return below closes the connection's row, so the dashboard
+                            // never keeps an Active peer for a socket that is gone.
+                            let close_row = move || {
+                                let owner = conn_state_owner.clone();
+                                async move {
+                                    if let Some(server_id) = conn_server_id {
+                                        owner
+                                            .close_connection_on_server(server_id, connection_id)
+                                            .await;
+                                    }
+                                }
+                            };
                             match tokio::time::timeout(
-                                FIRST_BYTE_READ_TIMEOUT,
+                                deadlines.first_byte,
                                 stream.peek(&mut [0u8; 1]),
                             )
                             .await
                             {
-                                Ok(Ok(0)) | Ok(Err(_)) => return,
+                                Ok(Ok(0)) | Ok(Err(_)) => {
+                                    close_row().await;
+                                    return;
+                                }
                                 Ok(Ok(_)) => {}
                                 Err(_) => {
                                     console_debug!(
@@ -171,11 +193,42 @@ impl PostgresqlServer {
                                         "PostgreSQL connection {} sent nothing for {}s; \
                                          closing before startup",
                                         connection_id,
-                                        FIRST_BYTE_READ_TIMEOUT.as_secs()
+                                        deadlines.first_byte.as_secs()
                                     );
+                                    close_row().await;
                                     return;
                                 }
                             }
+
+                            let (relay_end, pgwire_end) = match conn_backend.pair().await {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    Log::to(&conn_status_tx).error(format!(
+                                        "PostgreSQL connection {} could not be handed to the \
+                                         protocol engine: {}",
+                                        connection_id, e
+                                    ));
+                                    close_row().await;
+                                    return;
+                                }
+                            };
+                            let relay_status = conn_status_tx.clone();
+                            let mut relay = AbortOnDrop(tokio::spawn(async move {
+                                if let Some(refusal) = guard::relay(
+                                    stream,
+                                    relay_end,
+                                    guard::MAX_FRONTEND_MESSAGE_BYTES,
+                                )
+                                .await
+                                {
+                                    Log::to(&relay_status).warn(format!(
+                                        "PostgreSQL connection {} closed \
+                                         decision=refused_oversize_message: {}",
+                                        connection_id,
+                                        refusal.message()
+                                    ));
+                                }
+                            }));
 
                             // `process_socket` runs in a task of its own so a **panic** inside
                             // pgwire is contained rather than lost.
@@ -200,7 +253,7 @@ impl PostgresqlServer {
                             // detaches its task rather than ending it. Without the guard the
                             // pgwire session outlived the stop, still holding the peer's socket.
                             let mut inner = AbortOnDrop(tokio::spawn(async move {
-                                process_socket(stream, None, handler_factory).await
+                                process_socket(pgwire_end, None, handler_factory).await
                             }));
 
                             // Idle bound. pgwire's loop is not ours, so this watches the
@@ -218,14 +271,14 @@ impl PostgresqlServer {
                             let _watchdog = AbortOnDrop(tokio::spawn(async move {
                                 crate::server::accept_bounded::watch_idle(
                                     watchdog_activity,
-                                    IDLE_SESSION_TIMEOUT,
+                                    deadlines.idle,
                                 )
                                 .await;
                                 console_debug!(
                                     watchdog_status,
                                     "PostgreSQL connection {} idle for {}s; closing",
                                     connection_id,
-                                    IDLE_SESSION_TIMEOUT.as_secs()
+                                    deadlines.idle.as_secs()
                                 );
                                 abort_handle.abort();
                             }));
@@ -262,13 +315,17 @@ impl PostgresqlServer {
                                     );
                                 }
                             }
+                            // pgwire has ended, so its end of the pair is closed and the relay
+                            // finishes: it writes a refusal if one ended the session, then closes
+                            // the peer's socket.
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                &mut relay.0,
+                            )
+                            .await;
                             // Mark the connection closed so it does not stay Active forever
                             // in the server's connection map.
-                            if let Some(server_id) = conn_server_id {
-                                conn_state_owner
-                                    .close_connection_on_server(server_id, connection_id)
-                                    .await;
-                            }
+                            close_row().await;
                         });
 
                         // Register the per-connection task too, not just the accept loop:
@@ -315,6 +372,8 @@ struct PostgresqlHandlerFactory {
     /// Shared between the simple and extended handlers so a Describe resolved by one is
     /// visible to the Execute served by the other.
     describe_cache: DescribeCache,
+    /// The columns each described statement told the client it returns. See [`Binding`].
+    described: DescribedColumns,
     /// Read by the idle watchdog in the accept loop. pgwire owns the socket, so this is the
     /// only view NetGet has of whether the connection is doing anything.
     activity: Arc<crate::server::accept_bounded::ConnectionActivity>,
@@ -336,6 +395,7 @@ impl PostgresqlHandlerFactory {
                 self.status_tx.clone(),
             )),
             describe_cache: Arc::clone(&self.describe_cache),
+            described: Arc::clone(&self.described),
         }
     }
 }
@@ -368,6 +428,8 @@ pub struct PostgresqlHandler {
     protocol: Arc<PostgresqlProtocol>,
     /// Describe -> Execute correlation for the extended query protocol
     describe_cache: DescribeCache,
+    /// See [`PostgresqlHandlerFactory::described`].
+    described: DescribedColumns,
     /// See [`PostgresqlHandlerFactory::activity`].
     activity: Arc<crate::server::accept_bounded::ConnectionActivity>,
 }
@@ -426,6 +488,27 @@ const FIRST_BYTE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 /// [`ConnectionActivity`] counts work in flight and a busy connection is never idle.
 const IDLE_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// The read deadlines one server applies: the defaults above, or the server's
+/// `first_byte_timeout_secs` / `idle_timeout_secs` startup parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct PgDeadlines {
+    pub first_byte: std::time::Duration,
+    pub idle: std::time::Duration,
+}
+
+impl PgDeadlines {
+    pub fn from_secs(first_byte: Option<u64>, idle: Option<u64>) -> Self {
+        Self {
+            first_byte: first_byte
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(FIRST_BYTE_READ_TIMEOUT),
+            idle: idle
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(IDLE_SESSION_TIMEOUT),
+        }
+    }
+}
+
 /// Concurrent connections this server admits.
 const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS;
 
@@ -444,8 +527,36 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 const CONNECTION_CAP_REFUSAL: &[u8] =
     b"E\x00\x00\x000SFATAL\x00VFATAL\x00C53300\x00Mtoo many connections\x00\x00";
 
-/// A connection-scoped cache shared by the simple and extended handlers.
+/// A connection-scoped cache shared by the simple and extended handlers, keyed by the statement
+/// text and its bound parameters (see [`cache_key`]).
 type DescribeCache = Arc<TokioMutex<Vec<(String, PgOutcome)>>>;
+
+/// Per statement text, the columns its Describe told the client — kept, bounded like the cache,
+/// so every later Execute of the statement answers in that shape.
+type DescribedColumns = Arc<TokioMutex<Vec<(String, Arc<Vec<PgColumn>>)>>>;
+
+/// What one resolution of a statement knows about the client's side of it.
+///
+/// The extended protocol separates the schema from the data: a client may Describe a prepared
+/// statement before binding any parameter (tokio-postgres always does), and then Execute it any
+/// number of times with different values. So a statement is resolved with whatever is known at
+/// that moment, and what has already been promised constrains what comes after.
+#[derive(Debug, Clone, Default)]
+struct Binding {
+    /// The parameter values the client bound, or `None` while it is describing the statement
+    /// before any Bind. Empty for a statement with no parameters.
+    parameters: Option<Vec<serde_json::Value>>,
+    /// The statement's parameter types, one per `$n`.
+    parameter_types: Vec<Type>,
+    /// The columns already described to the client for this statement. The rows must come in
+    /// exactly this shape, or the client decodes them against the wrong description.
+    described: Option<Arc<Vec<PgColumn>>>,
+}
+
+/// The describe-cache key: the statement text and the parameter values it was resolved with.
+fn cache_key(sql: &str, parameters: &[serde_json::Value]) -> String {
+    format!("{sql}\u{0}{}", serde_json::Value::from(parameters.to_vec()))
+}
 
 impl PostgresqlHandler {
     /// Refresh the dashboard's per-connection counters and `last_activity`.
@@ -481,7 +592,7 @@ impl PostgresqlHandler {
 
     /// Run one statement through the handler pipeline and translate the resulting action into
     /// wire-level output. Returns `Err` for `postgresql_error_response` and for LLM failures.
-    async fn resolve(&self, sql: &str) -> PgWireResult<PgOutcome> {
+    async fn resolve(&self, sql: &str, binding: &Binding) -> PgWireResult<PgOutcome> {
         // Everything from here to the end of this call is the peer *waiting on us* — the LLM
         // round-trip, and a `manual` rule parking the statement for a human. The idle watchdog
         // must not count any of it, so the connection is marked busy for the whole of it and
@@ -495,6 +606,29 @@ impl PostgresqlHandler {
         let mut event_data = serde_json::json!({ "query": sql });
         if let Some(hint) = actions::answer_with_for_query(sql) {
             event_data["answer_with"] = serde_json::json!(hint);
+        }
+        // `$1`, `$2`, … are the statement's parameters. Their values are what the statement is
+        // about, so the model is given them; until a Bind has supplied them it is told the
+        // client is only asking for the result's columns.
+        if !binding.parameter_types.is_empty() {
+            event_data["parameter_types"] = serde_json::json!(binding
+                .parameter_types
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect::<Vec<_>>());
+            match &binding.parameters {
+                Some(values) => event_data["parameters"] = serde_json::json!(values),
+                None => {
+                    event_data["parameters"] = serde_json::Value::Null;
+                    event_data["describe_only"] = serde_json::json!(true);
+                }
+            }
+        }
+        if let Some(columns) = &binding.described {
+            event_data["columns"] = serde_json::json!(columns
+                .iter()
+                .map(|c| serde_json::json!({"name": c.name, "type": c.datatype.name()}))
+                .collect::<Vec<_>>());
         }
         let event = Event::new(&POSTGRESQL_QUERY_EVENT, event_data);
 
@@ -608,9 +742,19 @@ impl PostgresqlHandler {
                                 .sum::<u64>();
                         self.record_stats(None, Some(sent_bytes), None, Some(1))
                             .await;
-                        return build_row_outcome(&columns, &rows);
+                        return build_row_outcome(&columns, &rows, binding.described.as_deref())
+                            .map_err(|refusal| self.unanswerable(refusal));
                     }
                     "postgresql_ok" => {
+                        // A command tag carries no rows. Where the statement was described as
+                        // returning some, a tag would read as "zero rows" to a client that was
+                        // promised columns — a claim about the data nothing made.
+                        if binding.described.as_ref().is_some_and(|c| !c.is_empty()) {
+                            return Err(self.unanswerable(Unanswerable::ShapeMismatch(
+                                "a command tag for a statement described as returning rows"
+                                    .to_string(),
+                            )));
+                        }
                         let tag = data.get("tag").and_then(|v| v.as_str()).unwrap_or("OK");
                         self.record_stats(None, Some(tag.len() as u64), None, Some(1))
                             .await;
@@ -702,48 +846,119 @@ impl PostgresqlHandler {
         ))))
     }
 
-    /// Resolve `sql`, storing the outcome so a following Execute reuses it (one LLM call per
-    /// extended-protocol statement instead of one per Describe *and* one per Execute).
+    /// Log why a model's answer cannot be put on the wire and return the fail-closed error.
+    ///
+    /// The peer gets the same `XX000` category every other unanswerable statement gets; the log
+    /// gets the reason, tagged so a column-count mismatch or an unencodable value is told apart
+    /// from a model that said nothing.
+    fn unanswerable(&self, why: Unanswerable) -> PgWireError {
+        let (decision, detail) = match &why {
+            Unanswerable::ShapeMismatch(d) => ("fail_closed_column_mismatch", d.as_str()),
+            Unanswerable::Value(d) => ("fail_closed_unencodable_value", d.as_str()),
+        };
+        Log::to(&self.status_tx).error(format!(
+            "PostgreSQL connection {}: the answer cannot be sent (decision={}): {}",
+            self.connection_id, decision, detail
+        ));
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_string(),
+            "XX000".to_string(),
+            crate::utils::WireFailure::Unavailable
+                .prefixed_text()
+                .to_string(),
+        )))
+    }
+
+    /// The columns an earlier Describe promised for `sql`, if any.
+    async fn described_columns(&self, sql: &str) -> Option<Arc<Vec<PgColumn>>> {
+        self.described
+            .lock()
+            .await
+            .iter()
+            .find(|(key, _)| key == sql)
+            .map(|(_, columns)| Arc::clone(columns))
+    }
+
+    /// Remember the columns a Describe told the client `sql` returns.
+    async fn remember_described(&self, sql: &str, columns: Arc<Vec<PgColumn>>) {
+        let mut described = self.described.lock().await;
+        described.retain(|(key, _)| key != sql);
+        if described.len() >= MAX_PENDING_DESCRIBES {
+            described.remove(0);
+        }
+        described.push((sql.to_string(), columns));
+    }
+
+    /// Resolve `sql` for a Describe, returning its columns and storing the outcome so a following
+    /// Execute with the same parameters reuses it (one model call per extended-protocol
+    /// statement, not one per Describe *and* one per Execute).
+    ///
+    /// A statement described before its parameters are bound (`binding.parameters` is `None`) is
+    /// resolved for its columns only: the outcome is not cached, because the rows it would carry
+    /// were answered without the values the statement is about.
     async fn resolve_for_describe(
         &self,
         sql: &str,
+        binding: Binding,
         format_of: impl Fn(usize, usize) -> FieldFormat,
     ) -> PgWireResult<Vec<FieldInfo>> {
-        let outcome = self.resolve(sql).await?;
-        let fields = match &outcome {
-            PgOutcome::Rows { columns, .. } => {
+        let outcome = self.resolve(sql, &binding).await?;
+        let (fields, columns) = match &outcome {
+            PgOutcome::Rows { columns, .. } => (
                 fields_for(columns, |idx| format_of(idx, columns.len()))
                     .as_ref()
-                    .clone()
-            }
-            _ => Vec::new(),
+                    .clone(),
+                Arc::clone(columns),
+            ),
+            _ => (Vec::new(), Arc::new(Vec::new())),
         };
+        self.remember_described(sql, columns).await;
 
-        let mut cache = self.describe_cache.lock().await;
-        cache.retain(|(key, _)| key != sql);
-        if cache.len() >= MAX_PENDING_DESCRIBES {
-            cache.remove(0);
+        if let Some(parameters) = &binding.parameters {
+            let key = cache_key(sql, parameters);
+            let mut cache = self.describe_cache.lock().await;
+            cache.retain(|(k, _)| *k != key);
+            if cache.len() >= MAX_PENDING_DESCRIBES {
+                cache.remove(0);
+            }
+            cache.push((key, outcome));
         }
-        cache.push((sql.to_string(), outcome));
 
         Ok(fields)
     }
 
-    /// Take a previously described outcome, or resolve fresh if Execute arrived without one.
-    async fn take_or_resolve(&self, sql: &str) -> PgWireResult<PgOutcome> {
+    /// Take a previously described outcome for these parameters, or resolve fresh — in the shape
+    /// an earlier Describe promised, when there was one.
+    async fn take_or_resolve(&self, sql: &str, binding: Binding) -> PgWireResult<PgOutcome> {
+        let key = cache_key(sql, binding.parameters.as_deref().unwrap_or(&[]));
         let cached = {
             let mut cache = self.describe_cache.lock().await;
             cache
                 .iter()
-                .position(|(key, _)| key == sql)
+                .position(|(k, _)| *k == key)
                 .map(|idx| cache.remove(idx).1)
         };
 
         match cached {
             Some(outcome) => Ok(outcome),
-            None => self.resolve(sql).await,
+            None => {
+                let binding = Binding {
+                    described: self.described_columns(sql).await,
+                    ..binding
+                };
+                self.resolve(sql, &binding).await
+            }
         }
     }
+}
+
+/// Why a model's answer cannot be encoded for the client.
+#[derive(Debug)]
+enum Unanswerable {
+    /// The answer's shape is not the one the client was promised.
+    ShapeMismatch(String),
+    /// A cell's value cannot be represented in its column's type.
+    Value(String),
 }
 
 /// Error returned when the LLM asked to close the connection.
@@ -767,6 +982,7 @@ fn pg_type_for(type_name: &str) -> Type {
         "date" => Type::DATE,
         "time" => Type::TIME,
         "timestamp" => Type::TIMESTAMP,
+        "text" => Type::TEXT,
         _ => Type::VARCHAR,
     }
 }
@@ -774,12 +990,20 @@ fn pg_type_for(type_name: &str) -> Type {
 /// Normalise LLM-supplied columns and rows into a resolved outcome.
 ///
 /// Nothing is encoded here: the wire format of each cell depends on what the client asked for
-/// in its Bind message, which this function cannot see. See `PgOutcome::Rows`.
+/// in its Bind message, which this function cannot see. See `PgOutcome::Rows`. But every value is
+/// checked against its column's type here, before anything is sent, so a value that cannot be
+/// represented fails the statement instead of reaching the client as something it is not —
+/// `"abc"` in an `int4` column used to be sent as `0`, `"true"` in a `bool` one as `false`, and
+/// `3000000000` in an `int4` one wrapped to a negative number.
+///
+/// `described` is the shape a Describe already promised; the answer must have that many columns,
+/// and its values are checked against those types, since those are what the client decodes by.
 fn build_row_outcome(
     columns: &[serde_json::Value],
     rows: &[serde_json::Value],
-) -> PgWireResult<PgOutcome> {
-    let columns: Vec<PgColumn> = columns
+    described: Option<&Vec<PgColumn>>,
+) -> Result<PgOutcome, Unanswerable> {
+    let model_columns: Vec<PgColumn> = columns
         .iter()
         .enumerate()
         .map(|(idx, col)| {
@@ -795,6 +1019,17 @@ fn build_row_outcome(
             }
         })
         .collect();
+    let columns = match described {
+        Some(promised) if promised.len() != model_columns.len() => {
+            return Err(Unanswerable::ShapeMismatch(format!(
+                "{} column(s) answered for a statement described with {}",
+                model_columns.len(),
+                promised.len()
+            )));
+        }
+        Some(promised) => promised.clone(),
+        None => model_columns,
+    };
 
     let mut values = Vec::with_capacity(rows.len());
     for row_data in rows {
@@ -814,22 +1049,109 @@ fn build_row_outcome(
                 columns.len()
             );
         }
-        values.push(
-            (0..columns.len())
-                .map(|idx| {
-                    row_values
-                        .get(idx)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                })
-                .collect(),
-        );
+        let mut row = Vec::with_capacity(columns.len());
+        for (idx, column) in columns.iter().enumerate() {
+            let value = row_values.get(idx).unwrap_or(&serde_json::Value::Null);
+            row.push(coerce_cell(value, &column.datatype).map_err(|why| {
+                Unanswerable::Value(format!("column {:?}: {}", column.name, why))
+            })?);
+        }
+        values.push(row);
     }
 
     Ok(PgOutcome::Rows {
         columns: Arc::new(columns),
         values,
     })
+}
+
+/// A cell value as the model gave it, checked against `ty` and put in the one form
+/// [`encode_value`] reads: an integer for the integer types, a number (or `"NaN"`,
+/// `"Infinity"`, `"-Infinity"`) for the float types, a bool for `bool`, a string chrono parses
+/// for the date and time types. Anything else is text and is sent as the model wrote it.
+fn coerce_cell(value: &serde_json::Value, ty: &Type) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+    if value.is_null() {
+        return Ok(Value::Null);
+    }
+    let text = || match value {
+        Value::String(s) => Some(s.trim().to_string()),
+        _ => None,
+    };
+    match *ty {
+        Type::INT2 | Type::INT4 | Type::INT8 => {
+            let n = match value {
+                Value::Number(n) => n
+                    .as_i64()
+                    .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
+                Value::String(_) => text().and_then(|s| s.parse::<i64>().ok()),
+                _ => None,
+            }
+            .ok_or_else(|| format!("{value} is not an integer"))?;
+            let (min, max) = match *ty {
+                Type::INT2 => (i16::MIN as i64, i16::MAX as i64),
+                Type::INT4 => (i32::MIN as i64, i32::MAX as i64),
+                _ => (i64::MIN, i64::MAX),
+            };
+            if n < min || n > max {
+                return Err(format!("{n} is out of range for {}", ty.name()));
+            }
+            Ok(serde_json::json!(n))
+        }
+        Type::FLOAT4 | Type::FLOAT8 => match value {
+            Value::Number(n) => Ok(serde_json::json!(n.as_f64().unwrap_or(0.0))),
+            Value::String(_) => {
+                let s = text().unwrap_or_default();
+                match s.parse::<f64>() {
+                    Ok(f) if f.is_finite() => Ok(serde_json::json!(f)),
+                    Ok(_) => Ok(Value::String(s)),
+                    Err(_) => Err(format!("{value} is not a number")),
+                }
+            }
+            _ => Err(format!("{value} is not a number")),
+        },
+        Type::BOOL => match value {
+            Value::Bool(b) => Ok(Value::Bool(*b)),
+            Value::Number(n) if n.as_i64() == Some(0) || n.as_i64() == Some(1) => {
+                Ok(Value::Bool(n.as_i64() == Some(1)))
+            }
+            Value::String(_) => match text().unwrap_or_default().to_ascii_lowercase().as_str() {
+                "t" | "true" | "yes" | "on" | "1" => Ok(Value::Bool(true)),
+                "f" | "false" | "no" | "off" | "0" => Ok(Value::Bool(false)),
+                _ => Err(format!("{value} is not a boolean")),
+            },
+            _ => Err(format!("{value} is not a boolean")),
+        },
+        Type::DATE => text()
+            .filter(|s| parse_date(s).is_some())
+            .map(Value::String)
+            .ok_or_else(|| format!("{value} is not a date (YYYY-MM-DD)")),
+        Type::TIME => text()
+            .filter(|s| parse_time(s).is_some())
+            .map(Value::String)
+            .ok_or_else(|| format!("{value} is not a time (HH:MM:SS)")),
+        Type::TIMESTAMP => text()
+            .filter(|s| parse_timestamp(s).is_some())
+            .map(Value::String)
+            .ok_or_else(|| format!("{value} is not a timestamp (YYYY-MM-DD HH:MM:SS)")),
+        _ => Ok(value.clone()),
+    }
+}
+
+fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+fn parse_time(s: &str) -> Option<chrono::NaiveTime> {
+    chrono::NaiveTime::parse_from_str(s, "%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveTime::parse_from_str(s, "%H:%M"))
+        .ok()
+}
+
+fn parse_timestamp(s: &str) -> Option<chrono::NaiveDateTime> {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f"))
+        .ok()
 }
 
 /// The result format the client asked for, for column `idx`.
@@ -894,78 +1216,218 @@ fn encode_rows(
         .collect()
 }
 
-/// Encode one cell.
+/// Encode one cell, already checked by [`coerce_cell`].
 ///
 /// `format` is not decoration: in the extended protocol tokio-postgres (and libpq, and every
 /// other driver) binds with **binary** result formats by default and then decodes each cell by
-/// the type in the RowDescription. This used to hardcode `FieldFormat::Text` for every cell
-/// while the client had asked for binary, so `SELECT` through `client.query(...)` came back as
-/// "error deserializing column 0" for every non-text column — while `simple_query`, which has
-/// no format negotiation and is always text, worked perfectly. Every test in this directory
-/// used `simple_query`, so the whole extended path went unmeasured; the tests' own CLAUDE.md
-/// recorded the symptom as an unexplained "Extended Query Protocol Timeout … UNRESOLVED".
+/// the type in the RowDescription — so a date has to be a chrono date here, not its text, or a
+/// binary `date` column carries ten ASCII bytes where the client reads a 4-byte day count.
 fn encode_value(
     encoder: &mut DataRowEncoder,
     field_type: &Type,
     format: FieldFormat,
     value: &serde_json::Value,
 ) -> PgWireResult<()> {
+    let options = FormatOptions::default();
     if value.is_null() {
         return encoder.encode_field_with_type_and_format(
             &None::<&str>,
             field_type,
             format,
-            &FormatOptions::default(),
+            &options,
         );
     }
-
+    let text = value.as_str().unwrap_or_default();
+    let float = || {
+        value
+            .as_f64()
+            .or_else(|| text.parse::<f64>().ok())
+            .unwrap_or(f64::NAN)
+    };
     match *field_type {
         Type::INT2 => encoder.encode_field_with_type_and_format(
-            &(value.as_i64().unwrap_or(0) as i16),
+            &(value.as_i64().unwrap_or_default() as i16),
             &Type::INT2,
             format,
-            &FormatOptions::default(),
+            &options,
         ),
         Type::INT4 => encoder.encode_field_with_type_and_format(
-            &(value.as_i64().unwrap_or(0) as i32),
+            &(value.as_i64().unwrap_or_default() as i32),
             &Type::INT4,
             format,
-            &FormatOptions::default(),
+            &options,
         ),
         Type::INT8 => encoder.encode_field_with_type_and_format(
-            &value.as_i64().unwrap_or(0),
+            &value.as_i64().unwrap_or_default(),
             &Type::INT8,
             format,
-            &FormatOptions::default(),
+            &options,
         ),
         Type::FLOAT4 => encoder.encode_field_with_type_and_format(
-            &(value.as_f64().unwrap_or(0.0) as f32),
+            &(float() as f32),
             &Type::FLOAT4,
             format,
-            &FormatOptions::default(),
+            &options,
         ),
-        Type::FLOAT8 => encoder.encode_field_with_type_and_format(
-            &value.as_f64().unwrap_or(0.0),
-            &Type::FLOAT8,
-            format,
-            &FormatOptions::default(),
-        ),
+        Type::FLOAT8 => {
+            encoder.encode_field_with_type_and_format(&float(), &Type::FLOAT8, format, &options)
+        }
         Type::BOOL => encoder.encode_field_with_type_and_format(
-            &value.as_bool().unwrap_or(false),
+            &value.as_bool().unwrap_or_default(),
             &Type::BOOL,
             format,
-            &FormatOptions::default(),
+            &options,
         ),
+        Type::DATE => match parse_date(text) {
+            Some(d) => encoder.encode_field_with_type_and_format(&d, &Type::DATE, format, &options),
+            None => encoder.encode_field_with_type_and_format(
+                &None::<&str>,
+                field_type,
+                format,
+                &options,
+            ),
+        },
+        Type::TIME => match parse_time(text) {
+            Some(t) => encoder.encode_field_with_type_and_format(&t, &Type::TIME, format, &options),
+            None => encoder.encode_field_with_type_and_format(
+                &None::<&str>,
+                field_type,
+                format,
+                &options,
+            ),
+        },
+        Type::TIMESTAMP => match parse_timestamp(text) {
+            Some(ts) => {
+                encoder.encode_field_with_type_and_format(&ts, &Type::TIMESTAMP, format, &options)
+            }
+            None => encoder.encode_field_with_type_and_format(
+                &None::<&str>,
+                field_type,
+                format,
+                &options,
+            ),
+        },
         _ => {
             let value_str = json_value_to_string(value);
             encoder.encode_field_with_type_and_format(
                 &value_str.as_str(),
                 field_type,
                 format,
-                &FormatOptions::default(),
+                &options,
             )
         }
     }
+}
+
+/// The values the client bound to `portal`'s parameters, as the model is given them.
+///
+/// Text-format values are strings, as PostgreSQL receives them. Binary-format values are decoded
+/// by their parameter type — integers, floats, bools and text — and a binary value of any other
+/// type is refused (`0A000`) rather than handed on as bytes, which nothing could read. A Bind
+/// whose counts do not match the statement is the protocol error PostgreSQL answers with
+/// `08P01`.
+fn bound_parameters(portal: &Portal<PgStatement>) -> PgWireResult<Vec<serde_json::Value>> {
+    use pgwire::api::portal::Format;
+    let refuse = |code: &str, message: String| {
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_string(),
+            code.to_string(),
+            message,
+        )))
+    };
+    let types = &portal.statement.statement.param_types;
+    if portal.parameters.len() != types.len() {
+        return Err(refuse(
+            "08P01",
+            format!(
+                "bind message supplies {} parameters, but prepared statement \"{}\" requires {}",
+                portal.parameters.len(),
+                portal.statement.id,
+                types.len()
+            ),
+        ));
+    }
+    let mut out = Vec::with_capacity(types.len());
+    for (idx, raw) in portal.parameters.iter().enumerate() {
+        let Some(bytes) = raw else {
+            out.push(serde_json::Value::Null);
+            continue;
+        };
+        let format = match &portal.parameter_format {
+            Format::Individual(codes) if idx >= codes.len() => {
+                return Err(refuse(
+                    "08P01",
+                    format!(
+                        "bind message has {} parameter formats but {} parameters",
+                        codes.len(),
+                        portal.parameters.len()
+                    ),
+                ));
+            }
+            other => other.format_for(idx),
+        };
+        let ty = &types[idx];
+        let as_text = |b: &[u8]| {
+            std::str::from_utf8(b)
+                .map(|s| serde_json::json!(s))
+                .map_err(|_| {
+                    refuse(
+                        "22021",
+                        format!(
+                            "invalid byte sequence for encoding \"UTF8\" in parameter ${}",
+                            idx + 1
+                        ),
+                    )
+                })
+        };
+        if format == FieldFormat::Text {
+            out.push(as_text(bytes)?);
+            continue;
+        }
+        let wrong_length = || {
+            refuse(
+                "22P03",
+                format!("incorrect binary data format in bind parameter {}", idx + 1),
+            )
+        };
+        let value = match *ty {
+            Type::INT2 => serde_json::json!(i16::from_be_bytes(
+                bytes.as_ref().try_into().map_err(|_| wrong_length())?
+            )),
+            Type::INT4 => serde_json::json!(i32::from_be_bytes(
+                bytes.as_ref().try_into().map_err(|_| wrong_length())?
+            )),
+            Type::INT8 => serde_json::json!(i64::from_be_bytes(
+                bytes.as_ref().try_into().map_err(|_| wrong_length())?
+            )),
+            Type::FLOAT4 => serde_json::json!(f32::from_be_bytes(
+                bytes.as_ref().try_into().map_err(|_| wrong_length())?
+            )),
+            Type::FLOAT8 => serde_json::json!(f64::from_be_bytes(
+                bytes.as_ref().try_into().map_err(|_| wrong_length())?
+            )),
+            Type::BOOL => match bytes.as_ref() {
+                [b] => serde_json::json!(*b != 0),
+                _ => return Err(wrong_length()),
+            },
+            Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::UNKNOWN => {
+                as_text(bytes)?
+            }
+            _ => {
+                return Err(refuse(
+                    "0A000",
+                    format!(
+                        "binary-format parameter ${} of type {} is not supported; bind it in text \
+                         format",
+                        idx + 1,
+                        ty.name()
+                    ),
+                ))
+            }
+        };
+        out.push(value);
+    }
+    Ok(out)
 }
 
 #[async_trait::async_trait]
@@ -974,7 +1436,7 @@ impl SimpleQueryHandler for PostgresqlHandler {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        match self.resolve(query).await? {
+        match self.resolve(query, &Binding::default()).await? {
             // The simple query protocol has no format negotiation: every cell is text.
             PgOutcome::Rows { columns, values } => {
                 let fields = fields_for(&columns, |_| FieldFormat::Text);
@@ -992,7 +1454,7 @@ impl SimpleQueryHandler for PostgresqlHandler {
 
 #[async_trait::async_trait]
 impl ExtendedQueryHandler for PostgresqlHandler {
-    type Statement = String;
+    type Statement = PgStatement;
     type QueryParser = PostgresqlQueryParser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -1008,9 +1470,15 @@ impl ExtendedQueryHandler for PostgresqlHandler {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let sql = &portal.statement.statement;
+        let statement = &portal.statement.statement;
+        let binding = Binding {
+            parameters: Some(bound_parameters(portal)?),
+            parameter_types: statement.param_types.clone(),
+            described: None,
+        };
 
-        match self.take_or_resolve(sql).await? {
+        // `max_rows` is pgwire's: it sends at most that many DataRows and then PortalSuspended.
+        match self.take_or_resolve(&statement.sql, binding).await? {
             // Encode each cell in the format this portal's Bind asked for - binary, for every
             // mainstream driver, on every column whose type has a binary representation.
             PgOutcome::Rows { columns, values } => {
@@ -1036,17 +1504,24 @@ impl ExtendedQueryHandler for PostgresqlHandler {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        // The schema is whatever the LLM returns, so it has to be resolved here rather than
-        // guessed. Previously this returned an unconditional empty field list, which told
-        // every extended-protocol client that the statement produced zero columns and then
-        // sent it data rows anyway.
-        // Describing a *statement* happens before any Bind, so no result format has been
-        // chosen yet. PostgreSQL sends format code 0 (text) in that RowDescription; the
-        // portal's own Describe, below, carries the real one.
+        // The schema is whatever the model returns, so it has to be resolved here rather than
+        // guessed. Describing a *statement* happens before any Bind, so no result format has
+        // been chosen yet (PostgreSQL sends format 0, text, in that RowDescription; the portal's
+        // own Describe carries the real one) — and, for a statement with parameters, no value
+        // has been bound either. The ParameterDescription lists one type per `$n`.
+        let statement = &stmt.statement;
+        let binding = Binding {
+            parameters: statement.param_types.is_empty().then(Vec::new),
+            parameter_types: statement.param_types.clone(),
+            described: None,
+        };
         let fields = self
-            .resolve_for_describe(&stmt.statement, |_, _| FieldFormat::Text)
+            .resolve_for_describe(&statement.sql, binding, |_, _| FieldFormat::Text)
             .await?;
-        Ok(DescribeStatementResponse::new(vec![], fields))
+        Ok(DescribeStatementResponse::new(
+            statement.param_types.clone(),
+            fields,
+        ))
     }
 
     async fn do_describe_portal<C>(
@@ -1057,8 +1532,14 @@ impl ExtendedQueryHandler for PostgresqlHandler {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
+        let statement = &portal.statement.statement;
+        let binding = Binding {
+            parameters: Some(bound_parameters(portal)?),
+            parameter_types: statement.param_types.clone(),
+            described: self.described_columns(&statement.sql).await,
+        };
         let fields = self
-            .resolve_for_describe(&portal.statement.statement, |idx, columns| {
+            .resolve_for_describe(&statement.sql, binding, |idx, columns| {
                 format_for(&portal.result_column_format, idx, columns)
             })
             .await?;
@@ -1066,24 +1547,134 @@ impl ExtendedQueryHandler for PostgresqlHandler {
     }
 }
 
-/// Query parser for PostgreSQL
+/// A parsed statement: its text, and one type per parameter (`$1` … `$n`).
+#[derive(Debug, Clone)]
+pub struct PgStatement {
+    pub sql: String,
+    pub param_types: Vec<Type>,
+}
+
+/// Query parser for PostgreSQL: keeps the text, and works out the statement's parameters.
 pub struct PostgresqlQueryParser;
 
 #[async_trait::async_trait]
 impl pgwire::api::stmt::QueryParser for PostgresqlQueryParser {
-    type Statement = String;
+    type Statement = PgStatement;
 
     async fn parse_sql<C>(
         &self,
         _client: &C,
         sql: &str,
-        _types: &[Type],
+        types: &[Type],
     ) -> PgWireResult<Self::Statement>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        Ok(sql.to_string())
+        Ok(PgStatement {
+            sql: sql.to_string(),
+            param_types: parameter_types(sql, types),
+        })
     }
+}
+
+/// One type per parameter the statement uses: the type the Parse message named for it, or
+/// `text` where it named none (0, unspecified) — PostgreSQL infers a type from context, which a
+/// server without a planner cannot, and an unknown-typed literal resolves to `text` there too.
+///
+/// The count is the larger of the types the Parse named and the highest `$n` in the text, so a
+/// client that names no types (tokio-postgres) is told how many values to bind.
+pub fn parameter_types(sql: &str, named: &[Type]) -> Vec<Type> {
+    let count = named.len().max(highest_placeholder(sql));
+    (0..count)
+        .map(|idx| match named.get(idx) {
+            Some(t) if *t != Type::UNKNOWN => t.clone(),
+            _ => Type::TEXT,
+        })
+        .collect()
+}
+
+/// The highest `$n` placeholder in `sql`, skipping string literals, quoted identifiers,
+/// dollar-quoted strings and comments, where a `$1` is text rather than a parameter.
+pub fn highest_placeholder(sql: &str) -> usize {
+    let b = sql.as_bytes();
+    let mut highest = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let quote = b[i];
+                i += 1;
+                while i < b.len() {
+                    if b[i] == quote {
+                        if b.get(i + 1) == Some(&quote) {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                // Block comments nest in PostgreSQL.
+                let mut depth = 0usize;
+                while i < b.len() {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'$' => {
+                let start = i + 1;
+                let mut j = start;
+                while j < b.len() && b[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > start {
+                    // A parameter. Bind carries an Int16 count, so anything past that is no
+                    // parameter a client could bind; it is ignored rather than allocated for.
+                    if let Ok(n) = sql[start..j].parse::<usize>() {
+                        if n <= u16::MAX as usize {
+                            highest = highest.max(n);
+                        }
+                    }
+                    i = j;
+                    continue;
+                }
+                // `$tag$ … $tag$` or `$$ … $$`: a dollar-quoted string.
+                while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b'$' && !b[start].is_ascii_digit() {
+                    let tag = &b[i..=j];
+                    let body = j + 1;
+                    match b[body..].windows(tag.len()).position(|w| w == tag) {
+                        Some(end) => i = body + end + tag.len(),
+                        None => i = b.len(),
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    highest
 }
 
 /// Convert JSON value to string representation
