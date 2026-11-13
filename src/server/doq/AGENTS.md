@@ -60,6 +60,20 @@ answer through, so a fix there is a fix here:
 `send_dns_response` (hex bytes) is not offered and `execute_action` refuses it; every other
 DNS query action is, with `query_id` forced to 0 whatever the model wrote.
 
+## Padding (RFC 9250 §5.4)
+
+§5.4 requires a DoQ implementation to protect against traffic analysis by padding, either the
+DNS messages (the EDNS(0) Padding option, RFC 7830) or the QUIC packets. This server pads the
+messages, in the DNS server's `Reply::finish` that every reply above goes through: a query
+carrying a Padding option gets every reply — the answer, a SERVFAIL, a FORMERR or NOTIMP —
+padded with zero octets to a multiple of 468 octets (RFC 8467 §4.1's response block, counted
+over the DNS message, not its 2-octet frame prefix). A reply that cannot reach the next block
+within 65535 octets is sent unpadded rather than refused (`decision=unpadded_over_limit`, DEBUG).
+A query without a Padding option gets an unpadded reply: RFC 7830 §4 forbids padding a reply to
+a query without an OPT, and a client that sent an OPT without Padding has not asked. The QUIC
+packets are not padded beyond what quinn does. `tests/server/doq/padding_test.rs` drives it from
+the wire and with `kdig +quic +padding`.
+
 ## Cancellation and resets
 
 - A client's STOP_SENDING at any point before the answer is written drops the work, model call
@@ -96,8 +110,8 @@ belong to a client's stream, so unsolicited DNS messages are not a DoQ operation
 ## Not implemented
 
 Zone transfer over DoQ (RFC 9250 §4.2 allows several responses on one stream), DNSSEC
-signing, a recursive resolver, a zone store, EDNS padding (§5.4 asks implementations to pad;
-neither the messages nor the QUIC packets are padded), mTLS, 0-RTT, session-resumption policy,
+signing, a recursive resolver, a zone store, padding of a reply to a query that sent no Padding
+option, padding of the QUIC packets themselves, mTLS, 0-RTT, session-resumption policy,
 connection migration and transport fallback.
 
 ## TLS
@@ -124,6 +138,6 @@ What holds against the six Stable conditions (root `AGENTS.md`), as of 8 Novembe
 
 It is Beta (8 November 2026) on condition 1: two independent clients complete real DoQ
 exchanges and the tests fail rather than skip without them. Stable needs conditions 2 and 3 as
-well. EDNS padding (RFC 9250 section 5.4) is not implemented.
+well. Replies are padded (RFC 9250 §5.4) when the query asks; see "Padding" above.
 
 Reference: <https://www.rfc-editor.org/rfc/rfc9250.html>

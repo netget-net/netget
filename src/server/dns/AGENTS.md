@@ -211,6 +211,18 @@ every slot, cheaply, since some messages are answered without the model.
 3. **Truncation**: over UDP, an answer larger than the client can take — 512 bytes without
    EDNS, its advertised size with, never more than `MAX_UDP_RESPONSE` (4096) — is replaced by
    header, question and OPT with TC set (`decision=truncated`), and the client retries over TCP.
+4. **Padding** (`Reply::pad`): a query carrying an EDNS(0) Padding option (RFC 7830) gets its
+   reply padded with zero octets to a multiple of `PADDING_BLOCK` (468, RFC 8467 §4.1), the
+   length counted over the DNS message and not a stream's length prefix. The pad never passes
+   what the transport carries — 65535 octets over TCP and the stream transports, the client's
+   UDP limit over UDP — and a reply that cannot reach the next block within it is sent
+   unpadded, not refused (`decision=unpadded_over_limit`, DEBUG; RFC 7830 §4 waives the pad
+   there). A query without a Padding option is never padded (§4: a responder MUST NOT pad a
+   reply to a query without an OPT, and one with an OPT and no Padding has not asked). The
+   replies the server builds itself — SERVFAIL, FORMERR, NOTIMP, the SOA alone, a UDP IXFR difference
+   — are padded the same way; the messages of a transfer over TCP are not.
+
+Every reply to an EDNS query, SERVFAIL included, carries an OPT (RFC 6891 §6.1.1).
 
 **Zone transfers** raise `dns_zone_transfer {query_id, zone, transfer_type, client_serial,
 transport, signed, client_ip, client_port}` — the client's serial comes from the SOA in its
@@ -439,6 +451,7 @@ with the bound removed — a bound nobody tested is a comment.
 | records in one answer | 100 | `MAX_ANSWER_RECORDS` | the executor |
 | records in one transfer | 10 000 | `transfer::MAX_ZONE_RECORDS` | the executor |
 | transfer message | ~16 KiB | `transfer::TRANSFER_MESSAGE_BYTES` | `split_into_messages` directly |
+| padded reply | a multiple of 468, never past 65535 (stream) or the client's UDP size; else unpadded | `PADDING_BLOCK`, `Reply::pad` | `padding_test.rs`: 480 octets padded to 936 for a 1232-octet client, unpadded for a 512-octet one; 65 526 octets over TCP unpadded |
 
 **DNS declares no `max_inbound_bytes`**, and that is deliberate rather than an
 omission: it is a "fixed-size read" entry in
@@ -478,9 +491,12 @@ contain a complete question section.
   answer; nothing checks that they answer the question asked (the transaction ID and question
   section are the caller's).
 
-### 4. No DNS COOKIEs (RFC 7873)
+### 4. No DNS COOKIEs (RFC 7873); transfers are not padded
 
 - A COOKIE option in a query is ignored and none is returned.
+- A Padding option on an AXFR or IXFR query does not pad the transfer messages sent over TCP
+  (`transfer::split_into_messages`); over UDP the SOA alone and an IXFR difference are padded,
+  like every other reply (architecture decision 6, step 4).
 
 ### 5. No Zone File Support
 

@@ -270,7 +270,12 @@ All limitations from standard DNS protocol apply:
 - No DNSSEC signing (the DNS server's `dnssec_zone` is not offered here)
 - No zone transfers
 - No recursive resolution
-- An EDNS query gets an OPT back; no option is acted on
+- An EDNS query gets an OPT back; the one option acted on is Padding (RFC 7830, which RFC 8484
+  points at): a query carrying it gets a reply padded with zero octets to a multiple of 468
+  octets (RFC 8467 §4.1), or sent unpadded when the next block would pass 65535 octets
+  (`decision=unpadded_over_limit`); a query without it gets an unpadded reply. kdig pads its
+  `+https` queries by default. `tests/server/doh/padding_test.rs` drives it over HTTP/2 and with
+  kdig and `dig +https +padding`
 - See `src/server/dns/AGENTS.md` for full list
 
 ### 5. No Rate Limiting
@@ -594,7 +599,7 @@ certificate cannot pass. The tests pass the path alone.
 The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source in
 November 2026 rather than inherited. **The rating covers the surface this server implements**:
 RFC 8484 over HTTP/2 with ALPN `h2`, both request encodings, a self-signed certificate, and the
-DNS server's query actions and answer rules. HTTP/1.1, certificate provisioning, client
+DNS server's query actions and answer rules, EDNS padding included. HTTP/1.1, certificate provisioning, client
 authentication, HTTP caching headers and path routing are not implemented, and the DNS server's
 DNSSEC signing and zone transfers are not offered here.
 

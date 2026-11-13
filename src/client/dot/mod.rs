@@ -5,7 +5,7 @@ pub use actions::DotClientProtocol;
 
 use anyhow::{Context, Result};
 use hickory_proto::op::{Message as DnsMessage, MessageType, OpCode, Query};
-use hickory_proto::rr::{Name, RData, RecordType};
+use hickory_proto::rr::{Name, RData, Record, RecordType};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -27,6 +27,31 @@ use crate::logging::emit::Log;
 use crate::protocol::Event;
 use crate::state::app_state::AppState;
 use crate::state::{ClientId, ClientStatus};
+
+/// One record of a response as the `dot_response_received` event carries it.
+///
+/// The record data goes through [`crate::utils::display::try_display`], not `format!`: a
+/// record whose `Display` fails (hickory's `RData::OPT`, which a decoded response cannot hold
+/// outside the OPT pseudo-record under hickory-proto 0.26, but which a decoder change or a
+/// hand-built message can put in a section) would otherwise panic the client's read task. Such
+/// a record is reported by its type with `data` naming why there is none.
+pub fn record_json(record: &Record) -> serde_json::Value {
+    let data = match &record.data {
+        RData::Update0(_) => "NULL".to_string(),
+        data => crate::utils::display::try_display(data).unwrap_or_else(|| {
+            format!(
+                "<{} record data that cannot be displayed>",
+                record.record_type()
+            )
+        }),
+    };
+    serde_json::json!({
+        "name": record.name.to_utf8(),
+        "type": format!("{:?}", record.record_type()),
+        "ttl": record.ttl,
+        "data": data,
+    })
+}
 
 /// Connection state for LLM processing
 #[derive(Debug, Clone, PartialEq)]
@@ -334,56 +359,14 @@ impl DotClient {
             let query_id = dns_message.id;
             let response_code = format!("{:?}", dns_message.response_code);
 
-            let answers: Vec<serde_json::Value> = dns_message
-                .answers
-                .iter()
-                .map(|record| {
-                    let data_str = match &record.data {
-                        RData::Update0(_) => "NULL".to_string(),
-                        data => format!("{}", data),
-                    };
-                    serde_json::json!({
-                        "name": record.name.to_utf8(),
-                        "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl,
-                        "data": data_str,
-                    })
-                })
-                .collect();
+            let answers: Vec<serde_json::Value> =
+                dns_message.answers.iter().map(record_json).collect();
 
-            let authorities: Vec<serde_json::Value> = dns_message
-                .authorities
-                .iter()
-                .map(|record| {
-                    let data_str = match &record.data {
-                        RData::Update0(_) => "NULL".to_string(),
-                        data => format!("{}", data),
-                    };
-                    serde_json::json!({
-                        "name": record.name.to_utf8(),
-                        "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl,
-                        "data": data_str,
-                    })
-                })
-                .collect();
+            let authorities: Vec<serde_json::Value> =
+                dns_message.authorities.iter().map(record_json).collect();
 
-            let additionals: Vec<serde_json::Value> = dns_message
-                .additionals
-                .iter()
-                .map(|record| {
-                    let data_str = match &record.data {
-                        RData::Update0(_) => "NULL".to_string(),
-                        data => format!("{}", data),
-                    };
-                    serde_json::json!({
-                        "name": record.name.to_utf8(),
-                        "type": format!("{:?}", record.record_type()),
-                        "ttl": record.ttl,
-                        "data": data_str,
-                    })
-                })
-                .collect();
+            let additionals: Vec<serde_json::Value> =
+                dns_message.additionals.iter().map(record_json).collect();
 
             info!(
                 "DoT client {} received response: ID={}, Code={}, Answers={}",

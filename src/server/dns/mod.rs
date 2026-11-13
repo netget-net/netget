@@ -21,6 +21,7 @@ use actions::{DNS_QUERY_EVENT, DNS_ZONE_TRANSFER_EVENT, RESULT_IXFR, RESULT_ZONE
 use anyhow::Result;
 use dnssec::ZoneSigner;
 use hickory_proto::op::{Edns, Message as DnsMessage, Query, ResponseCode};
+use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
 use hickory_proto::rr::{Name, Record, RecordType};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -60,6 +61,14 @@ pub const PLAIN_UDP_LIMIT: usize = 512;
 /// The most a client's EDNS buffer size is believed; past it the response is truncated
 /// anyway, so one query cannot ask for a 64 KiB datagram.
 pub const MAX_UDP_RESPONSE: usize = 4096;
+
+/// The block a padded response's length is a multiple of: RFC 8467 §4.1's recommendation for
+/// responses, which pads to 468 octets when the query carried an EDNS(0) Padding option
+/// (RFC 7830). The length padded is the DNS message's, not a stream's two-octet prefix.
+pub const PADDING_BLOCK: usize = 468;
+
+/// The option code and length that precede the zero octets of a Padding option.
+const PADDING_OPTION_HEADER: usize = 4;
 
 /// What `spawn` reads from the startup parameters.
 pub struct DnsSettings {
@@ -517,6 +526,7 @@ impl DnsServer {
             query: &query,
             edns: edns.is_some(),
             dnssec_ok,
+            padding: asks_for_padding(&query),
             udp_limit,
             transport,
             label: "DNS",
@@ -820,10 +830,7 @@ impl DnsServer {
         let mut only_soa = transfer::response_shell(reply.query, ResponseCode::NoError);
         only_soa.add_query(question.clone());
         only_soa.add_answers(soa);
-        if let Some(e) = reply.response_edns() {
-            only_soa.set_edns(e);
-        }
-        Ok(vec![only_soa.to_vec()?])
+        Ok(vec![reply.encode(only_soa, None)?])
     }
 
     fn transfer_messages(
@@ -844,8 +851,9 @@ impl DnsServer {
             whole.add_query(question.clone());
             let soa = sequence.first().cloned();
             whole.add_answers(sequence);
-            add_edns(&mut whole);
-            let bytes = whole.to_vec().ok();
+            // `encode` adds the OPT and pads only within the UDP limit, so a difference that
+            // fits unpadded still fits.
+            let bytes = reply.encode(whole, None).ok();
             if let Some(bytes) = bytes.filter(|b| b.len() <= reply.udp_limit) {
                 return Ok(vec![bytes]);
             }
@@ -861,11 +869,22 @@ impl DnsServer {
     }
 }
 
+/// Whether `query` carried an EDNS(0) Padding option (RFC 7830), asking for a padded reply.
+fn asks_for_padding(query: &DnsMessage) -> bool {
+    query
+        .edns
+        .as_ref()
+        .is_some_and(|e| e.option(EdnsCode::Padding).is_some())
+}
+
 /// What every reply to one query shares.
 struct Reply<'a> {
     query: &'a DnsMessage,
     edns: bool,
     dnssec_ok: bool,
+    /// The query carried an EDNS(0) Padding option (RFC 7830), so every one-message reply to it
+    /// is padded to a multiple of [`PADDING_BLOCK`] (RFC 8467) — see [`Reply::pad`].
+    padding: bool,
     udp_limit: usize,
     transport: Transport,
     /// The protocol name the log lines carry: `DNS`, or the transport answering through
@@ -900,6 +919,7 @@ impl<'a> StreamQuery<'a> {
                 query,
                 edns: query.edns.is_some(),
                 dnssec_ok,
+                padding: asks_for_padding(query),
                 udp_limit: u16::MAX as usize,
                 transport: Transport::Tcp,
                 label,
@@ -993,10 +1013,70 @@ impl Reply<'_> {
         for q in &self.query.queries {
             message.add_query(q.clone());
         }
+        self.encode(message, None)
+            .map(|b| vec![b])
+            .unwrap_or_default()
+    }
+
+    /// Encode a reply this server built itself (no model bytes, so nothing to check for TC):
+    /// the OPT for an EDNS query, then the padding the query asked for.
+    fn encode(
+        &self,
+        mut message: DnsMessage,
+        log: Option<&Log<'_>>,
+    ) -> Result<Vec<u8>, hickory_proto::ProtoError> {
         if let Some(e) = self.response_edns() {
             message.set_edns(e);
         }
-        message.to_vec().map(|b| vec![b]).unwrap_or_default()
+        let bytes = message.to_vec()?;
+        Ok(self.pad(&mut message, bytes, log))
+    }
+
+    /// Pad an encoded reply with an EDNS(0) Padding option (RFC 7830) when the query carried
+    /// one, so the whole message is a multiple of [`PADDING_BLOCK`] octets (RFC 8467 §4.1).
+    /// `message` is what `bytes` encodes, OPT included. A query without a Padding option gets
+    /// `bytes` back unchanged, over every transport: RFC 7830 §4 lets a responder pad only a
+    /// query that has an OPT, and a client that did not ask has not said it wants the octets.
+    ///
+    /// The padded length never passes what the transport can carry — 65535 octets over a
+    /// stream, the client's UDP limit over UDP. An answer that cannot be padded to the next
+    /// block within that is sent as it is (`decision=unpadded_over_limit`): RFC 7830 §4 waives
+    /// padding that would pass the limit, and refusing the answer would trade a size leak for
+    /// a failure.
+    fn pad(&self, message: &mut DnsMessage, bytes: Vec<u8>, log: Option<&Log<'_>>) -> Vec<u8> {
+        if !self.padding {
+            return bytes;
+        }
+        let Some(edns) = message.edns.as_mut() else {
+            return bytes;
+        };
+        let limit = match self.transport {
+            Transport::Tcp => u16::MAX as usize,
+            Transport::Udp => self.udp_limit,
+        };
+        let target = (bytes.len() + PADDING_OPTION_HEADER).div_ceil(PADDING_BLOCK) * PADDING_BLOCK;
+        if target > limit {
+            if let Some(log) = log {
+                log.debug(format!(
+                    "{} answer of {} octets cannot be padded to {target} within {limit}; sent \
+                     unpadded decision=unpadded_over_limit",
+                    self.label,
+                    bytes.len()
+                ));
+            }
+            return bytes;
+        }
+        edns.options_mut().remove(EdnsCode::Padding);
+        edns.options_mut().insert(EdnsOption::Unknown(
+            u16::from(EdnsCode::Padding),
+            vec![0; target - bytes.len() - PADDING_OPTION_HEADER],
+        ));
+        match message.to_vec() {
+            Ok(padded) if padded.len() == target => padded,
+            // Adding an option to the OPT grows the message by exactly its length, so this is
+            // unreachable short of an encoder change; the unpadded answer is still correct.
+            _ => bytes,
+        }
     }
 
     /// Turn what the model (or a handler) answered into the messages to send: the first DNS
@@ -1065,9 +1145,10 @@ impl Reply<'_> {
         self.servfail()
     }
 
-    /// SERVFAIL, through the one builder every fail-closed path uses.
+    /// SERVFAIL, through the one builder every fail-closed path uses, with the OPT an EDNS
+    /// query is owed (RFC 6891 §6.1.1 — a failure is a response too) and the padding asked for.
     fn servfail(&self) -> Vec<Vec<u8>> {
-        match actions::build_servfail(self.query) {
+        match self.encode(actions::servfail_message(self.query), None) {
             Ok(packet) => vec![packet],
             Err(_) => Vec::new(),
         }
@@ -1162,12 +1243,12 @@ impl Reply<'_> {
             for q in &self.query.queries {
                 truncated.add_query(q.clone());
             }
-            if let Some(e) = self.response_edns() {
-                truncated.set_edns(e);
-            }
-            return truncated.to_vec().map(|b| vec![b]).unwrap_or_default();
+            return self
+                .encode(truncated, Some(log))
+                .map(|b| vec![b])
+                .unwrap_or_default();
         }
-        vec![bytes]
+        vec![self.pad(&mut message, bytes, Some(log))]
     }
 
     /// Sign every in-zone RRset of an answer, and prove a negative one with compact denial.
