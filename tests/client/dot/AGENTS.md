@@ -24,6 +24,17 @@ Each test provides the LLM with a specific instruction:
 
 LLM interprets the prompt and generates appropriate `send_dns_query` actions.
 
+## Record formatting (`record_display_test.rs`)
+
+Runs offline, no model and no server. `record_json` is the one function the client's read loop
+formats every answer, authority and additional record through, and it formats record data with
+`crate::utils::display::try_display` rather than `format!`: hickory's `RData::OPT` returns
+`fmt::Error` from `Display`, and `format!` turns that into a panic inside the read task. The
+first test hands it an OPT record (which a decoded response cannot hold in a section under
+hickory-proto 0.26, so it is built in memory) and asserts the record is reported by type with a
+`data` saying it cannot be displayed; with `format!` back in place it panics. The second asserts
+an A record still carries its address.
+
 ## Test Cases
 
 ### 1. Basic Query (`test_dot_client_basic_query`)
