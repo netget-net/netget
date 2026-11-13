@@ -1,0 +1,41 @@
+seed   1 PASS 
+seed   2 PASS 
+seed   3 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 PASS 
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+seed  21 PASS 
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+seed  28 PASS 
+seed  29 PASS 
+seed  30 PASS 
+seed  31 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "The client is unauthorized due to authentication failure."}]
+seed  32 PASS 
+seed  33 PASS 
+seed  34 PASS 
+seed  35 fail [{"type": "reject_bolt_login", "code": "Neo.ClientError.Security.Unauthorized", "message": "Basic auth is not allowed without a password"}]
+seed  36 PASS 
+seed  37 PASS 
+seed  38 PASS 
+seed  39 PASS 
+seed  40 PASS 
+TALLY login-syntax-master.txt bolt_login_accept 36/40
