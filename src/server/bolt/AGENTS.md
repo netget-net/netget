@@ -109,7 +109,7 @@ hand against their codes with `--error-format stacktrace`.
 
 | Event | Data | Actions |
 |---|---|---|
-| `bolt_authenticate` | `user_agent`, `scheme`, `principal`, `credentials_present`, `password_configured`, `answer_with` — **never the credential** | `accept_bolt_login`, `reject_bolt_login {code?, message?}` (code must be `Neo.ClientError.Security.*`, default `…Unauthorized`), `close_connection` |
+| `bolt_authenticate` | `user_agent`, `scheme`, `principal`, `credentials_present`, `password_configured`, `answer_with` — **never the credential** | `accept_bolt_login`, `reject_bolt_login {code?, message?}` (code must be `Neo.ClientError.Security.*`, default `…Unauthorized`), and nothing else: the event is `decision_only` |
 | `bolt_query` | `query`, `parameters` (JSON), `database` (when named), `mode: read\|write`, `in_transaction`, `answer_with` | `send_bolt_records {fields, records, stats?, query_type?}`, `send_bolt_failure {code, message}`, `close_connection` |
 
 **The login decision says what it is decided on.** `bolt_authenticate`'s description and its
@@ -120,6 +120,18 @@ database that accepts any login. Reject any query that is not valid Cypher with 
 error", llama3.1:8b answered the login with `reject_bolt_login` five runs in five (real-model
 eval, seed 42): "Reject" was the instruction's operative verb, and nothing in the login event
 said no query was being decided.
+
+**The login is offered its two answers and nothing else.** `bolt_authenticate` is declared
+`EventType::decision_only`, so `call_llm` puts no memory, connection-memory or log action beside
+`accept_bolt_login` and `reject_bolt_login`, the prompt leaves out its memory section, and the
+event does not offer `close_connection` (a static rule may still answer with it; the session
+handles it). Replaying the captured login prompts of the three eval cases (all "accepts any
+login") over seeds 1–40 each, llama3.1:8b refused 14 of 120 with those actions on offer — one
+draw answered with `set_memory` alone — and 0 of 120 with the prompt NetGet now sends. Wording
+alone did not get there: quoting the instruction's login sentence in `answer_with` left 3 of 80.
+An instruction that refuses the user ("accepts only the user alice; refuse every other login",
+user `neo4j`) was refused 40 of 40 either way (`eval-results/2026-11-13-structural-cases/`).
+`tests/server/bolt/login_decision_test.rs` reads the prompt the mock model received.
 
 **The query says whether it even begins like Cypher.** `bolt_query`'s `answer_with`
 (`actions::query_answer_with`) says to hold the query against the instructions first and answer

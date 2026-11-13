@@ -124,6 +124,180 @@ fn a_histogram_sample_with_le_and_no_suffix_is_a_bucket() {
     );
 }
 
+/// "40 requests so far, 30 of them under 0.1s" with buckets at 0.1, 0.5 and 1. llama3.1:8b
+/// states those as per-bucket counts (30, then 10, then 0) on most draws, and written as
+/// cumulative `_bucket` samples they were refused. Given as `bucket_counts`, NetGet adds them
+/// up: every `_bucket` counts everything at or below its bound, `+Inf` and `_count` are the
+/// total, and `_sum` is passed through. Bounds sort numerically whatever order the keys came
+/// in, and integral bounds render as `1.0`.
+#[test]
+fn bucket_counts_are_added_up_into_cumulative_buckets() {
+    let metrics = json!([{
+        "name": "http_request_duration_seconds", "type": "histogram",
+        "help": "Request latency.",
+        "bucket_counts": {"1": 0, "0.1": 30, "0.5": 10},
+        "count": 40,
+        "sum": 3.25
+    }]);
+    assert_eq!(
+        render(metrics.clone(), Format::Text),
+        "# HELP http_request_duration_seconds Request latency.\n\
+         # TYPE http_request_duration_seconds histogram\n\
+         http_request_duration_seconds_bucket{le=\"0.1\"} 30\n\
+         http_request_duration_seconds_bucket{le=\"0.5\"} 40\n\
+         http_request_duration_seconds_bucket{le=\"1.0\"} 40\n\
+         http_request_duration_seconds_bucket{le=\"+Inf\"} 40\n\
+         http_request_duration_seconds_sum 3.25\n\
+         http_request_duration_seconds_count 40\n"
+    );
+    assert_eq!(
+        render(metrics, Format::OpenMetrics),
+        "# HELP http_request_duration_seconds Request latency.\n\
+         # TYPE http_request_duration_seconds histogram\n\
+         http_request_duration_seconds_bucket{le=\"0.1\"} 30\n\
+         http_request_duration_seconds_bucket{le=\"0.5\"} 40\n\
+         http_request_duration_seconds_bucket{le=\"1.0\"} 40\n\
+         http_request_duration_seconds_bucket{le=\"+Inf\"} 40\n\
+         http_request_duration_seconds_sum 3.25\n\
+         http_request_duration_seconds_count 40\n\
+         # EOF\n"
+    );
+}
+
+/// `count` beyond the sum of `bucket_counts` is observations above the largest bound: they
+/// land only in `+Inf`. Without `count` the total is the sum; a `"+Inf"` key counts above the
+/// largest finite bound too; family `labels` go on every series; no `sum` means no `_sum` line
+/// rather than an invented one. The array form `[{"le", "count"}]` is the same histogram.
+#[test]
+fn bucket_counts_take_count_inf_labels_and_the_array_form() {
+    let above = render(
+        json!([{"name": "h", "type": "histogram",
+                "bucket_counts": {"0.5": 3, "2": 4}, "count": 9}]),
+        Format::Text,
+    );
+    assert_eq!(
+        above,
+        "# TYPE h histogram\nh_bucket{le=\"0.5\"} 3\nh_bucket{le=\"2.0\"} 7\n\
+         h_bucket{le=\"+Inf\"} 9\nh_count 9\n"
+    );
+
+    let inf_key = render(
+        json!([{"name": "h", "type": "histogram", "labels": {"method": "GET"},
+                "bucket_counts": {"+Inf": 2, "0.5": 3}, "sum": 1.5}]),
+        Format::Text,
+    );
+    assert_eq!(
+        inf_key,
+        "# TYPE h histogram\nh_bucket{method=\"GET\",le=\"0.5\"} 3\n\
+         h_bucket{method=\"GET\",le=\"+Inf\"} 5\nh_sum{method=\"GET\"} 1.5\n\
+         h_count{method=\"GET\"} 5\n"
+    );
+
+    let array = render(
+        json!([{"name": "h", "type": "histogram",
+                "bucket_counts": [{"le": 2, "count": 4}, {"le": "0.5", "count": 3}],
+                "count": 9}]),
+        Format::Text,
+    );
+    assert_eq!(array, above);
+}
+
+/// The cumulative `_bucket` samples still work, and a family may carry both: `bucket_counts`
+/// for one label set and samples for another.
+#[test]
+fn bucket_counts_sit_beside_cumulative_samples() {
+    let text = render(
+        json!([{"name": "h", "type": "histogram",
+        "labels": {"svc": "a"}, "bucket_counts": {"1": 2}, "count": 2,
+        "samples": [
+            {"suffix": "_bucket", "labels": {"svc": "b", "le": "1"}, "value": 5},
+            {"suffix": "_count", "labels": {"svc": "b"}, "value": 6}
+        ]}]),
+        Format::Text,
+    );
+    assert_eq!(
+        text,
+        "# TYPE h histogram\n\
+         h_bucket{svc=\"b\",le=\"1.0\"} 5\nh_bucket{svc=\"b\",le=\"+Inf\"} 6\nh_count{svc=\"b\"} 6\n\
+         h_bucket{svc=\"a\",le=\"1.0\"} 2\nh_bucket{svc=\"a\",le=\"+Inf\"} 2\nh_count{svc=\"a\"} 2\n"
+    );
+}
+
+/// A `samples` entry carrying `bucket_counts` is one series with that entry's labels, count
+/// and sum — how llama3.1:8b sometimes writes it, and how several labelled series are given.
+#[test]
+fn bucket_counts_inside_samples_are_one_series_each() {
+    let text = render(
+        json!([{"name": "h", "type": "histogram", "samples": [
+            {"labels": {"method": "GET"}, "bucket_counts": {"0.1": 3, "1": 1}, "count": 5, "sum": 2.5},
+            {"labels": {"method": "PUT"}, "bucket_counts": {"0.1": 0, "1": 2}}
+        ]}]),
+        Format::Text,
+    );
+    assert_eq!(
+        text,
+        "# TYPE h histogram\n\
+         h_bucket{method=\"GET\",le=\"0.1\"} 3\nh_bucket{method=\"GET\",le=\"1.0\"} 4\n\
+         h_bucket{method=\"GET\",le=\"+Inf\"} 5\nh_sum{method=\"GET\"} 2.5\nh_count{method=\"GET\"} 5\n\
+         h_bucket{method=\"PUT\",le=\"0.1\"} 0\nh_bucket{method=\"PUT\",le=\"1.0\"} 2\n\
+         h_bucket{method=\"PUT\",le=\"+Inf\"} 2\nh_count{method=\"PUT\"} 2\n"
+    );
+}
+
+#[test]
+fn malformed_bucket_counts_are_refused_with_a_reason() {
+    let cases: Vec<(serde_json::Value, &str)> = vec![
+        (
+            json!([{"name": "g", "type": "gauge", "bucket_counts": {"1": 2}}]),
+            "only a histogram",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": {"1": 5, "2": 5}, "count": 9}]),
+            "at least their sum",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": {"1": -1}}]),
+            "non-negative",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": {"fast": 1}}]),
+            "not a number",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": {"1": 1, "1.0": 2}}]),
+            "twice",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": [30, 10]}]),
+            "'le' and a 'count'",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": "30,10"}]),
+            "must be an object",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "labels": {"le": "1"}, "bucket_counts": {"1": 1}}]),
+            "may not carry 'le'",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "labels": {"bad-label": "x"}, "bucket_counts": {"1": 1}}]),
+            "label name",
+        ),
+        (
+            json!([{"name": "h", "type": "histogram", "bucket_counts": {"1": 1},
+                    "samples": [{"suffix": "_count", "value": 1}]}]),
+            "same labels",
+        ),
+    ];
+    for (metrics, needle) in cases {
+        let reason = refusal(metrics.clone());
+        assert!(
+            reason.contains(needle),
+            "refusal for {metrics} should mention {needle:?}, got: {reason}"
+        );
+    }
+}
+
 #[test]
 fn a_missing_inf_bucket_is_taken_from_count_per_label_set() {
     let text = render(

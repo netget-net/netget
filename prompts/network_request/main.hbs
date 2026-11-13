@@ -11,8 +11,10 @@
 
 {{> shared/partials/actions tool_actions=tool_actions regular_actions=regular_actions }}
 
+{{#if memory_actions}}
 {{> shared/partials/memory }}
 
+{{/if}}
 {{!-- The scripting partial is deliberately NOT included here. It teaches how to
       CONFIGURE event handlers (static vs script vs llm, script stdin/stdout
       contract, XML code references), which only applies when a server is being

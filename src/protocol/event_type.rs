@@ -67,6 +67,20 @@ pub struct EventType {
     /// these to a zero-action static rule ahead of its `*` → manual wildcard, so a human is
     /// not asked "someone connected — say anything?" for every connection.
     pub on_every_connection: bool,
+
+    /// The event is one decision, answered by one of its own actions and nothing else. Set
+    /// with [`EventType::decision_only`](method@EventType::decision_only).
+    ///
+    /// `call_llm` then offers the model only the event's actions: none of the memory and log
+    /// actions every other network event carries, and the prompt leaves out the section
+    /// explaining memory. A login is the case it exists for. Asked whether to let a user in
+    /// under "a Neo4j graph database that accepts any login", llama3.1:8b refused on 14 of 120
+    /// replayed draws with the memory, log and close actions on offer beside the two answers
+    /// (one of them answered with `set_memory` alone), and on none of 120 without them; an
+    /// instruction refusing the user was still refused 40 of 40
+    /// (`eval-results/2026-11-13-structural-cases/`). Rules (`event_handlers`) still answer
+    /// these events as any other.
+    pub decision_only: bool,
 }
 
 /// The event data of a connect event (one declared
@@ -149,7 +163,16 @@ impl EventType {
             alternative_examples: Vec::new(),
             log_template: None,
             on_every_connection: false,
+            decision_only: false,
         }
+    }
+
+    /// Declare that this event is one decision answered only by its own actions (a login's
+    /// accept or refuse): the model is offered no memory or log actions beside them. See
+    /// [`EventType::decision_only`](field@EventType::decision_only).
+    pub fn decision_only(mut self) -> Self {
+        self.decision_only = true;
+        self
     }
 
     /// Declare that this is a connect event: raised for every new connection before the peer

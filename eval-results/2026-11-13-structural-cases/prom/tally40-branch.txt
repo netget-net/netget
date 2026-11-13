@@ -1,0 +1,41 @@
+seed   1 PASS 
+seed   2 PASS 
+seed   3 PASS 
+seed   4 PASS 
+seed   5 PASS 
+seed   6 PASS 
+seed   7 PASS 
+seed   8 PASS 
+seed   9 fail [{"type": "send_metrics", "metrics": [{"name": "http_requests_total", "type": "counter", "help": "HTTP requests served, by method and status code.", "samples": [{"labels": {"method": "GET", "code": "200"}, "value": 30, "suffix": "_total"}]}, {"name": "http_request_duration_seconds", "type": "histogr
+seed  10 PASS 
+seed  11 PASS 
+seed  12 PASS 
+seed  13 PASS 
+seed  14 PASS 
+seed  15 PASS 
+seed  16 PASS 
+seed  17 PASS 
+seed  18 PASS 
+seed  19 PASS 
+seed  20 PASS 
+seed  21 PASS 
+seed  22 PASS 
+seed  23 PASS 
+seed  24 PASS 
+seed  25 PASS 
+seed  26 PASS 
+seed  27 PASS 
+seed  28 PASS 
+seed  29 fail [{"type": "send_metrics", "metrics": [{"name": "request_latency_seconds", "type": "histogram", "help": "Request latency in seconds.", "samples": [{"labels": {}, "bucket_counts": {"0.1": 900, "0.5": 100, "1": 40}, "count": 40, "sum": 9.8}]}]}]
+seed  30 PASS 
+seed  31 PASS 
+seed  32 fail [{"type": "send_metrics", "metrics": [{"name": "http_request_latency_seconds", "type": "histogram", "help": "Request latency in seconds", "samples": [{"value": "0.1"}, {"value": "0.5"}, {"value": "1"}]}]}, {"type": "set_memory", "value": "requests: 40\nrequests_less_than_10ms: 30"}]
+seed  33 fail [{"type": "send_metrics", "metrics": [{"name": "http_request_latency_seconds", "type": "histogram", "help": "Request latency.", "bucket_counts": {"0.1": 900, "0.5": 110, "1": 20}, "count": 40, "sum": 0.0}]}]
+seed  34 PASS 
+seed  35 PASS 
+seed  36 PASS 
+seed  37 PASS 
+seed  38 fail [{"type": "send_metrics", "metrics": [{"name": "http_request_latency_seconds", "type": "histogram", "help": "Request latency.", "bucket_counts": {"0.1": 900, "0.5": 110, "1": 20}, "count": 40, "sum": 30}]}]
+seed  39 PASS 
+seed  40 PASS 
+TALLY branch.txt prom_hist_ok2 35/40

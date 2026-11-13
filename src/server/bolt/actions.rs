@@ -613,11 +613,11 @@ pub static BOLT_AUTHENTICATE_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             .with_info("Bolt login {principal} ({scheme})")
             .with_debug("Bolt bolt_authenticate: principal={principal} scheme={scheme}"),
     )
-    .with_actions(vec![
-        accept_bolt_login_action(),
-        reject_bolt_login_action(),
-        close_connection_action(),
-    ])
+    // The two answers and nothing else: with memory, log and close actions on offer beside
+    // them, llama3.1:8b refused "accepts any login" on 14 of 120 replayed draws (one answered
+    // with set_memory alone); with only these two, on none of 120.
+    .with_actions(vec![accept_bolt_login_action(), reject_bolt_login_action()])
+    .decision_only()
     .with_alternative_example(json!({
         "type": "reject_bolt_login",
         "code": "Neo.ClientError.Security.Unauthorized",
