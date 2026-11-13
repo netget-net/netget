@@ -968,6 +968,7 @@ fn intercept_payload_controls_are_not_painted_as_terminal_cells() {
                 deadline_unix_ms: None,
                 error: None,
                 focused: 0,
+                scroll: 0,
             },
         )),
         _ => netget::tui::modal::Modal::RequestDetail {
@@ -1146,6 +1147,7 @@ fn a_parked_request_says_when_it_fails_closed() {
                 deadline_unix_ms: Some(netget::state::intercepts::now_unix_ms() + 200_500),
                 error: None,
                 focused: 0,
+                scroll: 0,
             },
         )));
     let text = dump(&frame(&mut app, 80, 24));
@@ -1173,6 +1175,7 @@ fn the_answer_modal_draws_all_three_buttons_at_80_columns() {
                 deadline_unix_ms: None,
                 error: None,
                 focused: 2,
+                scroll: 0,
             },
         )));
     let text = dump(&frame(&mut app, 80, 24));
@@ -1460,6 +1463,7 @@ fn a_composer_with_many_parameters_scrolls_to_its_selection_and_keeps_its_error(
     assert!(text.contains("more fields"), "it says it scrolled:\n{text}");
     assert!(text.contains("[ Send ]"), "the buttons stay:\n{text}");
     assert!(lines.iter().all(|l| l.chars().count() <= 80));
+    assert!(text.contains("Esc back"), "the hint is whole:\n{text}");
 }
 
 /// The routing draft at 80×24 with more static actions than the box holds:
@@ -1505,6 +1509,296 @@ fn a_routing_draft_with_many_actions_scrolls_to_its_selection_and_keeps_its_erro
     assert!(
         text.contains("[ Save response ]"),
         "the buttons stay:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+    assert!(text.contains("Esc back"), "the hint is whole:\n{text}");
+}
+
+/// The routing table at 80×24 with more rules than the box holds: it scrolls
+/// to the selected rule, says there are more, and keeps the table's error
+/// above the buttons and the fallback note under them. It used to render the
+/// rules and the error as one unscrolled paragraph, so both fell off the box.
+#[test]
+fn a_routing_table_with_many_rules_scrolls_to_its_selection_and_keeps_its_error() {
+    use netget::tui::modal::routing::RoutingModel;
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    let state = netget::state::AppState::new();
+    let mut model = RoutingModel::new(UiKey::Server(ServerId::new(1)), "TCP", None, &state);
+    model.handlers = (1..=30)
+        .map(|n| EventHandler {
+            event_pattern: EventPattern::Specific(format!("tcp_event_{n:02}")),
+            data_match: None,
+            handler: EventHandlerType::Manual { timeout_secs: 300 },
+        })
+        .collect();
+    model.selected = 29;
+    model.error = Some(
+        "rule 30 matches tcp_event_30, which the TCP server never raises — pick one it does".into(),
+    );
+    app.modals.push(Modal::Routing(Box::new(model)));
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains("▸ tcp_event_30")),
+        "the selected rule, the last of 30, is in view:\n{text}"
+    );
+    assert!(
+        text.contains("pick one it does"),
+        "the table's error is in view, whole:\n{text}"
+    );
+    assert!(text.contains("more rules"), "it says it scrolled:\n{text}");
+    // Seven buttons do not fit one row of a 59-cell box; Tab reaches every
+    // one, so every one is drawn, on a second row if need be.
+    for button in [
+        "[ Add ]",
+        "[ Edit ]",
+        "[ Delete ]",
+        "[ Move up ]",
+        "[ Move down ]",
+        "[ Save ]",
+        "[ Cancel ]",
+    ] {
+        assert!(text.contains(button), "{button} is drawn:\n{text}");
+    }
+    assert!(
+        text.contains("goes to the LLM"),
+        "the fallback note stays:\n{text}"
+    );
+    assert!(lines.iter().all(|l| l.chars().count() <= 80));
+}
+
+/// An intercept whose payload is far taller than the answer modal at 80×24:
+/// the deadline stays pinned at the top, the error above the buttons, all
+/// three buttons are drawn, the box says there is more, and ↓ reaches the
+/// end of the payload and the explanation beneath it. The payload used to be
+/// cut at 20 lines with no way to read the rest.
+#[test]
+fn the_answer_modal_scrolls_a_long_payload_under_its_deadline_and_over_its_buttons() {
+    use netget::tui::modal::intercept::InterceptModel;
+    use netget::tui::modal::Modal;
+
+    let mut app = app();
+    app.absorb_snapshot(populated());
+    let headers: serde_json::Map<String, serde_json::Value> = (1..=60)
+        .map(|n| {
+            (
+                format!("x-header-{n:02}"),
+                serde_json::json!(format!("value {n}")),
+            )
+        })
+        .collect();
+    app.modals.push(Modal::Intercept(Box::new(InterceptModel {
+        id: 4,
+        owner: UiKey::Server(ServerId::new(1)),
+        protocol: "HTTP".into(),
+        event_type: "http_request".into(),
+        description: "GET /admin with sixty headers".into(),
+        event_data: Some(
+            serde_json::json!({"method": "GET", "path": "/admin", "headers": headers}),
+        ),
+        vocabulary: Vec::new(),
+        deadline_unix_ms: Some(netget::state::intercepts::now_unix_ms() + 200_500),
+        error: Some(
+            "HTTP declares no actions to answer with — Answer with nothing or Fail closed".into(),
+        ),
+        focused: 0,
+        scroll: 0,
+    })));
+
+    let check_pinned = |lines: &[String], when: &str| {
+        let text = dump(lines);
+        assert!(
+            text.contains("fails closed in 3m"),
+            "the deadline is in view {when}:\n{text}"
+        );
+        for button in [
+            "[ Compose answer… ]",
+            "[ Answer with nothing ]",
+            "[ Fail closed ]",
+        ] {
+            assert!(text.contains(button), "{button} is drawn {when}:\n{text}");
+        }
+        assert!(
+            text.contains("declares no actions to answer with"),
+            "the error is in view {when}:\n{text}"
+        );
+        assert!(lines.iter().all(|l| l.chars().count() <= 80));
+    };
+
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    check_pinned(&lines, "at the top");
+    assert!(
+        text.contains("↓ more lines"),
+        "it says there is more:\n{text}"
+    );
+    assert!(
+        !text.contains("x-header-60"),
+        "the end is below the view:\n{text}"
+    );
+
+    // Far past the end: the view stops at the last row, and the stored scroll
+    // is clamped so one ↑ moves at once.
+    app.modal_mut().expect("modal").scroll_by(1000);
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    check_pinned(&lines, "scrolled to the end");
+    assert!(
+        text.contains("x-header-60"),
+        "the last header is reachable:\n{text}"
+    );
+    assert!(
+        text.contains("Esc keeps it waiting"),
+        "the explanation under the payload is reachable:\n{text}"
+    );
+    assert!(
+        text.contains("↑ more lines"),
+        "it says there is more above:\n{text}"
+    );
+    let Some(Modal::Intercept(model)) = app.modals.last() else {
+        panic!("the intercept is still open");
+    };
+    assert!(
+        model.scroll < 1000,
+        "the scroll is clamped: {}",
+        model.scroll
+    );
+}
+
+/// Help, the Wireshark recipe and a request's detail at 80×24: each is taller
+/// than its box, says so on the box's edge, and stops at its last row instead
+/// of scrolling on into an empty box.
+#[test]
+fn every_scrolled_modal_says_there_is_more_and_stops_at_its_last_row() {
+    use netget::tui::modal::Modal;
+    use netget::tui::wireshark::{CapturePlan, CaptureTarget, Platform};
+
+    let request: serde_json::Map<String, serde_json::Value> = (1..=50)
+        .map(|n| (format!("field_{n:02}"), serde_json::json!(n)))
+        .collect();
+    let cases: Vec<(&str, Modal, &str)> = vec![
+        ("help", Modal::Help { scroll: 0 }, "also Ctrl-C"),
+        (
+            "wireshark",
+            Modal::Wireshark {
+                plan: Box::new(CapturePlan::build(
+                    CaptureTarget::client("http", Some("127.0.0.1:8080")),
+                    Platform::current(),
+                )),
+                scroll: 0,
+            },
+            "",
+        ),
+        (
+            "request detail",
+            Modal::RequestDetail {
+                entry: Box::new(AccessLogEntry {
+                    id: 98,
+                    unix_ms: 1_700_000_098_000,
+                    server_id: Some(1),
+                    client_id: None,
+                    protocol: "HTTP".into(),
+                    connection_id: Some(7),
+                    event_type: "http_request".into(),
+                    request: serde_json::Value::Object(request),
+                    response: vec![
+                        serde_json::json!({"type": "send_http_response", "status": 204}),
+                    ],
+                    answered_by: None,
+                }),
+                scroll: 0,
+            },
+            "send_http_response",
+        ),
+    ];
+    for (name, modal, last) in cases {
+        let mut app = app();
+        app.absorb_snapshot(RailSnapshot::default());
+        app.modals.push(modal);
+        let lines = frame(&mut app, 80, 24);
+        let text = dump(&lines);
+        println!("{name}:\n{text}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 80));
+        assert!(
+            text.contains("Esc close"),
+            "{name}'s hint is whole:\n{text}"
+        );
+        assert!(
+            !text.contains("clientthe"),
+            "a 22-cell key keeps a space before its text:\n{text}"
+        );
+        if !text.contains("↓ more lines") {
+            // The recipe can fit the box on a platform with a short one; it
+            // must then say nothing about more.
+            assert!(name == "wireshark", "{name} says there is more:\n{text}");
+            assert!(!text.contains("more lines"), "{text}");
+            continue;
+        }
+        app.modal_mut().expect("modal").scroll_by(1000);
+        let lines = frame(&mut app, 80, 24);
+        let text = dump(&lines);
+        println!("{name} at the end:\n{text}");
+        assert!(
+            text.contains(last),
+            "{name}'s last row is reachable:\n{text}"
+        );
+        assert!(text.contains("↑ more lines"), "{name}:\n{text}");
+        assert!(!text.contains("↓ more"), "{name} is at its end:\n{text}");
+        let scroll = app.modals.last().expect("modal").scroll();
+        assert!(scroll < 1000, "{name}'s scroll is clamped: {scroll}");
+    }
+}
+
+/// The picker at 80×24 with the selection near the foot of the whole list, on
+/// a protocol that will refuse to start here and has a long description: the
+/// selected entry is in the list's window, and the fixed-height detail pane
+/// shows the warning however long the description is.
+#[test]
+fn the_picker_at_80_columns_keeps_the_selection_and_its_warning_in_view() {
+    use netget::tui::modal::protocol_picker;
+    use netget::tui::modal::Modal;
+
+    let mut caps = SystemCapabilities::detect();
+    caps.can_bind_privileged_ports = false;
+    caps.has_raw_socket_access = false;
+    caps.has_packet_capture_access = false;
+    caps.is_root = false;
+    let mut entries = protocol_picker::all_entries(&caps);
+    let index = entries
+        .iter()
+        .rposition(|e| e.privilege_note.is_some())
+        .expect("some protocol needs a privilege this process lacks");
+    let name = entries[index].name.clone();
+    // A description as long as a protocol's notes: four rows of the pane.
+    entries[index].description = "A server whose description runs on: it names the RFCs it \
+        follows, the transports it binds, the clients it was measured against and what it \
+        leaves out, which is more than the detail pane under the list has rows for."
+        .into();
+    let mut app = app();
+    app.absorb_snapshot(RailSnapshot::default());
+    app.modals.push(Modal::ProtocolPicker {
+        entries,
+        filter: String::new(),
+        selected: index,
+        prefill_remote: None,
+    });
+    let lines = frame(&mut app, 80, 24);
+    let text = dump(&lines);
+    println!("{text}");
+    assert!(
+        lines.iter().any(|l| l.contains(&name)),
+        "the selected entry ({name}) is in the window:\n{text}"
+    );
+    assert!(
+        text.contains("will refuse to start"),
+        "its warning is in the detail pane:\n{text}"
     );
     assert!(lines.iter().all(|l| l.chars().count() <= 80));
 }
