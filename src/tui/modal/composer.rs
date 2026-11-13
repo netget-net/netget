@@ -362,12 +362,26 @@ impl ComposerModel {
                 serde_json::Value::Array(items) => items,
                 other => vec![other],
             };
-            // Raw JSON can name anything; hold it to the same list the picker offers (and
-            // MCP's `answer_intercept` accepts), plus the actions every protocol accepts.
+            // Raw JSON can name anything; hold it to the same list the picker offers. An
+            // intercept answer may add what MCP's `answer_intercept` accepts beside the
+            // protocol's answers (`intercept_common_actions` — memory, a log line), never a
+            // management action; elsewhere the actions every protocol accepts.
+            let intercept_common: Vec<String> = match self.target {
+                ComposerTarget::Intercept { .. } => {
+                    crate::state::intercepts::intercept_common_actions(&self.actions, true)
+                        .into_iter()
+                        .map(|a| a.name)
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             for item in &items {
                 let name = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                let offered = self.actions.iter().any(|a| a.name == name)
-                    || crate::events::handler::common_action_names().contains(&name);
+                let common = match self.target {
+                    ComposerTarget::Intercept { .. } => intercept_common.iter().any(|c| c == name),
+                    _ => crate::events::handler::common_action_names().contains(&name),
+                };
+                let offered = self.actions.iter().any(|a| a.name == name) || common;
                 if !offered {
                     let names: Vec<&str> = self.actions.iter().map(|a| a.name.as_str()).collect();
                     anyhow::bail!(

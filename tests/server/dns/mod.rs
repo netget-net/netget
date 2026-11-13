@@ -4,6 +4,7 @@ mod dig_test;
 pub mod dnssec_test;
 pub mod kdig_test;
 mod llm_failure_test;
+pub mod padding_test;
 mod security_test;
 mod test;
 pub mod transfer_test;

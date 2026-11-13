@@ -19,6 +19,10 @@ and opens Quinn connections that trust it.
 - `bounds_test.rs` — every declared bound from both sides and every answer outcome the server's
   AGENTS.md lists; its header has the table. These use a Quinn peer with hickory messages,
   which is transport testing, not independent evidence.
+- `padding_test.rs` — EDNS(0) Padding (RFC 9250 §5.4, RFC 7830/8467) from a Quinn peer: a padded
+  query's answer and SERVFAIL are 468-octet multiples, a 65 526-octet answer goes out unpadded,
+  an unpadded query gets no pad; and `kdig +quic +padding` / `+nopadding` against the same
+  server. Its handler and assertions are `tests/server/dns/padding_test.rs`'s.
 - `e2e_test.rs` — parallel streams with zero ids, the question echoed, FIN and cleanup (UDP port
   released on stop); the protocol-error closes (bad length, two messages, trailing bytes,
   non-zero id, short, oversize, keepalive); the dangling-query reset and client cancellation;

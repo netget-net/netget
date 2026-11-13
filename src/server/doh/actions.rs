@@ -153,7 +153,9 @@ impl Protocol for DohProtocol {
                 "GET/POST, HTTP/2 only (no HTTP/1.1), self-signed certs, any request path accepted. \
                  Advertises ALPN h2. Answers through dns::StreamQuery, the DNS server's own answer \
                  rules: a DNS message in a 200 for every DNS outcome, SERVFAIL included; \
-                 ignore_query is a 404, an undecodable body 400, a body over 65535 bytes 413.",
+                 ignore_query is a 404, an undecodable body 400, a body over 65535 bytes 413. \
+                 A query carrying an EDNS(0) Padding option gets its reply padded to 468-octet \
+                 blocks (RFC 7830/8467) within 65535 octets.",
             )
             .max_inbound_bytes(crate::server::doh::MAX_DOH_BODY_BYTES as usize)
             .request_only("DNS over HTTPS only answers queries; a server cannot send a peer anything unprompted")

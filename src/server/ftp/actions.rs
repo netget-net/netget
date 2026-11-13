@@ -80,13 +80,22 @@ impl FtpProtocol {
     }
 
     fn execute_send_ftp_data(&self, action: serde_json::Value) -> Result<ActionResult> {
-        let data = action
-            .get("data")
-            .and_then(|v| v.as_str())
-            .context("Missing 'data' parameter (the file's contents, as text)")?;
+        let data = action.get("data").and_then(|v| v.as_str()).context(
+            "Missing 'data' parameter (the file's contents: text, or hex with encoding \"hex\")",
+        )?;
+        let bytes = match action.get("encoding").and_then(|v| v.as_str()) {
+            None | Some("utf8") => data.as_bytes().to_vec(),
+            Some("hex") => decode_hex("data", data)?,
+            Some(other) => {
+                return Err(anyhow::anyhow!(
+                    "Unknown FTP 'encoding' {other:?}: use \"utf8\" (the default; 'data' is the \
+                     text itself) or \"hex\" ('data' is two hex digits per byte)"
+                ))
+            }
+        };
 
-        debug!("FTP data-connection payload: {} bytes", data.len());
-        Ok(transfer_result(data.as_bytes()))
+        debug!("FTP data-connection payload: {} bytes", bytes.len());
+        Ok(transfer_result(&bytes))
     }
 
     fn execute_send_ftp_list(&self, action: serde_json::Value) -> Result<ActionResult> {
@@ -115,6 +124,19 @@ impl FtpProtocol {
         debug!("FTP listing: {} entries", entries.len());
         Ok(transfer_result(listing.as_bytes()))
     }
+}
+
+/// Decode a hex field the handler supplied: two hex digits per byte, either case, with ASCII
+/// whitespace between them ignored. Anything else is an error, never a guess: `"48656c6c6f"` is
+/// valid text as well as valid hex, which is why the action says which it means.
+pub fn decode_hex(field: &str, value: &str) -> Result<Vec<u8>> {
+    let digits: String = value.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    hex::decode(&digits).map_err(|e| {
+        anyhow::anyhow!(
+            "FTP '{field}' with encoding \"hex\" must be two hex digits per byte ({e}); for \
+             text, leave encoding out or set it to \"utf8\""
+        )
+    })
 }
 
 /// The `ActionResult::Custom` name carrying bytes for the data connection.
@@ -203,6 +225,37 @@ impl Protocol for FtpProtocol {
         // FTP client parked at the dashboard waiting for a person, and a listener exposed to
         // strangers wants the first one much lower.
         vec![
+            crate::llm::actions::ParameterDefinition {
+                name: "cert_path".to_string(),
+                type_hint: "string".to_string(),
+                description: "Path to a PEM certificate for FTPS (AUTH TLS, then PBSZ 0 and \
+                              PROT P for TLS data connections). Give key_path with it. Without \
+                              both, a self-signed certificate for localhost, 127.0.0.1 and ::1 \
+                              is generated at startup."
+                    .to_string(),
+                required: false,
+                example: json!("/etc/ftp/cert.pem"),
+                default: None,
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "key_path".to_string(),
+                type_hint: "string".to_string(),
+                description: "Path to the PEM private key for cert_path".to_string(),
+                required: false,
+                example: json!("/etc/ftp/key.pem"),
+                default: None,
+            },
+            crate::llm::actions::ParameterDefinition {
+                name: "max_hex_upload_bytes".to_string(),
+                type_hint: "number".to_string(),
+                description: "Largest binary (not UTF-8) upload whose bytes reach the handler, \
+                              as upload_hex - two hex characters per byte. A larger binary \
+                              upload still reaches the handler, described by upload_bytes alone."
+                    .to_string(),
+                required: false,
+                example: json!(65536),
+                default: Some(serde_json::json!(super::data::MAX_HEX_UPLOAD_BYTES)),
+            },
             crate::llm::actions::ParameterDefinition {
                 name: "max_upload_bytes".to_string(),
                 type_hint: "number".to_string(),
@@ -317,28 +370,33 @@ impl Protocol for FtpProtocol {
             .well_known_port(21)
             .implementation(
                 "Manual line-based parsing with tokio; passive (PASV, EPSV) and active (PORT, \
-                 EPRT) data connections, TYPE A/I",
+                 EPRT) data connections, TYPE A/I, REST in stream mode, STOU, ABOR during a \
+                 transfer, explicit FTPS (AUTH TLS, PBSZ, PROT) with rustls",
             )
             .llm_control(
-                "Every control-connection reply but the data-connection setup verbs and TYPE; \
-                 every listing (LIST/NLST/MLSD) and file (RETR); the verdict on every upload \
-                 (STOR/APPE)",
+                "Every control-connection reply but the data-connection setup verbs, TYPE, \
+                 REST, ABOR, AUTH, PBSZ and PROT; every listing (LIST/NLST/MLSD) and file \
+                 (RETR, text or hex); the verdict on every upload (STOR/APPE/STOU)",
             )
             .e2e_testing(
                 "python3 stdlib ftplib and curl (libcurl) complete real sessions in \
                  tests/server/ftp/real_client_test.rs and fail rather than skip without their \
-                 client: login, PWD, LIST, NLST, MLSD, RETR in TYPE A and I, STOR in both, \
-                 APPE, SIZE, refused downloads, over PASV, EPSV, PORT and EPRT. The pcap oracle \
-                 reads ftplib's control connection. data_connection_test.rs holds each \
-                 data-connection bound from both sides.",
+                 client: login, PWD, LIST, NLST, MLSD, RETR in TYPE A and I (binary files \
+                 byte-exact both ways), STOR in both, APPE, STOU, SIZE, MDTM, REST before RETR \
+                 and STOR, ABOR during a download and an upload, refused downloads, over PASV, \
+                 EPSV, PORT and EPRT, and the same over FTPS (AUTH TLS, PBSZ 0, PROT P) with \
+                 curl --ssl-reqd and ftplib.FTP_TLS. The pcap oracle reads ftplib's plain \
+                 control connection. data_connection_test.rs and ftps_test.rs hold each bound \
+                 from both sides.",
             )
             .notes(
                 "Beta for the surface it implements, which is RFC 959 stream mode, file \
-                 structure, types A and I, with RFC 2428's EPSV/EPRT. Not implemented: FTPS / \
-                 AUTH TLS, REST, STOU, ABOR during a transfer, block and compressed modes, \
-                 TYPE E. File contents are text, so a binary download can carry only what a \
-                 UTF-8 string can; a binary upload reaches the handler as its size. No storage: \
-                 the handler supplies every listing and file.",
+                 structure, types A and I, with RFC 2428's EPSV/EPRT, RFC 3659's REST STREAM \
+                 and RFC 4217's explicit FTPS. Not implemented: implicit FTPS (port 990), \
+                 CCC, block and compressed modes, TYPE E, a TLS-only mode that refuses USER \
+                 before AUTH. A binary upload reaches the handler as hex up to \
+                 max_hex_upload_bytes and as its size beyond. No storage: the handler supplies \
+                 every listing and file.",
             )
             .max_inbound_bytes(crate::server::ftp::MAX_COMMAND_LINE)
             .history(crate::protocol::metadata::HistoryMode::Last(
@@ -452,7 +510,22 @@ impl Server for FtpProtocol {
                 secs("data_connect_timeout_secs")?,
                 secs("data_idle_timeout_secs")?,
                 secs("max_upload_bytes")?,
+                secs("max_hex_upload_bytes")?,
             );
+            let path = |name: &str| -> anyhow::Result<Option<String>> {
+                Ok(ctx
+                    .startup_params
+                    .as_ref()
+                    .map(|p| p.get_optional_string(name))
+                    .transpose()?
+                    .flatten())
+            };
+            // Loaded or generated now, so a bad cert_path fails the start rather than the
+            // first AUTH TLS.
+            let tls_config = crate::server::ftp::tls::server_config(
+                path("cert_path")?.as_deref(),
+                path("key_path")?.as_deref(),
+            )?;
 
             FtpServer::spawn_with_llm_actions(
                 listen_addr,
@@ -463,6 +536,7 @@ impl Server for FtpProtocol {
                 first_byte_timeout_secs,
                 idle_timeout_secs,
                 data_limits,
+                tls_config,
             )
             .await
         })
@@ -577,17 +651,31 @@ fn send_ftp_data_action() -> ActionDefinition {
         description: "Answer RETR with the file's contents. The server sends them on the data \
             connection the client opened with PASV/EPSV/PORT/EPRT, writing the 150 before and the \
             226 after itself - send no reply of your own beside it. In TYPE A (ascii) every line \
-            ending is sent as CRLF; in TYPE I (binary) the text's bytes go out unchanged. Use it \
-            only to answer RETR; to refuse, send send_ftp_response with 550 instead."
+            ending is sent as CRLF; in TYPE I (binary) the bytes go out unchanged. Always give \
+            the whole file: after REST (restart_offset in the event) the server skips that many \
+            bytes itself. Use it only to answer RETR; to refuse, send send_ftp_response with 550 \
+            instead."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "data".to_string(),
-            type_hint: "string".to_string(),
-            description: "The complete contents of the file, as text, exactly as the client \
-                should receive it. Nothing is appended"
-                .to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "data".to_string(),
+                type_hint: "string".to_string(),
+                description: "The complete contents of the file, exactly as the client should \
+                    receive it: the text itself, or with encoding \"hex\" two hex digits per \
+                    byte (\"00ff0d0a\") for a file that is not text. Nothing is appended"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "encoding".to_string(),
+                type_hint: "string".to_string(),
+                description: "\"utf8\" (default): 'data' is the file's text. \"hex\": 'data' is \
+                    the file's bytes in hex, for binary files (images, archives, anything not \
+                    UTF-8). Never base64"
+                    .to_string(),
+                required: false,
+            },
+        ],
         example: json!({
             "type": "send_ftp_data",
             "data": "Hello from FTP\n"
@@ -690,10 +778,10 @@ pub static FTP_COMMAND_EVENT: LazyLock<EventType> =
         "A client connected, or sent a command line on the FTP control connection. This is the \
          only FTP event: the connect case is signalled by the literal command \
          'CONNECTION_ESTABLISHED', for which you must reply with a 220 greeting before the client \
-         will send anything else. The server itself answers PASV, EPSV, PORT, EPRT, TYPE, MODE \
-         and STRU and runs the data connection: answer LIST/NLST/MLSD with send_ftp_list, RETR \
-         with send_ftp_data, and STOR/APPE (whose upload arrives in this event) with one \
-         completion reply.",
+         will send anything else. The server itself answers PASV, EPSV, PORT, EPRT, TYPE, MODE, \
+         STRU, REST, ABOR, AUTH, PBSZ and PROT and runs the data connection: answer \
+         LIST/NLST/MLSD with send_ftp_list, RETR with send_ftp_data, and STOR/APPE/STOU (whose \
+         upload arrives in this event) with one completion reply.",
         json!({"type": "send_ftp_response", "code": 220, "message": "FTP Server Ready"}),
     )
     .with_parameters(vec![Parameter {
@@ -718,33 +806,59 @@ pub static FTP_COMMAND_EVENT: LazyLock<EventType> =
     Parameter {
         name: "transfer_type".to_string(),
         type_hint: "string".to_string(),
-        description: "On LIST, NLST, MLSD, RETR, STOR and APPE only: the representation type \
-            the client set with TYPE, \"ascii\" or \"binary\". The server answers PASV, EPSV, \
-            PORT, EPRT, TYPE, MODE and STRU itself, so those never reach you"
+        description: "On LIST, NLST, MLSD, RETR, STOR, APPE and STOU only: the representation \
+            type the client set with TYPE, \"ascii\" or \"binary\". The server answers PASV, \
+            EPSV, PORT, EPRT, TYPE, MODE, STRU, REST, ABOR, AUTH, PBSZ and PROT itself, so those \
+            never reach you"
             .to_string(),
         required: false,
     },
     Parameter {
         name: "upload_bytes".to_string(),
         type_hint: "number".to_string(),
-        description: "On STOR and APPE only: the size of the file the client uploaded, after \
-            ASCII line-ending conversion in TYPE A"
+        description: "On STOR, APPE and STOU only: the size of the file the client uploaded, \
+            after ASCII line-ending conversion in TYPE A"
             .to_string(),
         required: false,
     },
     Parameter {
         name: "upload_text".to_string(),
         type_hint: "string".to_string(),
-        description: "On STOR and APPE only: the uploaded file's contents, present when they \
-            are valid UTF-8 text (upload_is_text true). A binary upload is described by \
-            upload_bytes alone"
+        description: "On STOR, APPE and STOU only: the uploaded file's contents, present when \
+            they are valid UTF-8 text (upload_is_text true)"
             .to_string(),
         required: false,
     },
     Parameter {
         name: "upload_is_text".to_string(),
         type_hint: "boolean".to_string(),
-        description: "On STOR and APPE only: whether upload_text carries the contents"
+        description: "On STOR, APPE and STOU only: whether upload_text carries the contents"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "upload_hex".to_string(),
+        type_hint: "string".to_string(),
+        description: "On STOR, APPE and STOU only, when the upload is not UTF-8 text: its bytes \
+            as hex, two lowercase digits per byte. Absent when the upload is larger than the \
+            server's max_hex_upload_bytes; upload_bytes alone describes it then"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "restart_offset".to_string(),
+        type_hint: "number".to_string(),
+        description: "On RETR and STOR after REST only: the byte offset the client restarts at. \
+            For RETR still give the whole file - the server skips that many bytes. For STOR the \
+            upload is the file from that byte on"
+            .to_string(),
+        required: false,
+    },
+    Parameter {
+        name: "unique_name".to_string(),
+        type_hint: "string".to_string(),
+        description: "On STOU only: the name the server chose for the file and told the client \
+            in its 150 reply. Name it in your 226"
             .to_string(),
         required: false,
     }])
@@ -801,8 +915,9 @@ pub fn answer_with_for_command(command: &str) -> Option<&'static str> {
         "NOOP" => "one 200 reply",
         "QUIT" => "one 221 reply, then the server closes",
         "FEAT" => {
-            "a multi-line 211 reply listing features (this server implements EPSV, PASV, EPRT \
-             and MLST type*;size*;modify*;), or 502 if there are none"
+            "a multi-line 211 reply listing features (this server implements EPSV, EPRT, \
+             REST STREAM, SIZE, MDTM, AUTH TLS, PBSZ, PROT and MLST type*;size*;modify*;), or \
+             502 if there are none"
         }
         "LIST" => {
             "send_ftp_list with one `ls -l` line per entry; the server opens the data connection \
@@ -824,13 +939,15 @@ pub fn answer_with_for_command(command: &str) -> Option<&'static str> {
              exist"
         }
         "STOR" | "APPE" => {
-            "the upload has been received in full (upload_bytes, upload_text): one 226 reply to \
-             confirm it, or 451/552 to refuse it"
+            "the upload has been received in full (upload_bytes, and upload_text or \
+             upload_hex): one 226 reply to confirm it, or 451/552 to refuse it"
+        }
+        "STOU" => {
+            "the upload has been received in full and the client told it is named unique_name: \
+             one 226 reply naming that file, or 451/552 to refuse it"
         }
         "SIZE" => "one 213 reply whose message is the file's size in bytes, or 550",
         "MDTM" => "one 213 reply whose message is the modification time as YYYYMMDDHHMMSS, or 550",
-        "REST" | "STOU" => "one 502 reply: this server does not implement it",
-        "ABOR" => "one 225 reply: no transfer is in progress",
         _ => return None,
     })
 }

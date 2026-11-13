@@ -21,11 +21,18 @@ use tracing::{debug, info};
 /// a startup, not a hang.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Detected once per process. The answer is a property of the MACHINE, not of an `AppState`.
+/// Detected once per process, on first use. The answer is a property of the MACHINE, not of
+/// an `AppState`.
 ///
 /// `AppState::new()` used to run all four probes, and every test and every server creation
 /// calls it — so a 100-thread suite spawned four hundred subprocesses to learn the same four
-/// facts, and any one of them hanging stalled everything behind it.
+/// facts, and any one of them hanging stalled everything behind it. Caching made it once per
+/// process; it is also lazy now, because once per process was still once per `netget --mcp`
+/// start, ahead of the `initialize` answer: `node --version` alone takes 130–280 ms on a
+/// developer machine, and most MCP sessions never run a script or build a prompt that lists
+/// the runtimes. [`crate::state::app_state::AppState::get_scripting_env`] probes on the first
+/// request that needs the answer — a prompt listing the runtimes, a script handler, a
+/// `--env <runtime>` check — and every later one reads the cache.
 static DETECTED: OnceLock<ScriptingEnvironment> = OnceLock::new();
 
 /// Information about available scripting environments
@@ -53,6 +60,30 @@ impl ScriptingEnvironment {
     /// each time for an answer that cannot have changed.
     pub fn detect() -> Self {
         DETECTED.get_or_init(Self::detect_uncached).clone()
+    }
+
+    /// Whether this process has probed the runtimes yet. Startup must not (see `DETECTED`).
+    pub fn is_detected() -> bool {
+        DETECTED.get().is_some()
+    }
+
+    /// [`Self::detect`] from async code: the first call probes on a blocking thread (the probes
+    /// wait on child processes for up to `PROBE_TIMEOUT` each), later calls read the cache.
+    pub async fn detect_async() -> Self {
+        if let Some(env) = DETECTED.get() {
+            return env.clone();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match tokio::task::spawn_blocking(Self::detect).await {
+                Ok(env) => env,
+                Err(_) => Self::detect(),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::detect()
+        }
     }
 
     /// Run the probes. Public for the one caller that genuinely wants to re-probe.

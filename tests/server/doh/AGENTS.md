@@ -22,6 +22,7 @@ without validation.
 | `e2e_test.rs` | reqwest 0.12 + hickory-proto | GET and POST, the 200 status and `Content-Type`, a mixed-case media type with a parameter, id and question echoed; `server_advertises_h2_alpn` checks the TLS config offers `h2` and the shared default stays ALPN-less |
 | `bounds_test.rs` | rustls + h2 + hickory-proto, Python script handler | every bound past the cap and the idle bound, and every answer outcome; see below |
 | `connection_bounds_test.rs` | rustls + h2 | the 256-connection cap from both sides; the idle bound on a peer that never sends the preface and on an answered connection gone quiet; a query parked for a human keeps its connection |
+| `padding_test.rs` | rustls + h2; **kdig** `+https` and **dig** `+https +padding` | EDNS(0) Padding over POST: a padded query's answer and SERVFAIL are 468-octet multiples, a 65 526-octet answer goes out unpadded, an unpadded query gets no pad; kdig and dig read padded replies, `kdig +nopadding` an unpadded one |
 | `llm_failure_test.rs` | reqwest, mock model with no rule for the query | SERVFAIL in a 200, id and question echoed |
 
 **The maturity evidence is `real_client_test.rs`.** Both tests **fail** when their binary is
