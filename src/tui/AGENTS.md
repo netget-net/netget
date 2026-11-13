@@ -134,7 +134,7 @@ the list badge, the inspector overview, the feed, and the status bar.
 | `keymap.rs` | global keys, focus cycling, per-pane keys, mouse |
 | `modal_keys.rs` | input handling for every modal |
 | `hit.rs` | per-frame hit-test registry for the mouse |
-| `render/` | one file per pane plus `overlay.rs` for modals; the form, the composer and the routing draft draw through its `draw_scrolled` (pre-wrapped rows scrolled to the selection, "↑↓ more fields" on the box's edge, the error pinned above the buttons) |
+| `render/` | one file per pane plus `overlay.rs` for modals; every modal whose body can outgrow its box draws through its `draw_scrolled` (see "Modals that outgrow their box") |
 | `modal/` | forms, composer, routing editor, intercept answer, picker, help, wireshark |
 | `wrap.rs` | word wrapping in terminal cells, one row per piece — the stream, card errors, the empty state, form help |
 | `wireshark.rs` | protocol → dissector/capture-filter table; leads with `wireshark -r <file>` when NetGet is writing the instance's own pcap (`ServerRow::capture` / `ClientRow::capture`, from `src/capture/`) and otherwise says how to turn that on |
@@ -153,6 +153,35 @@ in the stack — closing it on success and leaving it open showing the error on 
 no modal holds (`c` connecting a client, a protocol started on defaults from the picker, a
 modal closed meanwhile) goes to the stream, so it can never close or annotate a form opened for
 something else while it was in flight.
+
+## Modals that outgrow their box
+
+At 80×24 almost every modal can hold more than fits, so every one whose body can grow draws
+through `render/overlay.rs`'s `draw_scrolled`: the body as pre-wrapped rows (`wrap.rs`, so
+the row count is known), scrolled to a `View`; "↑↓ more fields / rules / lines" on the box's
+top edge when rows are out of view; the error pinned above the buttons, wrapped whole, at
+most half of the space; and the buttons at the foot, flowing onto a second row when they do
+not fit one (the routing table's seven do not at 80 columns, and a button Tab can focus must
+be drawn), none for a read-only modal. Each modal's hint on the bottom edge is short enough
+to fit its box at 80 columns, so `Esc …` is never what gets cut.
+
+- **Following a focus** (`View::Selection`): the create/edit form, the composer, the routing
+  draft, and the routing table, which keeps its selected rule in view even while a button
+  has focus and keeps its fallback note pinned under the buttons.
+- **Read by scrolling** (`View::From`): the answer (intercept) modal, help, the Wireshark
+  recipe, the request detail, the instance detail and the web-search approval. ↑/↓,
+  PageUp/PageDown and the wheel move the view (`Modal::scroll_by`); the renderer clamps it
+  to the body and stores the clamped value (`Modal::settle_scroll`), so scrolling past the
+  end never shows an empty box and one ↑ from there moves at once. In the answer modal
+  ↑/↓ scroll and Tab / ←/→ walk the three buttons; its event and deadline are pinned above
+  the body, so no payload can push the time left out of view, and the payload is bounded at
+  `INTERCEPT_PAYLOAD_ROWS` rows to bound the work of a frame on a huge event.
+
+The protocol picker keeps its own window over the list (the selection stays in it) and a
+fixed detail pane that leads with the port and any "will refuse to start" warning, so a long
+description cannot push the warning out; the stream and the cards scroll themselves. A new modal with a body that
+can grow should build a `ScrolledBody` rather than hand ratatui's `Wrap` a paragraph, which
+cannot say how many rows it produced and so can neither scroll to nor say what it cut.
 
 ## Peer text is made terminal-safe at ingestion, not per renderer
 
@@ -192,8 +221,11 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   errored server, a client with verbs), every tab for both kinds at the minimum size, and
   what the selection does when its instance vanishes; and what must never be cut at 80×24 —
   a failure in the stream, an instance's error, the empty state's guidance, the selected
-  field and the error of a create form, a composer verb or a routing draft longer than the
-  box, a parked request's time left,
+  field and the error of a create form, a composer verb, a routing draft or a routing table
+  longer than the box, an answer modal's deadline, buttons and error over a payload taller
+  than the screen (and the end of that payload, scrolled to), help, the Wireshark recipe and
+  a request's detail saying there is more and stopping at their last row, a parked request's
+  time left,
   the no-model warning on an LLM driver. **Start here for any layout change**;
   `--nocapture` prints the frames.
 - `tests/dashboard_rail_test.rs` — the summary line, driver detection/rebuild, and the
@@ -236,6 +268,13 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   a parked request shows its time left on the card and in the answer modal; an LLM driver
   with no model selected says its events fail closed; the help's stream section describes
   the one stream rather than two panes.
+- 2026-11-13: the routing table, the answer modal, help, the Wireshark recipe and the detail
+  views scroll through `draw_scrolled` like the form, composer and draft; the answer modal
+  pins its event and deadline, scrolls its payload with ↑/↓ (Tab / ←/→ walk the buttons) and
+  shows all of it rather than its first 20 lines. Modal buttons flow onto a second row (the
+  routing table's `[ Save ]` and `[ Cancel ]` were never drawn at 80 columns); the picker's
+  detail pane puts the privilege warning above the description; three hints that lost their
+  `Esc …` at 80 columns are shorter; help's longest key keeps a space before its text.
 
 ## Next steps
 
@@ -246,7 +285,4 @@ writes to stderr with ANSI on — route peer text through `Log` rather than `tra
   or `mv` once the difference is the one intended. Every dashboard pty test waits on
   the text its last key must paint through one `PtyScreen`; never add a fixed sleep.
 - Candidates not done: fold-all / unfold-all keys once many cards are open; per-peer
-  throughput; an `[ answer all ]` shortcut when several requests are parked. The routing
-  table (not its draft) and the intercept modal still render through ratatui's `Wrap` with no
-  scroll; past a screenful of rules or payload they clip, and `draw_scrolled` is the shape to
-  move them to.
+  throughput; an `[ answer all ]` shortcut when several requests are parked.
