@@ -1756,10 +1756,10 @@ fn every_scrolled_modal_says_there_is_more_and_stops_at_its_last_row() {
     }
 }
 
-/// The picker at 80×24 on the protocol that will refuse to start here and has
-/// the longest description: the selected entry is in the list's window, and
-/// the fixed-height detail pane shows the warning however long the
-/// description is.
+/// The picker at 80×24 with the selection near the foot of the whole list, on
+/// a protocol that will refuse to start here and has a long description: the
+/// selected entry is in the list's window, and the fixed-height detail pane
+/// shows the warning however long the description is.
 #[test]
 fn the_picker_at_80_columns_keeps_the_selection_and_its_warning_in_view() {
     use netget::tui::modal::protocol_picker;
@@ -1770,14 +1770,17 @@ fn the_picker_at_80_columns_keeps_the_selection_and_its_warning_in_view() {
     caps.has_raw_socket_access = false;
     caps.has_packet_capture_access = false;
     caps.is_root = false;
-    let entries = protocol_picker::all_entries(&caps);
-    let (index, entry) = entries
+    let mut entries = protocol_picker::all_entries(&caps);
+    let index = entries
         .iter()
-        .enumerate()
-        .filter(|(_, e)| e.privilege_note.is_some())
-        .max_by_key(|(_, e)| e.description.len())
+        .rposition(|e| e.privilege_note.is_some())
         .expect("some protocol needs a privilege this process lacks");
-    let name = entry.name.clone();
+    let name = entries[index].name.clone();
+    // A description as long as a protocol's notes: four rows of the pane.
+    entries[index].description = "A server whose description runs on: it names the RFCs it \
+        follows, the transports it binds, the clients it was measured against and what it \
+        leaves out, which is more than the detail pane under the list has rows for."
+        .into();
     let mut app = app();
     app.absorb_snapshot(RailSnapshot::default());
     app.modals.push(Modal::ProtocolPicker {
