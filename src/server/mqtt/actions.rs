@@ -38,25 +38,64 @@ use tracing::warn;
 /// This is a directory of *live sockets*, not storage: nothing is retained after a
 /// client disconnects, and no message, subscription, topic or retained value is ever
 /// held here. It exists so the model can name a recipient for `mqtt_publish`.
-type Directory = HashMap<(u32, String), (crate::utils::outbox::OutboxSender<Vec<u8>>, bool)>;
+///
+/// Each entry also names the connection that registered it and the listener that accepted it
+/// ([`DirectoryOwner`]), so a client id taken over by a newer connection is not removed when the
+/// older one ends, and a takeover only ever closes a connection of the same running server.
+type Directory = HashMap<
+    (u32, String),
+    (
+        crate::utils::outbox::OutboxSender<Vec<u8>>,
+        bool,
+        DirectoryOwner,
+    ),
+>;
+
+/// Who registered a directory entry: the server instance (a process-wide number allocated when
+/// the listener starts — server ids are only unique within one `AppState`) and the connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectoryOwner {
+    pub instance: u64,
+    pub connection: u32,
+}
 static MQTT_CLIENTS: LazyLock<Mutex<Directory>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Record a connected client's writer so actions can address it by client id.
+/// A connection the directory no longer names: a newer one registered its client id.
+pub struct TakenOver {
+    /// The older connection's writer, to tell it and end it.
+    pub tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
+    /// Whether the older connection speaks v5 (it is sent DISCONNECT 0x8E first).
+    pub v5: bool,
+    pub owner: DirectoryOwner,
+}
+
+/// Record an accepted client's writer so actions can address it by client id. A client id
+/// already registered by another connection is taken over (3.1.4-2 / 5.0 §3.1.4): the older
+/// connection is returned for the caller to disconnect.
 pub fn register_client(
     server_id: ServerId,
     client_id: &str,
     tx: crate::utils::outbox::OutboxSender<Vec<u8>>,
     v5: bool,
-) {
-    if let Ok(mut map) = MQTT_CLIENTS.lock() {
-        map.insert((server_id.as_u32(), client_id.to_string()), (tx, v5));
-    }
+    owner: DirectoryOwner,
+) -> Option<TakenOver> {
+    let mut map = MQTT_CLIENTS.lock().ok()?;
+    map.insert((server_id.as_u32(), client_id.to_string()), (tx, v5, owner))
+        .filter(|(_, _, old)| old.instance == owner.instance && old.connection != owner.connection)
+        .map(|(tx, v5, owner)| TakenOver { tx, v5, owner })
 }
 
-/// Drop a client from the directory when its connection ends.
-pub fn unregister_client(server_id: ServerId, client_id: &str) {
+/// Drop a client from the directory when its connection ends — unless a newer connection has
+/// taken its client id over, whose entry stays.
+pub fn unregister_client(server_id: ServerId, client_id: &str, owner: DirectoryOwner) {
     if let Ok(mut map) = MQTT_CLIENTS.lock() {
-        map.remove(&(server_id.as_u32(), client_id.to_string()));
+        let key = (server_id.as_u32(), client_id.to_string());
+        if map
+            .get(&key)
+            .is_some_and(|(_, _, registered)| *registered == owner)
+        {
+            map.remove(&key);
+        }
     }
 }
 
@@ -82,7 +121,7 @@ fn deliver(server_id: u32, client_id: &str, message: &OutPublish) -> Vec<(String
         return Vec::new();
     };
     let mut delivered = Vec::new();
-    for ((sid, cid), (tx, v5)) in map.iter() {
+    for ((sid, cid), (tx, v5, _)) in map.iter() {
         if *sid != server_id {
             continue;
         }
@@ -785,8 +824,10 @@ impl Protocol for MqttProtocol {
             name: "max_packet_size".to_string(),
             type_hint: "integer".to_string(),
             description:
-                "Largest MQTT control packet accepted from a client, in bytes (default 262144, \
-                 maximum 16777216). Connections sending a larger packet are closed."
+                "Largest MQTT control packet accepted from a client, in bytes, fixed header \
+                 included (default 262144, minimum 64, maximum 16777216). A v5 CONNACK \
+                 advertises it as the Maximum Packet Size. Connections sending a larger packet \
+                 are closed (v5: DISCONNECT 0x95 first)."
                     .to_string(),
             required: false,
             example: json!(262144),
@@ -860,7 +901,7 @@ impl Protocol for MqttProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             .well_known_port(1883)
             .implementation(
                 "Hand-written MQTT 3.1.1 and 5.0 control-packet codec (no broker crate); the \
@@ -871,30 +912,28 @@ impl Protocol for MqttProtocol {
                  and broker-originated PUBLISH to any named connected client",
             )
             .e2e_testing(
-                "TWO independent clients, neither #[ignore]d and neither able to skip. \
-                 (1) rumqttc, in test_mqtt_basic_connect (CONNECT/CONNACK) and \
-                 test_mqtt_subscribe_and_receive_a_published_message, where it completes \
-                 CONNECT -> SUBSCRIBE -> SUBACK -> PUBLISH and receives the broker's own \
-                 PUBLISH back on the same connection, topic and payload asserted. \
-                 (2) Eclipse Mosquitto's C clients, in \
-                 tests/server/mqtt/real_client_test.rs::\
-                 test_mqtt_pubsub_session_against_mosquitto_clients, which FAILS rather than \
-                 skips when mosquitto is absent: mosquitto_sub subscribes, mosquitto_pub \
-                 publishes on a second connection, and the broker-originated PUBLISH is routed \
-                 to the subscriber by client id, with mosquitto_sub's own '-v' output -- topic \
-                 AND payload, printed only after libmosquitto parsed the packet -- asserted. \
-                 MQTT 5.0 has its own two: tests/server/mqtt/v5_real_client_test.rs drives \
-                 mosquitto_sub/mosquitto_pub at -V 5 (Content Type, Response Topic, \
-                 Correlation Data, User Property and Message Expiry forwarded and printed by \
-                 libmosquitto; CONNACK and SUBACK 0x87 reported by it) and Eclipse Paho's \
-                 Python client at MQTTv5 (Assigned Client Identifier, mixed SUBACK [1, 0x87] \
-                 with Reason String, binary Correlation Data echoed byte for byte, Topic Alias, \
-                 PUBACK 0x87, UNSUBACK 0x11, server DISCONNECT 0x98) - both fail rather than \
-                 skip; v5_wire_test.rs pins the bytes and runs the pcap oracle over them. \
-                 UNPROVEN: TLS/8883, WebSocket transport, QoS 1 and 2 flows \
-                 end to end, retained messages, wildcard filter matching, last-will delivery, \
-                 session resume, and keep-alive reaping -- the broker implements no \
-                 subscription table, no retained store and no keep-alive timer. FUZZ: fuzz/fuzz_targets/mqtt_packet.rs drives take_packet and every packet parser (flat format; length-lie and 30 000-filter seeds).",
+                "STABLE, November 2026, on the six conditions; see 'Maturity: the six \
+                 conditions' in src/server/mqtt/AGENTS.md. (1) Independent clients, none \
+                 #[ignore]d and none able to skip: Eclipse Mosquitto's C clients at 3.1.1 \
+                 (real_client_test.rs: a two-connection pub/sub session routed by client id; \
+                 qos_real_client_test.rs: QoS 1 and 2 PUBLISH in and forwarded out at the same \
+                 QoS, PINGREQ, UNSUBSCRIBE) and at v5 (v5_real_client_test.rs: properties \
+                 forwarded and printed, CONNACK and SUBACK 0x87); rumqttc (e2e_test.rs and \
+                 qos_real_client_test.rs: CONNECT, SUBSCRIBE, QoS 1 and 2 both ways, the \
+                 broker's PUBREL, UNSUBSCRIBE, PINGREQ, DISCONNECT); Eclipse Paho's Python \
+                 client at v5 (Assigned Client Identifier, mixed SUBACK, binary Correlation \
+                 Data, Topic Alias, PUBACK 0x87, UNSUBACK 0x11, server DISCONNECT 0x98). (2) PCAP \
+                 ORACLE: v5_wire_test.rs and llm_failure_test.rs over hand-built packets, and \
+                 qos_real_client_test.rs over the recorded Mosquitto and rumqttc sessions. (3) \
+                 FUZZ: fuzz/fuzz_targets/mqtt_packet.rs drives take_packet and every packet \
+                 parser (flat format; remaining-length, property-length and string-length lies, \
+                 a 30 000-filter SUBSCRIBE). (4) BOUNDS: protocol_rules_test.rs (max_packet_size \
+                 as the whole packet, its floor and ceiling, the varint, the client's Maximum \
+                 Packet Size), connection_bounds_test.rs (cap, connect, keep-alive and idle \
+                 bounds), v5_wire_test.rs (Topic Alias Maximum), v5_property_limits_test.rs \
+                 (User Properties), slow_reader_test.rs (outbox), each verified by removal. (6) \
+                 No #[ignore] and no skip gate. UNPROVEN: TLS/8883 and WebSocket transport (not \
+                 implemented), enhanced authentication (not implemented).",
             )
             .notes(
                 "MQTT 3.1.1 and 5.0 (no TLS, no WebSocket). On a v5 connection every \
@@ -902,9 +941,14 @@ impl Protocol for MqttProtocol {
                  events carry the decoded properties (binary Correlation Data as text or hex), \
                  the CONNACK advertises Maximum Packet Size and Topic Alias Maximum 16 and \
                  assigns an id to a client that sent none, Topic Aliases are resolved, and \
-                 protocol errors end with a DISCONNECT naming the reason. Enhanced \
-                 authentication (AUTH) and session state are not implemented. PINGREQ/PINGRESP and \
-                 PUBREL/PUBCOMP are answered by the broker without a model call. There is no \
+                 protocol errors end with a DISCONNECT naming the reason. The codec enforces the \
+                 specification's MUSTs on what a client sends (first packet CONNECT, protocol \
+                 level, non-zero packet ids, well-formed UTF-8, no wildcards in a topic name, \
+                 valid topic filters, fixed-header flags) and closes on a violation; an accepted \
+                 CONNECT for a client id another connection holds closes the older one (v5: \
+                 DISCONNECT 0x8E). Enhanced authentication (AUTH) and session state are not \
+                 implemented. PINGREQ/PINGRESP, PUBREL/PUBCOMP and, for the broker's own QoS 2 \
+                 PUBLISH, PUBREC/PUBREL are answered without a model call. There is no \
                  subscription table or retained-message store: the model tracks subscriptions \
                  in its memory and names recipients explicitly in mqtt_publish, so nothing is \
                  delivered automatically on publish. Non-UTF-8 payloads reach the model as a \

@@ -1114,7 +1114,7 @@ jobs:
             kafka::real_client_test kubernetes::e2e_test ldap::real_client_test \
             maven::e2e_test \
             memcached::real_client_test modbus::real_client_test \
-            mongodb::real_client_test mqtt::real_client_test \
+            mongodb::real_client_test mqtt::real_client_test mqtt::qos_real_client_test \
             mercurial::real_client_test mysql::real_client_test npm::e2e_test nut::real_client_test \
             oci_registry::e2e_test ollama::real_client_test openvpn:: \
             postgresql::real_client_test \

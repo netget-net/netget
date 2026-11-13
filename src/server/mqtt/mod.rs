@@ -150,7 +150,12 @@ pub struct MqttBounds {
     pub connect: Duration,
     /// After CONNECT, for a client that declared Keep Alive 0.
     pub idle_without_keep_alive: Duration,
+    /// This listener's process-wide number, for the client directory (`actions::DirectoryOwner`).
+    pub instance: u64,
 }
+
+/// Allocates [`MqttBounds::instance`].
+static NEXT_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// The silence a session is allowed once CONNECT has been accepted.
 ///
@@ -211,6 +216,7 @@ impl MqttServer {
         let bounds = MqttBounds {
             connect: secs("first_byte_timeout_secs")?.unwrap_or(CONNECT_TIMEOUT),
             idle_without_keep_alive: secs("idle_timeout_secs")?.unwrap_or(IDLE_WITHOUT_KEEP_ALIVE),
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
 
         let listener = TcpListener::bind(listen_addr).await?;
@@ -310,6 +316,8 @@ struct Session {
     /// v5 Topic Aliases the client has defined on this connection (§3.3.2.3.4), bounded by
     /// [`TOPIC_ALIAS_MAX`].
     aliases: std::collections::HashMap<u16, String>,
+    /// This connection in the client directory.
+    owner: Option<actions::DirectoryOwner>,
 }
 
 impl Session {
@@ -342,6 +350,9 @@ async fn handle_mqtt_connection(
 
     // Taken before the split: cutting off a peer that does not read ends its connection.
     let closer = crate::utils::outbox::ConnectionCloser::for_stream(&socket);
+    // And a second, for the writer: a connection whose client id a newer connection took over
+    // is sent an empty frame, after which the writer ends the socket in both directions.
+    let takeover_closer = crate::utils::outbox::ConnectionCloser::for_stream(&socket);
     let (mut read_half, write_half) = tokio::io::split(socket);
 
     // The write half is shared between the channel-draining writer task and the peer
@@ -374,6 +385,12 @@ async fn handle_mqtt_connection(
         // slot is still held by the writer's own Arc until it really ends.
         let _permit = writer_permit;
         while let Some(bytes) = out_rx.recv().await {
+            if bytes.is_empty() {
+                // `TAKEN_OVER`: everything queued before it (a v5 DISCONNECT 0x8E) is written;
+                // now the socket goes, so the read loop reads EOF and stops dispatching.
+                takeover_closer.shutdown();
+                break;
+            }
             let n = bytes.len();
             let limit = writer_client_max.load(std::sync::atomic::Ordering::SeqCst) as usize;
             if limit > 0 && n > limit {
@@ -457,7 +474,13 @@ async fn handle_mqtt_connection(
         status_tx.clone(),
     );
 
-    let mut session = Session::default();
+    let mut session = Session {
+        owner: Some(actions::DirectoryOwner {
+            instance: bounds.instance,
+            connection: connection_id.as_u32(),
+        }),
+        ..Session::default()
+    };
     let mut buffer: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = vec![0u8; 4096];
 
@@ -527,7 +550,7 @@ async fn handle_mqtt_connection(
                         &app_state,
                         server_id,
                         connection_id,
-                        &session.client_id,
+                        &session,
                         &status_tx,
                     )
                     .await;
@@ -579,7 +602,7 @@ async fn handle_mqtt_connection(
                         &app_state,
                         server_id,
                         connection_id,
-                        &session.client_id,
+                        &session,
                         &status_tx,
                     )
                     .await;
@@ -611,7 +634,7 @@ async fn handle_mqtt_connection(
                     &app_state,
                     server_id,
                     connection_id,
-                    &session.client_id,
+                    &session,
                     &status_tx,
                 )
                 .await;
@@ -637,7 +660,7 @@ async fn handle_mqtt_connection(
         &app_state,
         server_id,
         connection_id,
-        &session.client_id,
+        &session,
         &status_tx,
     )
     .await;
@@ -665,7 +688,7 @@ async fn finish_connection(
     app_state: &Arc<AppState>,
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
-    client_id: &Option<String>,
+    session: &Session,
     status_tx: &mpsc::UnboundedSender<String>,
 ) {
     // Drop the peer handle first: the peer command task holds an Arc<MqttProtocol>, which
@@ -674,7 +697,7 @@ async fn finish_connection(
     app_state
         .remove_peer_handle(server_id, connection_id.as_u32())
         .await;
-    cleanup(app_state, server_id, connection_id, client_id, status_tx).await;
+    cleanup(app_state, server_id, connection_id, session, status_tx).await;
     drop(protocol);
     drop(out_tx);
     if tokio::time::timeout(std::time::Duration::from_secs(5), writer_handle)
@@ -692,11 +715,11 @@ async fn cleanup(
     app_state: &AppState,
     server_id: crate::state::ServerId,
     connection_id: ConnectionId,
-    client_id: &Option<String>,
+    session: &Session,
     status_tx: &mpsc::UnboundedSender<String>,
 ) {
-    if let Some(id) = client_id {
-        actions::unregister_client(server_id, id);
+    if let (Some(id), Some(owner)) = (&session.client_id, session.owner) {
+        actions::unregister_client(server_id, id, owner);
     }
     app_state
         .update_connection_status(server_id, connection_id, ConnectionStatus::Closed)
@@ -719,6 +742,30 @@ async fn dispatch_packet(
     protocol: Arc<MqttProtocol>,
     out_tx: &crate::utils::outbox::OutboxSender<Vec<u8>>,
 ) -> bool {
+    // [MQTT-3.1.0-1]: the first packet on a connection MUST be CONNECT; anything else closes it.
+    if packet.packet_type != PKT_CONNECT && session.client_id.is_none() {
+        Log::new(Some(&status_tx)).warn(format!(
+            "MQTT packet type {} before CONNECT decision=protocol_error, closing",
+            packet.packet_type
+        ));
+        return false;
+    }
+    // The fixed header's flags are fixed for every type but PUBLISH (3.1.1 §2.2.2, 5.0
+    // §2.1.3): 0010 for PUBREL, SUBSCRIBE and UNSUBSCRIBE, 0000 for the rest. Anything else is
+    // a malformed packet and the connection is closed.
+    let required_flags = match packet.packet_type {
+        PKT_PUBLISH => None,
+        PKT_PUBREL | PKT_SUBSCRIBE | PKT_UNSUBSCRIBE => Some(0x02),
+        _ => Some(0x00),
+    };
+    if required_flags.is_some_and(|f| f != packet.flags) {
+        Log::new(Some(&status_tx)).warn(format!(
+            "MQTT packet type {} with reserved flags {:#06b} decision=protocol_error, closing",
+            packet.packet_type, packet.flags
+        ));
+        session.refuse(out_tx, 0x81);
+        return false;
+    }
     match packet.packet_type {
         PKT_CONNECT => {
             let connect = match parse_connect(&packet.body) {
@@ -728,8 +775,11 @@ async fn dispatch_packet(
                         "MQTT malformed CONNECT from client decision=protocol_error, closing: {e}"
                     ));
                     // A v5 client is told why in its own framing (§3.2.2.2: 0x81 Malformed
-                    // Packet / 0x82 Protocol Error); a 3.1.1 CONNACK has no code for it.
-                    if let Some(code) = e.v5_connack_code() {
+                    // Packet / 0x82 Protocol Error); a 3.1.1 CONNACK has no code for it, except
+                    // for a protocol level it does not speak: return code 1.
+                    if e.reason_code() == 0x84 {
+                        let _ = out_tx.send(build_connack(1, false));
+                    } else if let Some(code) = e.v5_connack_code() {
                         let _ =
                             out_tx.send(build_connack_v5(code, false, &v5::PropertyWriter::new()));
                     }
@@ -752,6 +802,17 @@ async fn dispatch_packet(
             let wants_enhanced_auth =
                 session.v5 && connect.properties.text(v5::AUTHENTICATION_METHOD).is_some();
             let assigned = connect.client_id.is_empty();
+            if assigned && !session.v5 && !connect.clean_session {
+                // [MQTT-3.1.3-8]: a zero-byte ClientId with CleanSession 0 is refused with
+                // CONNACK 0x02, Identifier rejected, and the connection closed. (v5 assigns
+                // one either way.)
+                Log::new(Some(&status_tx)).warn(
+                    "MQTT CONNECT with an empty client id and clean session 0 \
+                     decision=protocol_error, refusing with CONNACK 2",
+                );
+                let _ = out_tx.send(build_connack(2, false));
+                return false;
+            }
             let effective_id = if assigned {
                 format!("anon-{}", connection_id.as_u32())
             } else {
@@ -774,7 +835,6 @@ async fn dispatch_packet(
                     .u16(v5::TOPIC_ALIAS_MAXIMUM, TOPIC_ALIAS_MAX);
                 protocol.set_connack_properties(auto);
             }
-            actions::register_client(server_id, &effective_id, out_tx.clone(), session.v5);
             protocol.set_client_id(&effective_id);
 
             app_state
@@ -834,7 +894,7 @@ async fn dispatch_packet(
             )
             .await;
 
-            match outcome {
+            let accepted = match outcome {
                 LlmOutcome::Closed => false,
                 // A refusing CONNACK ends the connection on the server's side too: 3.1.1
                 // §3.2.2.3 and 5.0 §3.2.2.2 both say the server MUST close after one.
@@ -910,7 +970,37 @@ async fn dispatch_packet(
                     });
                     false
                 }
+            };
+            if accepted {
+                // Only an accepted client is addressable, and only an accepted CONNECT takes a
+                // client id over: a refused one must not be able to disconnect the client
+                // whose id it named.
+                let owner = session.owner.unwrap_or(actions::DirectoryOwner {
+                    instance: 0,
+                    connection: connection_id.as_u32(),
+                });
+                if let Some(old) = actions::register_client(
+                    server_id,
+                    &effective_id,
+                    out_tx.clone(),
+                    session.v5,
+                    owner,
+                ) {
+                    Log::new(Some(&status_tx)).info(format!(
+                        "MQTT client id '{}' taken over by connection {}; closing connection {} \
+                         decision=session_taken_over",
+                        effective_id, connection_id, old.owner.connection
+                    ));
+                    if old.v5 {
+                        // 5.0 §3.1.4: DISCONNECT with 0x8E Session taken over, then close.
+                        let _ = old
+                            .tx
+                            .send(build_disconnect_v5(0x8E, &v5::PropertyWriter::new()));
+                    }
+                    let _ = old.tx.send(Vec::new());
+                }
             }
+            accepted
         }
 
         PKT_PUBLISH => {
@@ -1252,11 +1342,33 @@ async fn dispatch_packet(
             false
         }
 
-        other => {
-            // PUBACK/PUBREC/PUBCOMP/SUBACK from a client are acknowledgements of
-            // broker-initiated traffic; nothing further is owed on the wire.
-            trace!("MQTT ignoring inbound packet type {}", other);
+        PKT_PUBREC => {
+            // The client's half of a QoS 2 PUBLISH the broker sent it (§4.3.3): it is owed a
+            // PUBREL echoing the identifier, and answers that with PUBCOMP. Without it the
+            // client never completes the exchange — libmosquitto holds the message back from
+            // its application until the PUBREL arrives.
+            let packet_id = read_u16_at(&packet.body, 0).unwrap_or(0);
+            trace!("MQTT PUBREC id={} -> PUBREL", packet_id);
+            let _ = out_tx.send(build_ack(PKT_PUBREL, packet_id));
             true
+        }
+
+        PKT_PUBACK | PKT_PUBCOMP => {
+            // The end of a QoS 1 / QoS 2 PUBLISH the broker sent: nothing further is owed.
+            trace!("MQTT inbound acknowledgement type {}", packet.packet_type);
+            true
+        }
+
+        other => {
+            // CONNACK, SUBACK, UNSUBACK and PINGRESP only ever travel from a server, and AUTH
+            // does not exist in 3.1.1: from a client each is a protocol violation, and the
+            // connection is closed (3.1.1 §4.8, 5.0 §4.13).
+            Log::new(Some(&status_tx)).warn(format!(
+                "MQTT packet type {other} is not one a client sends decision=protocol_error, \
+                 closing"
+            ));
+            session.refuse(out_tx, 0x82);
+            false
         }
     }
 }
@@ -1373,12 +1485,23 @@ fn publish_event(
         } else {
             session.aliases.insert(alias, publish.topic.clone());
         }
-    } else if session.v5 && publish.topic.is_empty() {
+    } else if publish.topic.is_empty() {
+        // [MQTT-4.7.3-1]: a topic name is at least one character (v5: unless an alias
+        // stands for it, handled above).
         Log::new(Some(&status_tx)).warn(
             "MQTT PUBLISH with an empty topic and no topic alias \
                  decision=protocol_error, closing",
         );
         return Err(0x82);
+    }
+    if publish.topic.contains(['+', '#']) {
+        // [MQTT-3.3.2-2]: the Topic Name in a PUBLISH MUST NOT contain wildcard characters.
+        // v5 names the refusal 0x90 Topic Name invalid.
+        Log::new(Some(&status_tx)).warn(format!(
+            "MQTT PUBLISH to '{}', a topic name with a wildcard decision=protocol_error, closing",
+            publish.topic
+        ));
+        return Err(0x90);
     }
 
     let (payload, payload_is_text) = decode_payload(&publish.payload);
@@ -1749,18 +1872,21 @@ pub fn take_packet(
         }
     };
 
-    if remaining > max_packet_size {
+    // The whole packet, fixed header included: what a v5 CONNACK advertises as this server's
+    // Maximum Packet Size means exactly that (5.0 §3.2.2.3.6), and the one number serves 3.1.1
+    // too. Decided from the header, before anything is buffered for the body.
+    let total = 1 + len_bytes + remaining;
+    if total > max_packet_size {
         return Err(PacketError {
             reason: 0x95,
             message: format!(
                 "packet of {} bytes exceeds max_packet_size {}",
-                remaining, max_packet_size
+                total, max_packet_size
             ),
             v5_connect: false,
         });
     }
 
-    let total = 1 + len_bytes + remaining;
     if buffer.len() < total {
         return Ok(None);
     }
@@ -1797,14 +1923,43 @@ fn read_u16_at(buf: &[u8], pos: usize) -> Option<u16> {
     Some(u16::from_be_bytes([hi, lo]))
 }
 
-/// Read a length-prefixed UTF-8 string, advancing `pos`.
-fn read_string(buf: &[u8], pos: &mut usize) -> Option<String> {
-    let len = read_u16_at(buf, *pos)? as usize;
-    let start = pos.checked_add(2)?;
-    let end = start.checked_add(len)?;
-    let bytes = buf.get(start..end)?;
+/// Read a length-prefixed UTF-8 string, advancing `pos`. Ill-formed UTF-8 and U+0000 are
+/// refused, not repaired: [MQTT-1.5.3-1] and [MQTT-1.5.3-2] (5.0 §1.5.4) make a string that
+/// carries either a malformed packet the server MUST close the connection for.
+fn read_string(buf: &[u8], pos: &mut usize) -> std::result::Result<String, PacketError> {
+    let truncated = || PacketError::malformed("a string is truncated");
+    let len = read_u16_at(buf, *pos).ok_or_else(truncated)? as usize;
+    let start = pos.checked_add(2).ok_or_else(truncated)?;
+    let end = start.checked_add(len).ok_or_else(truncated)?;
+    let bytes = buf.get(start..end).ok_or_else(truncated)?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| PacketError::malformed("a string is not well-formed UTF-8"))?;
+    if text.contains('\0') {
+        return Err(PacketError::malformed("a string contains U+0000"));
+    }
     *pos = end;
-    Some(String::from_utf8_lossy(bytes).into_owned())
+    Ok(text.to_string())
+}
+
+/// [MQTT-4.7.1-1..3], [MQTT-4.7.3-1]: a topic filter is at least one character, `#` is alone
+/// in the last level, and `+` is alone in its level. v5 names the refusal 0x8F Topic Filter
+/// invalid.
+fn check_topic_filter(filter: &str) -> std::result::Result<(), PacketError> {
+    let levels: Vec<&str> = filter.split('/').collect();
+    let valid = !filter.is_empty()
+        && levels.iter().enumerate().all(|(i, level)| {
+            (!level.contains('#') || (*level == "#" && i == levels.len() - 1))
+                && (!level.contains('+') || *level == "+")
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(PacketError {
+            reason: 0x8F,
+            message: format!("invalid topic filter '{filter}'"),
+            v5_connect: false,
+        })
+    }
 }
 
 /// Read a length-prefixed binary field, advancing `pos`.
@@ -1846,7 +2001,7 @@ pub struct ConnectPacket {
 pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketError> {
     let short = || PacketError::malformed("CONNECT is truncated");
     let mut pos = 0usize;
-    let protocol_name = read_string(body, &mut pos).ok_or_else(short)?;
+    let protocol_name = read_string(body, &mut pos)?;
     let protocol_level = *body.get(pos).ok_or_else(short)?;
     pos += 1;
     let v5 = protocol_level == 5;
@@ -1854,8 +2009,24 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
         e.v5_connect = v5;
         e
     };
+    if !matches!(
+        (protocol_name.as_str(), protocol_level),
+        ("MQTT", 4) | ("MQTT", 5) | ("MQIsdp", 3)
+    ) {
+        // [MQTT-3.1.2-1], [MQTT-3.1.2-2]: answered CONNACK 1 (unacceptable protocol version)
+        // and closed. 0x84 is v5's name for it; the caller turns it into the CONNACK.
+        return Err(PacketError {
+            reason: 0x84,
+            message: format!("unsupported protocol '{protocol_name}' level {protocol_level}"),
+            v5_connect: false,
+        });
+    }
     let flags = *body.get(pos).ok_or_else(short).map_err(tag)?;
     pos += 1;
+    if flags & 0x01 != 0 {
+        // [MQTT-3.1.2-3]: the reserved CONNECT flag is 0.
+        return Err(tag(PacketError::malformed("reserved CONNECT flag set")));
+    }
     let keep_alive = read_u16_at(body, pos).ok_or_else(short).map_err(tag)?;
     pos += 2;
 
@@ -1876,7 +2047,7 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
         v5::Properties::default()
     };
 
-    let client_id = read_string(body, &mut pos).ok_or_else(short).map_err(tag)?;
+    let client_id = read_string(body, &mut pos).map_err(tag)?;
 
     let mut will_properties = v5::Properties::default();
     let (will_topic, will_message) = if flags & 0x04 != 0 {
@@ -1892,7 +2063,7 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
             .map_err(PacketError::from)
             .map_err(tag)?;
         }
-        let topic = read_string(body, &mut pos).ok_or_else(short).map_err(tag)?;
+        let topic = read_string(body, &mut pos).map_err(tag)?;
         let message = read_bytes(body, &mut pos).ok_or_else(short).map_err(tag)?;
         (Some(topic), Some(decode_payload(&message).0))
     } else {
@@ -1900,7 +2071,7 @@ pub fn parse_connect(body: &[u8]) -> std::result::Result<ConnectPacket, PacketEr
     };
 
     let username = if flags & 0x80 != 0 {
-        Some(read_string(body, &mut pos).ok_or_else(short).map_err(tag)?)
+        Some(read_string(body, &mut pos).map_err(tag)?)
     } else {
         None
     };
@@ -1936,10 +2107,16 @@ pub fn parse_publish(
 ) -> std::result::Result<PublishPacket, PacketError> {
     let short = || PacketError::malformed("PUBLISH is truncated");
     let mut pos = 0usize;
-    let topic = read_string(body, &mut pos).ok_or_else(short)?;
+    let topic = read_string(body, &mut pos)?;
     let packet_id = if qos > 0 {
         let id = read_u16_at(body, pos).ok_or_else(short)?;
         pos += 2;
+        if id == 0 {
+            // [MQTT-2.3.1-1]: a packet that needs an identifier carries a non-zero one.
+            return Err(PacketError::protocol(
+                "PUBLISH at QoS > 0 with packet identifier 0",
+            ));
+        }
         id
     } else {
         0
@@ -1982,6 +2159,9 @@ pub fn parse_subscribe(body: &[u8], v5: bool) -> std::result::Result<SubscribePa
     let mut pos = 0usize;
     let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
+    if packet_id == 0 {
+        return Err(PacketError::protocol("SUBSCRIBE with packet identifier 0"));
+    }
     let properties = if v5 {
         // The one packet a client may put a Subscription Identifier in; `read_properties`
         // refuses a second one and the value 0 (§3.8.2.1.2) as Protocol Errors.
@@ -1993,11 +2173,18 @@ pub fn parse_subscribe(body: &[u8], v5: bool) -> std::result::Result<SubscribePa
     let mut topics = Vec::new();
     let mut options = Vec::new();
     while pos < body.len() {
-        let filter = read_string(body, &mut pos).ok_or_else(short)?;
+        let filter = read_string(body, &mut pos)?;
+        check_topic_filter(&filter)?;
         let byte = *body.get(pos).ok_or_else(short)?;
         pos += 1;
         let qos = byte & 0x03;
         let mut opts = SubscriptionOptions::default();
+        if !v5 && (qos == 3 || byte & 0xFC != 0) {
+            // [MQTT-3.8.3-4]: the reserved bits are 0 and QoS 3 does not exist.
+            return Err(PacketError::malformed(format!(
+                "invalid requested QoS byte 0x{byte:02x} for '{filter}'"
+            )));
+        }
         if v5 {
             // §3.8.3.1: QoS 3, Retain Handling 3 and the two reserved bits are all
             // Malformed Packet.
@@ -2037,6 +2224,11 @@ pub fn parse_unsubscribe(
     let mut pos = 0usize;
     let packet_id = read_u16_at(body, pos).ok_or_else(short)?;
     pos += 2;
+    if packet_id == 0 {
+        return Err(PacketError::protocol(
+            "UNSUBSCRIBE with packet identifier 0",
+        ));
+    }
     let properties = if v5 {
         let props = v5::read_properties(body, &mut pos)?;
         v5::forbid(&props, &[v5::SUBSCRIPTION_IDENTIFIER], "UNSUBSCRIBE")?;
@@ -2047,7 +2239,9 @@ pub fn parse_unsubscribe(
 
     let mut topics = Vec::new();
     while pos < body.len() {
-        topics.push(read_string(body, &mut pos).ok_or_else(short)?);
+        let filter = read_string(body, &mut pos)?;
+        check_topic_filter(&filter)?;
+        topics.push(filter);
     }
     Ok(UnsubscribePacket {
         packet_id,

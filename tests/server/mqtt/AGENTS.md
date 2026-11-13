@@ -1,16 +1,12 @@
 # MQTT server tests
 
-Everything below was checked against the files it describes. The version this replaced was
-written while the broker was a placeholder and was never updated: it documented a "Current
-Status: Placeholder tests only", a migration path through five phases of removing `#[ignore]`,
-and a test named `test_mqtt_placeholder_registered` that does not exist. The broker has been a
-full MQTT 3.1.1 implementation for a long time. Verify against the source, not against this
-file.
+Re-verified against the files it describes on 13 November 2026. Verify against the source, not
+against this file.
 
 ## What runs
 
-`tests/server/mqtt/mod.rs` declares every module in the directory, all gated on `feature = "mqtt"`.
-None `#[ignore]`d, none able to skip.
+`tests/server/mqtt/mod.rs` declares every module in the directory; there are no protocol
+features, so every one compiles in every build. None `#[ignore]`d, none able to skip.
 
 | Test | File | What it proves |
 |---|---|---|
@@ -28,6 +24,9 @@ None `#[ignore]`d, none able to skip.
 | `a_session_that_keeps_pinging_is_not_closed` | `connection_bounds_test.rs` | PINGREQ every second for 8s against a 3s bound → every PINGRESP arrives, session live |
 | `keep_alive_zero_falls_back_to_the_idle_bound_rather_than_to_no_bound` | `connection_bounds_test.rs` | Keep Alive 0 → closed at `idle_timeout_secs` |
 | `a_packet_parked_for_a_human_keeps_its_session` | `connection_bounds_test.rs` | a SUBSCRIBE parked by a `manual` rule keeps its Keep Alive 2s session for 12s |
+| `mosquitto_drives_qos_1_and_2_both_ways_pings_and_unsubscribes` | `qos_real_client_test.rs` | **Mosquitto** at 3.1.1: QoS 1 and 2 PUBLISH in, forwarded out at the same QoS to a QoS 2 subscriber (whose message libmosquitto releases only after the broker's PUBREL), PINGREQ on a 5 s Keep Alive, UNSUBSCRIBE (`-U`); every session through the pcap oracle |
+| `rumqttc_drives_qos_1_and_2_both_ways_pings_unsubscribes_and_disconnects` | `qos_real_client_test.rs` | **rumqttc** the same, read from its event loop (SUBACK, PUBACK, PUBREC, PUBCOMP, both forwarded messages at their QoS, the broker's PUBREL, UNSUBACK, PINGRESP), then DISCONNECT; pcap oracle |
+| the protocol rules and the packet bound | `protocol_rules_test.rs` | see below |
 
 `test_mqtt_subscribe_and_receive_a_published_message` is the evidence behind the **Beta**
 rating. `rumqttc` is an unconditional dev-dependency, so it either compiles and runs or the
@@ -103,9 +102,11 @@ with the fallback failed the keep-alive test. See `src/server/mqtt/AGENTS.md` fo
 ## Running
 
 ```bash
-export CARGO_TARGET_DIR=/Users/matus/dev/netget-shared-target
-cargo test --no-default-features --features mqtt --test server -- server::mqtt --test-threads=100
+./cargo-isolated.sh test --no-default-features --features mcp-stdio,mcp-http,sqlite \
+    --test server -- server::mqtt:: --test-threads=16
 ```
+
+`NETGET_MQTT_PYTHON` (`install_v5_peers.py`) and Mosquitto's clients on `PATH` are required.
 
 `--test` names a *target*. `--test server::mqtt::e2e_test` lists targets and exits without
 running anything.
@@ -145,9 +146,10 @@ Three things about driving it:
   backend cannot answer is refused with CONNACK 3, so an absent or under-counted rule here
   would be testing a broker that turns mosquitto away.
 
-Unproven by either client: TLS on 8883, WebSocket transport, QoS 1/2 end to end,
-retained messages, wildcard filter matching, last-will delivery, session resume and keep-alive
-reaping — the broker implements no subscription table, no retained store and no keep-alive timer.
+QoS 1 and 2, PINGREQ and UNSUBSCRIBE are driven by `qos_real_client_test.rs`. Unproven by any
+client: TLS on 8883 and WebSocket transport (not implemented); retained messages, wildcard
+filter matching, last-will delivery and session resume are the model's to do, since the broker
+keeps no subscription table and no store.
 
 ## MQTT 5.0: `v5_real_client_test.rs` and `v5_wire_test.rs`
 
@@ -187,11 +189,32 @@ Note on running as root: `client/mqtt::keepalive_test` points Mosquitto's `log_d
 root-owned temp dir; a root-run Mosquitto drops to the `mosquitto` user and cannot write it, so
 that test fails there and passes on a CI runner. The v5 tests log to stderr and are unaffected.
 
+## `protocol_rules_test.rs` — the MUSTs and the packet bound
+
+Hand-built packets, each refusal beside a control that differs only in the rule under test:
+the first packet must be CONNECT; protocol name and level (`MQTT` 4/5, `MQIsdp` 3; level 6 is
+CONNACK 1); the reserved CONNECT flag; 3.1.1's empty client id with CleanSession 0 (CONNACK 2);
+packet identifier 0 on a QoS 1 PUBLISH, SUBSCRIBE and UNSUBSCRIBE (v5: DISCONNECT 0x82);
+ill-formed UTF-8 and U+0000 in a topic and a client id; wildcards in a topic name (v5: 0x90);
+topic filter syntax (v5: 0x8F); 3.1.1's requested-QoS byte; fixed-header flags;
+`max_packet_size` as the whole packet (300 taken, 301 refused, v5: 0x95 and the CONNACK
+advertising 300), its 64-byte floor and 16 MiB ceiling (refused from a header alone); a
+five-byte remaining length; a v5 client's own Maximum Packet Size (64 sent, 65 not); and
+client-id takeover (v5: DISCONNECT 0x8E to the older connection, whose teardown leaves the
+newer one routable; a refused CONNECT takes nothing over).
+
+Verified by removal: each rule's check removed in turn fails its test (the refused packet is
+answered or the connection stays open); counting `remaining` rather than the whole packet
+against `max_packet_size` accepts the 301-byte packet; unregistering by client id alone makes
+the routed PUBLISH vanish; ignoring the client's PUBREC leaves rumqttc and mosquitto_sub
+without the broker's PUBREL.
+
 ## Stable conditions 2 and 3: the pcap oracle and the fuzz target
 
-**Condition 2** was already met: `v5_wire_test.rs` and `llm_failure_test.rs` run the pcap
-oracle over hand-built client packets and the broker's exact replies. Those are not a recorded
-Mosquitto or Paho session; the bytes of the real-client tests are not captured.
+**Condition 2.** `v5_wire_test.rs` and `llm_failure_test.rs` run the pcap oracle over
+hand-built client packets and the broker's exact replies, and `qos_real_client_test.rs` over
+recorded Mosquitto and rumqttc sessions (`recording_relay`) — QoS 1 and 2 in both directions,
+PINGREQ, UNSUBSCRIBE and DISCONNECT, as the clients sent them and the broker answered.
 
 **Condition 3.** `fuzz/fuzz_targets/mqtt_packet.rs` drives `mqtt::take_packet` and every
 parser `dispatch_packet` calls (CONNECT, PUBLISH, SUBSCRIBE, UNSUBSCRIBE, v5 DISCONNECT

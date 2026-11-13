@@ -94,7 +94,7 @@ impl ConnectionCloser {
     }
 
     /// Shut the connection down in both directions.
-    fn shutdown(&self) {
+    pub fn shutdown(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(socket) = &self.socket {
             let _ = socket.shutdown(std::net::Shutdown::Both);

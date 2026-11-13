@@ -335,7 +335,9 @@ async fn websocat_drives_subprotocol_text_binary_ping_and_close() {
     assert!(text.contains("echo:héllo ✓"), "{text}");
     let handshakes = events(&state, id, "websocket_handshake").await;
     assert!(
-        handshakes.iter().any(|h| h["subprotocols"] == json!(["chat"])),
+        handshakes
+            .iter()
+            .any(|h| h["subprotocols"] == json!(["chat"])),
         "{handshakes:#?}"
     );
     let closes = events(&state, id, "websocket_close").await;

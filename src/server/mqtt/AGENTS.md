@@ -5,38 +5,32 @@ properties and reason codes in `v5.rs`); the LLM (or a script/static handler) de
 acknowledgement and every message delivery. The version is the client's: protocol level 5 in
 its CONNECT makes the connection a v5 one, anything else is answered in 3.1.1 framing.
 
-**State**: **Beta** (August 2026) — works against a real third-party client. `rumqttc` drives
-CONNECT/CONNACK in `test_mqtt_basic_connect`, and
-`test_mqtt_subscribe_and_receive_a_published_message` takes it all the way through
-CONNECT → SUBSCRIBE → SUBACK → PUBLISH and back to the broker's own PUBLISH arriving on the
-same connection, with topic and payload asserted. Neither test is `#[ignore]`d. Also verified
-with a raw-socket MQTT client driving QoS 0, 1 and 2, plus PINGREQ.
+**State**: **Stable**, set 13 November 2026. See "Maturity: the six conditions" at the foot of
+this file for what was checked and what the rating does *not* cover.
 
-The promotion is *not* new implementation work — the broker already did all of this. What was
-missing was evidence, and the reason it looked missing is worth recording: the root CLAUDE.md
-listed mqtt as "`mqtt`, whose rumqttc tests are all `#[ignore]`d", and that was wrong twice
-over. The four pub/sub tests were inside a `/* … */` block, so nothing compiled them and
-`--include-ignored` could never have run them; and the rumqttc test that *does* run was never
-ignored at all. Their `#[ignore = "MQTT broker not yet implemented"]` markers were left over
-from the placeholder described below. The dead block is deleted and replaced by one real
-pub/sub test.
+### What "Stable" covers here
 
-Two things that will silently break a mock for this protocol, both of which this test
-encodes: `mqtt_suback` **must** echo `packet_id` from the event (rumqttc blocks until a SUBACK
+The control packets of MQTT 3.1.1 and 5.0 as this broker implements them — CONNECT and its
+refusals, PUBLISH at QoS 0, 1 and 2 in both directions (PUBACK; PUBREC → PUBREL → PUBCOMP),
+SUBSCRIBE, UNSUBSCRIBE, PINGREQ, DISCONNECT, v5 properties and reason codes, Topic Alias,
+client-id takeover — the protocol rules a broker enforces on what a client sends, and every
+bound in "Limits" and "Connection bounds". Four independent clients drive it: Eclipse
+Mosquitto's C clients (3.1.1 and v5), Eclipse Paho's Python client (v5) and rumqttc (Rust).
+Not covered: TLS, WebSocket transport, enhanced authentication, and everything a broker would
+store — sessions, retained messages, subscriptions, wills — which this broker leaves to the
+model by design (see "Not implemented").
+
+Two things that will silently break a mock for this protocol, both encoded in
+`test_mqtt_subscribe_and_receive_a_published_message`: `mqtt_suback` **must** echo `packet_id` from the event (rumqttc blocks until a SUBACK
 carrying the id it chose arrives, so a hardcoded id stalls the subscribe forever), and the
 event `mqtt_publish` and the action `mqtt_publish` share a name while pointing in opposite
 directions — the event is the client's PUBLISH arriving, the action is the broker sending one.
 **Port**: 1883 by default. **Privilege**: `None` (1883 > 1024).
-**Stack**: `ETH>IP>TCP>MQTT`. **Spec**: MQTT 3.1.1 (OASIS / ISO-IEC 20922).
-
-This replaces a placeholder that returned empty vectors from `get_sync_actions()` and
-`get_event_types()` while advertising itself as `Experimental`. It answered CONNECT with
-a hardcoded CONNACK and PINGREQ with PINGRESP, ignored PUBLISH and SUBSCRIBE entirely,
-never called the LLM, and `execute_action` errored on every input.
+**Stack**: `ETH>IP>TCP>MQTT`. **Spec**: MQTT 3.1.1 (OASIS / ISO-IEC 20922) and MQTT 5.0.
 
 ## Why hand-written rather than rumqttd
 
-`rumqttd` is a dependency of the `mqtt` feature but is not used. It owns its own session,
+`rumqttd` is in `Cargo.toml` but nothing uses it. It owns its own session,
 subscription and routing model — precisely the part the LLM has to own here — and exposes
 no hook for "ask something else whether this CONNECT is acceptable". MQTT 3.1.1 control
 packets are a varint length, length-prefixed UTF-8 strings and a handful of fixed-size
@@ -176,11 +170,43 @@ and every write (in the writer task), so the rail shows live `↓/↑` counts.
 
 ## What the broker answers by itself
 
-Two cases, both pure transport bookkeeping with no semantics to decide:
+Pure transport bookkeeping with no semantics to decide:
 
 - **PINGREQ → PINGRESP** (keep-alive).
-- **PUBREL → PUBCOMP**, the second half of the QoS 2 handshake, echoing the packet
+- **PUBREL → PUBCOMP**, the second half of a QoS 2 PUBLISH the client sent, echoing the packet
   identifier.
+- **PUBREC → PUBREL**, the middle of a QoS 2 PUBLISH the broker sent (§4.3.3); the client
+  finishes with PUBCOMP. libmosquitto holds such a message back from its application until the
+  PUBREL arrives, so without it a QoS 2 subscriber never sees the message.
+- A client's PUBACK and PUBCOMP end the broker's own QoS 1 / QoS 2 PUBLISH; nothing is owed.
+
+## Protocol rules enforced on what a client sends
+
+Each is a MUST in 3.1.1 and 5.0, decided by the codec before any handler is consulted, and each
+closes the connection (a v5 client is first sent a DISCONNECT naming the reason) with
+`decision=protocol_error`. `tests/server/mqtt/protocol_rules_test.rs` holds each beside a
+control.
+
+| Rule | Refused with |
+|---|---|
+| The first packet is CONNECT [MQTT-3.1.0-1] | close |
+| Protocol name and level are `MQTT` 4 / `MQTT` 5 / `MQIsdp` 3 [MQTT-3.1.2-1/2] | CONNACK 1, close |
+| The reserved CONNECT flag is 0 [MQTT-3.1.2-3] | close (v5: CONNACK 0x81) |
+| 3.1.1: an empty client id needs CleanSession 1 [MQTT-3.1.3-8] | CONNACK 2, close |
+| A QoS > 0 PUBLISH, SUBSCRIBE and UNSUBSCRIBE carry a non-zero packet id [MQTT-2.3.1-1] | v5 0x82 |
+| Strings are well-formed UTF-8 without U+0000 [MQTT-1.5.3-1/2] | v5 0x81 |
+| A topic name is non-empty and has no `+` or `#` [MQTT-4.7.3-1, 3.3.2-2] | v5 0x82 / 0x90 |
+| A topic filter is non-empty, `#` alone in the last level, `+` alone in its level [MQTT-4.7.1] | v5 0x8F |
+| 3.1.1: a requested-QoS byte has QoS ≤ 2 and its reserved bits clear [MQTT-3.8.3-4] | close |
+| Fixed-header flags: `0010` for PUBREL, SUBSCRIBE, UNSUBSCRIBE, `0000` for the rest [MQTT-2.2.2] | v5 0x81 |
+| Only packets a client sends: CONNACK, SUBACK, UNSUBACK, PINGRESP (and 3.1.1 AUTH) are refused | v5 0x82 |
+
+**One connection per client id** [MQTT-3.1.4-2]: when a CONNECT is *accepted* for a client id
+another connection holds, the older connection is closed — a v5 one is sent DISCONNECT 0x8E
+Session taken over first — and logged `decision=session_taken_over`. The directory entry
+belongs to the connection that registered it, so the older connection's teardown leaves the
+newer one addressable. A refused CONNECT takes nothing over: registration happens only after
+the CONNACK accepts.
 
 ## Batching (on by default, QoS 0 PUBLISH only)
 
@@ -256,13 +282,29 @@ the CONNECT `Silent` arm, not the tag.
 
 The fixed header allows a 268 435 455 byte remaining length; trusting it would let one
 client request a 256 MiB allocation per packet. `max_packet_size` (startup parameter,
-default 256 KiB, hard maximum 16 MiB) is checked before any allocation, and the
-connection is closed when it is exceeded. Every parse function is bounds-checked with
-`get()`/`checked_add`; no input can panic the read loop.
+default 256 KiB, clamped to 64..16 MiB) bounds the **whole packet, fixed header included** —
+the number a v5 CONNACK advertises as the broker's Maximum Packet Size — and is checked from
+the header, before anything is buffered for the body; the connection is closed when it is
+exceeded (v5: DISCONNECT 0x95 first). A remaining-length varint longer than four bytes is
+malformed. Every parse function is bounds-checked with `get()`/`checked_add`; no input can
+panic the read loop.
+
+What the broker sends is bounded too: a v5 client's own Maximum Packet Size (the writer drops a
+larger packet, `decision=dropped_over_client_max_packet_size`), and the per-connection outbox
+(4096 packets / 8 MiB, `utils::outbox`) cuts off a client that stops reading. The read loop
+answers each packet before reading the next, so a client that sends faster than it is answered
+is held back by TCP; no inbound queue exists to grow. Topic Alias Maximum is 16 and a v5
+property block carries at most 128 User Properties.
+
+`tests/server/mqtt/protocol_rules_test.rs` tests the packet bound, its floor and ceiling, the
+varint and the client's Maximum Packet Size on both sides of each number;
+`v5_wire_test.rs` the alias bound; `v5_property_limits_test.rs` the User Property bound;
+`slow_reader_test.rs` the outbox.
 
 ## Startup parameters
 
-- `max_packet_size` (integer, optional, default 262144, clamped to 64..=16777216)
+- `max_packet_size` (integer, optional, default 262144, clamped to 64..=16777216) — the
+  whole packet, fixed header included
 - `first_byte_timeout_secs` (integer, optional, default 30) — how long a peer may take to send
   CONNECT
 - `idle_timeout_secs` (integer, optional, default 900) — silence allowed to a session whose
@@ -317,15 +359,9 @@ connection is closed when it is exceeded. Every parse function is bounds-checked
 
 ## Testing
 
-`tests/server/mqtt/e2e_test.rs` (declared in `tests/server/mod.rs`). Its
-`test_mqtt_keyword_detection` still asserts that starting an MQTT broker fails, and its
-docstring still describes a placeholder — both predate this implementation and are
-outside this change.
-
-Real-client verification used during review, via `--mcp-stdio` with static handlers so no
-model is involved: a raw-socket MQTT 3.1.1 client sending CONNECT, SUBSCRIBE, PUBLISH at
-QoS 0/1/2 and PINGREQ, asserting CONNACK, SUBACK with the requested QoS, PUBACK/PUBREC
-echoing the packet identifier, and PINGRESP.
+`tests/server/mqtt/` — see its `AGENTS.md` for every test. The real clients: rumqttc
+(`e2e_test.rs`, `qos_real_client_test.rs`), Mosquitto's C clients (`real_client_test.rs`,
+`qos_real_client_test.rs`, `v5_real_client_test.rs`) and Paho (`v5_real_client_test.rs`).
 
 ## References
 
@@ -388,3 +424,36 @@ CONNECT is read, so the client's version is unknown.
 Evidence: `tests/server/mqtt/v5_real_client_test.rs` (Mosquitto's C clients at `-V 5`, Eclipse
 Paho's Python client at MQTTv5) and `v5_wire_test.rs` (hand-built packets, exact bytes, the
 pcap oracle). See `tests/server/mqtt/AGENTS.md`.
+## Maturity: the six conditions
+
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source on
+13 November 2026 rather than inherited. **The rating covers the surface this broker
+implements**: the MQTT 3.1.1 and 5.0 control packets over plain TCP, with every decision a
+broker would take from its own state left to the model. TLS, WebSocket transport, enhanced
+authentication, and storage of any kind are not claimed.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — Mosquitto's C clients and rumqttc each drive CONNECT, SUBSCRIBE, QoS 0/1/2 PUBLISH in both directions, PINGREQ, UNSUBSCRIBE and DISCONNECT on 3.1.1; Mosquitto and Paho drive v5 |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — hand-built v5 and failure-path exchanges, and the recorded Mosquitto and rumqttc sessions of `qos_real_client_test.rs` |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — FUZZ_MQTT |
+| 4 | every declared bound has a test | **yes, as of this pass** — "Limits" and "Connection bounds", each on both sides of its number, verified by removal |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/mqtt/AGENTS.md` |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/mqtt/` is empty |
+
+**Condition 1 had rested on a sample**, as `modbus`'s once did: neither 3.1.1 client had sent a
+QoS 1 or 2 PUBLISH, an UNSUBSCRIBE or a PINGREQ, and both docs said QoS 1/2 was unproven. Driving
+them found the broker **ignoring the client's PUBREC** for its own QoS 2 PUBLISH, so it never
+sent the PUBREL: libmosquitto holds such a message from its application until PUBREL arrives, so
+a QoS 2 subscriber never received anything the broker sent it at QoS 2.
+
+**Condition 4 and 5 found the rest**: `max_packet_size` counted the remaining length while the
+v5 CONNACK advertised it as the whole packet; and the codec accepted what the specification
+says a broker MUST refuse — packets before CONNECT, any protocol level, the reserved CONNECT
+flag, packet identifier 0, ill-formed UTF-8 (repaired lossily), wildcards in a topic name,
+malformed topic filters, 3.1.1 QoS 3 subscriptions (granted as QoS 3 by the silent default),
+wrong fixed-header flags, server-only packet types from a client. A second connection with a
+client id already connected **did not close the first** [MQTT-3.1.4-2]; the first's teardown
+then removed the second's directory entry, leaving it unaddressable, and a CONNECT the handler
+refused still overwrote the entry, so an unauthenticated peer could hijack routing to a
+connected client's id. Registration now waits for an accepting CONNACK and takes the id over.

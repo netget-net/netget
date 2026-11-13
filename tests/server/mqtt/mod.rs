@@ -7,6 +7,8 @@ mod batching_test;
 pub mod e2e_test;
 pub mod llm_failure_test;
 pub mod peer_inject_test;
+mod protocol_rules_test;
+mod qos_real_client_test;
 pub mod real_client_test;
 mod slow_reader_test;
 mod v5_property_limits_test;
