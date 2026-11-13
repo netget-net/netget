@@ -74,6 +74,36 @@ the other direction — that a narrower prompt does not make the model admit eve
 same substitution with "accepts only the user alice; refuse every other login" for user
 `neo4j`: refused 40 of 40 on master and 40 of 40 on the branch (`tally40-login-onlyalice-*`).
 
+## 3. The full eval on the branch
+
+`after-branch/` is the harness's output for this branch (master `59e5f4664` plus the two
+changes), five runs per case at seeds 42–46, run from copied binaries with
+`scripts/run-eval-binary.sh` (no proxy this time): **496 of 525 runs (94.5%)**. The "before" is
+the committed baseline from 8 November, **508 of 540 (94.1%)**. The run count differs because
+the `docker` CLI is no longer installed on this machine, so the three Docker cases were skipped
+as `client-missing` (15 runs, all passes in the baseline); on the 105 cases both runs attempted
+it is 496 against 493. The new run is `../latest.json` and `../EVAL_RESULTS.md`.
+`scripts/lane3-compare.py ../2026-11-08-weak-cases-replay/after-branch/latest.json
+after-branch/latest.json` prints the table.
+
+| Case | Baseline | Branch | |
+|---|---:|---:|---|
+| `bolt/count` | 2/5 | **5/5** | no login refused |
+| `bolt/people-by-name` | 4/5 | **5/5** | |
+| `bolt/syntax-error` | 5/5 | 5/5 | |
+| `prometheus/latency-histogram` | 2/5 | 4/5 | three runs gave 30 at `le=0.1` of 40; one copied the example whole (promtool accepts it, which is all the case checks); seed 45 copied the example's counts under a `count` of 40 and was refused |
+| `ftp/working-directory` | 3/5 | 4/5 | untouched |
+| `http/permanent-redirect`, `imap/inbox-count`, `nostr/refuse-adverts` | 4, 4, 2 | 5, 5, 3 | untouched |
+| `dns/nxdomain`, `ftp/anonymous-login`, `ftp/banner`, `imap/list-folders`, `rsync/list-files`, `zabbix/reject-unknown-host`, `nostr/serve-notes` | 5, 5, 5, 5, 5, 5, 4 | 4, 4, 4, 4, 4, 4, 3 | untouched; one run each |
+| `docker/*` (3 cases) | 15/15 | skipped | `docker` not installed |
+
+The prometheus case's `Expect` is promtool's acceptance plus `_bucket` and `le="+Inf"`, so it
+cannot tell the example's numbers from the instruction's; the replay above is the measurement
+of the histogram asked for (0 → 35 of 40). Every other case's prompt is unchanged by this
+branch; their moves are single draws differing between runs, as on 8 November (several prompts
+carry per-run values such as a port or a query id). Net of the untouched cases (+4 −7), the two
+changes account for +6, all on the 20 runs of the four cases above.
+
 ## Files
 
 `prom/` and `bolt/` hold the captured requests (`*.req.json`), prompts (`*.txt`) and one
