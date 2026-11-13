@@ -314,7 +314,13 @@ connection task and coming back as an executor error.
   (`state::intercepts::server_answer_actions` / `client_answer_actions`): a server event's own
   declared actions — redis's `redis_subscribe` declares four of the protocol's eighteen — with
   the protocol's sync set only where the event declares none, and for a client its async ∪
-  sync ∪ the event's; plus the common actions. The dashboard's composer offers the same list.
+  sync ∪ the event's. Beside them (`list_intercepts`' "Alongside, if needed" line) only the
+  common actions the model is offered with an event (`state::intercepts::intercept_common_actions`):
+  `set_memory` / `append_memory`, the connection-memory pair on a lasting connection,
+  `append_to_log`, and `notify_operator` only where the event has no protocol answer. Not the
+  management actions (`open_server`, `close_all_servers`, `change_model`, …) and not the
+  deprecated `show_message`; a refusal's "Accepted:" list is this list and nothing else
+  (`tests/mcp_intercept_test.rs`). The dashboard's composer offers the same list.
   A refused answer leaves the request waiting. **`[]` is a real answer**: nothing is written
   and the connection carries on, which is distinct from a timeout.
 - **A parked request lives as long as its connection.** Closing the connection, stopping the

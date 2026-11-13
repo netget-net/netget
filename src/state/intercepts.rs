@@ -115,7 +115,7 @@ pub fn now_unix_ms() -> u64 {
 ///
 /// The MCP `list_intercepts` / `answer_intercept` tools and the dashboard's composer both use
 /// this, so what is offered and what is accepted are the same list everywhere. The common
-/// actions every protocol accepts are not included; callers that validate add them.
+/// actions are not included; callers add [`intercept_common_actions`].
 pub fn server_answer_actions(
     protocol_name: &str,
     event_type: &str,
@@ -131,6 +131,27 @@ pub fn server_answer_actions(
         Some(event) if !event.has_no_usable_actions() => event.actions,
         _ => protocol.get_sync_actions(),
     }
+}
+
+/// The common actions a parked request may be answered with beside the protocol's own
+/// (`protocol_answers`): the ones the model is offered with the same event
+/// (`network_event_common_actions_for`) — the instance's memory, the connection's memory where
+/// the request arrived on a lasting connection, a log line, and `notify_operator` only where
+/// there is no protocol answer to mistake it for.
+///
+/// Not the rest of [`crate::events::handler::common_action_names`]: the management actions
+/// (`open_server`, `close_all_servers`, `change_model`, …) are not an answer to a peer, and a
+/// person has their own tools and keys for them; nor `show_message`, `notify_operator`'s
+/// deprecated name. `list_intercepts` shows exactly this list and `answer_intercept` accepts
+/// exactly it, so what is offered and what is accepted cannot differ.
+pub fn intercept_common_actions(
+    protocol_answers: &[crate::llm::actions::ActionDefinition],
+    on_a_connection: bool,
+) -> Vec<crate::llm::actions::ActionDefinition> {
+    crate::llm::actions::common::network_event_common_actions_for(
+        !protocol_answers.is_empty(),
+        on_a_connection,
+    )
 }
 
 /// The actions a parked **client** event may be answered with: exactly what the model would

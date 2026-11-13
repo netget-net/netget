@@ -2775,12 +2775,12 @@ impl NetGetMcpService {
         let now = crate::state::intercepts::now_unix_ms();
         let mut out = format!("## Requests waiting for an answer ({})\n\n", views.len());
         for view in &views {
-            let (protocol, vocabulary) =
+            let (protocol, vocabulary, common) =
                 match crate::mcp_stdio::control::intercept_vocabulary(&self.state.app_state, view)
                     .await
                 {
-                    Ok(pair) => pair,
-                    Err(e) => (format!("unknown — {e}"), Vec::new()),
+                    Ok(v) => (v.protocol, v.answers, v.common),
+                    Err(e) => (format!("unknown — {e}"), Vec::new(), Vec::new()),
                 };
             let owner = match view.owner {
                 crate::state::intercepts::InterceptOwner::Server(id) => {
@@ -2799,12 +2799,17 @@ impl NetGetMcpService {
                 .iter()
                 .map(crate::mcp_stdio::control::action_signature)
                 .collect();
+            let also: Vec<String> = common
+                .iter()
+                .map(crate::mcp_stdio::control::action_signature)
+                .collect();
             out.push_str(&format!(
                 "### intercept_id {}\n\
                  - **From**: {}{}\n\
                  - **Event**: `{}` — {}\n\
                  - **Event data**: `{}`\n\
                  - **Answer with**: {}\n\
+                 - **Alongside, if needed**: {}\n\
                  - **Fails closed in**: {}s (of {}s)\n\n",
                 view.id,
                 owner,
@@ -2818,6 +2823,11 @@ impl NetGetMcpService {
                     "(no protocol actions — answer with [] or fail it)".to_string()
                 } else {
                     answers.join(", ")
+                },
+                if also.is_empty() {
+                    "(nothing)".to_string()
+                } else {
+                    also.join(", ")
                 },
                 view.seconds_until_fail_closed(now),
                 view.timeout_secs,
@@ -2854,21 +2864,19 @@ impl NetGetMcpService {
             ))]));
         };
 
-        let (protocol, vocabulary) =
+        let vocabulary =
             match crate::mcp_stdio::control::intercept_vocabulary(&self.state.app_state, &view)
                 .await
             {
-                Ok(pair) => pair,
+                Ok(v) => v,
                 Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
             };
-        if let Err(e) = crate::mcp_stdio::control::check_action_types(
-            &params.actions,
-            &vocabulary,
-            crate::events::handler::common_action_names(),
-        ) {
+        if let Err(e) =
+            crate::mcp_stdio::control::check_action_types(&params.actions, &vocabulary.all(), &[])
+        {
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Request #{} ({} `{}`) was NOT answered and is still waiting: {}",
-                params.intercept_id, protocol, view.event_type, e
+                params.intercept_id, vocabulary.protocol, view.event_type, e
             ))]));
         }
 
