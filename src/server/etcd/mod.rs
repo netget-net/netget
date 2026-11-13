@@ -27,7 +27,7 @@ use crate::state::app_state::AppState;
 #[cfg(not(target_arch = "wasm32"))]
 use bytes::Bytes;
 #[cfg(not(target_arch = "wasm32"))]
-use http_body_util::{BodyExt, Limited};
+use http_body_util::BodyExt;
 #[cfg(not(target_arch = "wasm32"))]
 use hyper::{body::Incoming, header::HeaderValue, Request, Response, StatusCode};
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,6 +65,9 @@ use mvccpb::KeyValue;
 struct EtcdMeta {
     /// Current revision counter
     revision: i64,
+    /// The revision the last Compact named. Compacting is a statement about revisions, which
+    /// this server does own, so it refuses a revision already compacted as real etcd does.
+    compacted: i64,
     /// Cluster ID
     cluster_id: u64,
     /// Member ID
@@ -76,6 +79,8 @@ impl EtcdMeta {
     fn new(cluster_id: u64, member_id: u64) -> Self {
         Self {
             revision: 0,
+            // Nothing compacted yet; etcd's own `compactMainRev` starts at -1 too.
+            compacted: -1,
             cluster_id,
             member_id,
         }
@@ -95,8 +100,6 @@ impl EtcdMeta {
     }
 }
 
-/// Matches etcd's own `--max-request-bytes` default (1.5 MiB).
-#[cfg(not(target_arch = "wasm32"))]
 /// How long to wait for a peer's first byte after it connects.
 ///
 /// HTTP/2 is client-speaks-first — the connection preface and the client's SETTINGS frame are
@@ -133,7 +136,52 @@ const MAX_CONNECTIONS: usize = crate::server::accept_bounded::DEFAULT_MAX_CONNEC
 const CONNECTION_CAP_REFUSAL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
     Content-Length: 0\r\nRetry-After: 5\r\nConnection: close\r\n\r\n";
 
+/// The largest request body (the 5-byte gRPC message header and the message) one RPC may carry.
+/// Matches etcd's own `--max-request-bytes` default (1.5 MiB); a body past it is answered
+/// `8 RESOURCE_EXHAUSTED` at the frame that crosses it.
 pub const MAX_REQUEST_BYTES: usize = 1_572_864;
+
+/// Concurrent HTTP/2 streams one connection may hold open, advertised in the server's SETTINGS.
+///
+/// hyper's own default, set explicitly so the number is declared and tested rather than
+/// inherited: a stream past it is refused with `RST_STREAM(REFUSED_STREAM)` before any handler
+/// runs. It bounds the *count* of requests in flight on one connection; their *bytes* are
+/// bounded server-wide by [`MAX_BUFFERED_REQUEST_BYTES`], because 200 streams of
+/// [`MAX_REQUEST_BYTES`] each is 300 MiB per connection.
+pub const MAX_CONCURRENT_STREAMS: u32 = 200;
+
+/// Request-body bytes the whole server buffers at once, across every stream of every connection.
+///
+/// [`MAX_REQUEST_BYTES`] bounds one request and [`MAX_CONNECTIONS`] the connections, but each
+/// connection may carry [`MAX_CONCURRENT_STREAMS`] requests at a time, so those two alone allow
+/// 256 x 200 x 1.5 MiB. This is the bound on the product: every DATA frame takes its length out
+/// of one server-wide budget before it is kept, the bytes go back when the request has been
+/// answered, and a frame the budget cannot cover is answered `8 RESOURCE_EXHAUSTED` — which is
+/// in gRPC's retryable set, so a client that met a busy moment tries again. Thirty-two
+/// maximum-size requests; an ordinary etcd request is a few hundred bytes.
+pub const MAX_BUFFERED_REQUEST_BYTES: usize = 32 * MAX_REQUEST_BYTES;
+
+/// The read deadlines this server applies, from the defaults above or the server's
+/// `first_byte_timeout_secs` / `idle_timeout_secs` startup parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct EtcdDeadlines {
+    pub first_byte: std::time::Duration,
+    pub idle: std::time::Duration,
+}
+
+impl EtcdDeadlines {
+    /// The declared defaults, overridden by whichever of the two the operator set.
+    pub fn from_secs(first_byte: Option<u64>, idle: Option<u64>) -> Self {
+        Self {
+            first_byte: first_byte
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(FIRST_BYTE_READ_TIMEOUT),
+            idle: idle
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(IDLE_BETWEEN_REQUESTS_TIMEOUT),
+        }
+    }
+}
 
 // gRPC status codes used by this server (google.rpc.Code).
 #[cfg(not(target_arch = "wasm32"))]
@@ -144,6 +192,10 @@ const GRPC_NOT_FOUND: i32 = 5;
 const GRPC_INVALID_ARGUMENT: i32 = 3;
 #[cfg(not(target_arch = "wasm32"))]
 const GRPC_RESOURCE_EXHAUSTED: i32 = 8;
+#[cfg(not(target_arch = "wasm32"))]
+const GRPC_FAILED_PRECONDITION: i32 = 9;
+#[cfg(not(target_arch = "wasm32"))]
+const GRPC_OUT_OF_RANGE: i32 = 11;
 #[cfg(not(target_arch = "wasm32"))]
 const GRPC_UNIMPLEMENTED: i32 = 12;
 #[cfg(not(target_arch = "wasm32"))]
@@ -278,6 +330,8 @@ impl GrpcFailure {
             "INVALID_ARGUMENT" | "BAD_REQUEST" => GRPC_INVALID_ARGUMENT,
             "UNIMPLEMENTED" | "NOT_IMPLEMENTED" => GRPC_UNIMPLEMENTED,
             "RESOURCE_EXHAUSTED" => GRPC_RESOURCE_EXHAUSTED,
+            "FAILED_PRECONDITION" => GRPC_FAILED_PRECONDITION,
+            "OUT_OF_RANGE" | "COMPACTED" | "FUTURE_REV" => GRPC_OUT_OF_RANGE,
             "INTERNAL" => GRPC_INTERNAL,
             _ => GRPC_UNKNOWN,
         };
@@ -470,6 +524,283 @@ fn grpc_status_reply(status: i32, message: &str) -> Response<GrpcBody> {
     res
 }
 
+/// Read one request body, bounded twice: at [`MAX_REQUEST_BYTES`] for this request, and against
+/// the server-wide `budget` of [`MAX_BUFFERED_REQUEST_BYTES`] for everything buffered at once.
+///
+/// Each DATA frame takes its length out of the budget before it is kept, so the check happens
+/// at the frame that would cross either bound and costs nothing per byte already held. Every
+/// frame is also a sign of life for the idle watchdog (`activity.touch()`), so a large body
+/// arriving steadily is never mistaken for silence — while one that stops arriving is.
+async fn collect_request_body(
+    mut body: Incoming,
+    budget: &Arc<tokio::sync::Semaphore>,
+    activity: &crate::server::accept_bounded::ConnectionActivity,
+) -> std::result::Result<(Bytes, Option<tokio::sync::OwnedSemaphorePermit>), GrpcFailure> {
+    let mut whole = bytes::BytesMut::new();
+    let mut held: Option<tokio::sync::OwnedSemaphorePermit> = None;
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|e| {
+            debug!("etcd request body ended abnormally: {e}");
+            GrpcFailure::new(GRPC_INTERNAL, "request body ended abnormally")
+        })?;
+        activity.touch();
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        if data.is_empty() {
+            continue;
+        }
+        if whole.len() + data.len() > MAX_REQUEST_BYTES {
+            return Err(GrpcFailure::new(
+                GRPC_RESOURCE_EXHAUSTED,
+                format!("etcdserver: request is too large (limit {MAX_REQUEST_BYTES} bytes)"),
+            ));
+        }
+        let permit = u32::try_from(data.len())
+            .ok()
+            .and_then(|n| Arc::clone(budget).try_acquire_many_owned(n).ok())
+            .ok_or_else(|| {
+                GrpcFailure::new(
+                    GRPC_RESOURCE_EXHAUSTED,
+                    "etcdserver: too many request bytes in flight; retry",
+                )
+            })?;
+        match held.as_mut() {
+            Some(p) => p.merge(permit),
+            None => held = Some(permit),
+        }
+        whole.extend_from_slice(&data);
+    }
+    Ok((whole.freeze(), held))
+}
+
+/// One `mvccpb.KeyValue` from the handler's JSON. Keys and values are UTF-8 strings on the
+/// action boundary (see AGENTS.md, "No bytes on the action boundary").
+fn kv_from_json(kv: &serde_json::Value) -> KeyValue {
+    let int = |name: &str| kv.get(name).and_then(|v| v.as_i64()).unwrap_or(0);
+    let text = |name: &str| {
+        kv.get(name)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec()
+    };
+    KeyValue {
+        key: text("key"),
+        create_revision: int("create_revision"),
+        mod_revision: int("mod_revision"),
+        version: int("version"),
+        lease: int("lease"),
+        value: text("value"),
+    }
+}
+
+/// The handler's `kvs` array, or nothing when it gave none.
+fn kvs_from_json(kvs: Option<&serde_json::Value>) -> Vec<KeyValue> {
+    kvs.and_then(|v| v.as_array())
+        .map(|a| a.iter().map(kv_from_json).collect())
+        .unwrap_or_default()
+}
+
+/// A `RangeResponse` body for `request` from what the handler answered.
+///
+/// The handler supplies the key space; the request's own shaping flags are applied here,
+/// because they are rules about the reply rather than claims about the data, and a handler that
+/// overlooks one would otherwise hand a client more than it asked for: `limit` truncates (and
+/// sets `more`, as etcd does when keys remain), `keys_only` drops values, `count_only` drops the
+/// pairs and keeps the count. `count` is the handler's, or the number of pairs it gave.
+fn shape_range(
+    request: &RangeRequest,
+    answer: &serde_json::Value,
+    header: ResponseHeader,
+) -> RangeResponse {
+    let mut kvs = kvs_from_json(answer.get("kvs"));
+    let count = answer
+        .get("count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(kvs.len() as i64);
+    let mut more = answer
+        .get("more")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if request.limit > 0 && kvs.len() as i64 > request.limit {
+        kvs.truncate(request.limit as usize);
+        more = true;
+    }
+    if request.keys_only {
+        for kv in &mut kvs {
+            kv.value.clear();
+        }
+    }
+    if request.count_only {
+        kvs.clear();
+    }
+    RangeResponse {
+        header: Some(header),
+        kvs,
+        more,
+        count,
+    }
+}
+
+/// A key or range end as the handler sees it: lossy UTF-8, and `null` for an empty range end.
+fn range_end_json(range_end: &[u8]) -> serde_json::Value {
+    if range_end.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(String::from_utf8_lossy(range_end))
+    }
+}
+
+/// The Range request as the handler sees it, every field that changes the answer included.
+fn range_request_json(request: &RangeRequest) -> serde_json::Value {
+    let mut event = serde_json::json!({
+        "key": String::from_utf8_lossy(&request.key),
+        "range_end": range_end_json(&request.range_end),
+        "limit": request.limit,
+        "keys_only": request.keys_only,
+        "count_only": request.count_only,
+    });
+    // Point-in-time reads, sorting and revision filters are only described when asked for, so
+    // the ordinary get stays a three-field event.
+    if request.revision != 0 {
+        event["revision"] = serde_json::json!(request.revision);
+    }
+    if request.sort_order != 0 {
+        event["sort_order"] = serde_json::json!(match request.sort_order {
+            1 => "ASCEND",
+            2 => "DESCEND",
+            _ => "NONE",
+        });
+        event["sort_target"] = serde_json::json!(match request.sort_target {
+            1 => "VERSION",
+            2 => "CREATE",
+            3 => "MOD",
+            4 => "VALUE",
+            _ => "KEY",
+        });
+    }
+    for (name, value) in [
+        ("min_mod_revision", request.min_mod_revision),
+        ("max_mod_revision", request.max_mod_revision),
+        ("min_create_revision", request.min_create_revision),
+        ("max_create_revision", request.max_create_revision),
+    ] {
+        if value != 0 {
+            event[name] = serde_json::json!(value);
+        }
+    }
+    event
+}
+
+/// One operation of a Txn branch as the handler sees it, or the refusal a whole Txn gets for it.
+fn txn_op_json(
+    op: &etcdserverpb::RequestOp,
+) -> std::result::Result<serde_json::Value, GrpcFailure> {
+    use etcdserverpb::request_op::Request as Op;
+    match &op.request {
+        Some(Op::RequestRange(r)) => {
+            let mut j = range_request_json(r);
+            j["op"] = serde_json::json!("range");
+            Ok(j)
+        }
+        Some(Op::RequestPut(p)) => Ok(serde_json::json!({
+            "op": "put",
+            "key": String::from_utf8_lossy(&p.key),
+            "value": String::from_utf8_lossy(&p.value),
+            "lease": p.lease,
+            "prev_kv": p.prev_kv,
+        })),
+        Some(Op::RequestDeleteRange(d)) => Ok(serde_json::json!({
+            "op": "delete_range",
+            "key": String::from_utf8_lossy(&d.key),
+            "range_end": range_end_json(&d.range_end),
+            "prev_kv": d.prev_kv,
+        })),
+        // A nested Txn's reply is itself a TxnResponse with its own branch and responses; the
+        // action vocabulary has no way to say one, so it is refused rather than half-answered.
+        Some(Op::RequestTxn(_)) => Err(GrpcFailure::new(
+            GRPC_UNIMPLEMENTED,
+            "nested transactions are not implemented by this server",
+        )),
+        None => Err(GrpcFailure::new(
+            GRPC_INVALID_ARGUMENT,
+            "etcdserver: a transaction operation names no request",
+        )),
+    }
+}
+
+/// The `ResponseOp` for one operation of the branch a Txn took, from the handler's matching
+/// entry in `responses`.
+///
+/// A Range or DeleteRange reply is a claim about the key space — "these pairs", "this many were
+/// deleted" — so it must come from the handler; without one this returns `Err` and the Txn fails
+/// closed rather than reporting an empty range or a delete of nothing. A Put's reply carries
+/// nothing but the header (and the previous pair, when asked for), so a missing entry
+/// acknowledges the write the handler already committed by choosing this branch.
+fn txn_op_response(
+    op: &etcdserverpb::RequestOp,
+    answer: Option<&serde_json::Value>,
+    header: &ResponseHeader,
+) -> std::result::Result<(etcdserverpb::ResponseOp, bool), String> {
+    use etcdserverpb::request_op::Request as Op;
+    use etcdserverpb::response_op::Response as Resp;
+    let (response, wrote) = match &op.request {
+        Some(Op::RequestRange(r)) => {
+            let answer = answer
+                .filter(|a| a.get("kvs").map(|k| k.is_array()).unwrap_or(false))
+                .ok_or("a range operation needs an entry with a kvs array")?;
+            (
+                Resp::ResponseRange(shape_range(r, answer, header.clone())),
+                false,
+            )
+        }
+        Some(Op::RequestPut(p)) => {
+            let prev_kv = if p.prev_kv {
+                answer
+                    .and_then(|a| a.get("prev_kv"))
+                    .filter(|v| v.is_object())
+                    .map(kv_from_json)
+            } else {
+                None
+            };
+            (
+                Resp::ResponsePut(PutResponse {
+                    header: Some(header.clone()),
+                    prev_kv,
+                }),
+                true,
+            )
+        }
+        Some(Op::RequestDeleteRange(d)) => {
+            let deleted = answer
+                .and_then(|a| a.get("deleted"))
+                .and_then(|v| v.as_i64())
+                .ok_or("a delete_range operation needs an entry with a deleted count")?;
+            let prev_kvs = if d.prev_kv {
+                kvs_from_json(answer.and_then(|a| a.get("prev_kvs")))
+            } else {
+                Vec::new()
+            };
+            (
+                Resp::ResponseDeleteRange(DeleteRangeResponse {
+                    header: Some(header.clone()),
+                    deleted,
+                    prev_kvs,
+                }),
+                deleted > 0,
+            )
+        }
+        Some(Op::RequestTxn(_)) | None => return Err("unsupported operation".to_string()),
+    };
+    Ok((
+        etcdserverpb::ResponseOp {
+            response: Some(response),
+        },
+        wrote,
+    ))
+}
+
 /// etcd v3 server
 pub struct EtcdServer;
 
@@ -491,6 +822,19 @@ impl EtcdServer {
             .transpose()?
             .flatten()
             .unwrap_or_else(|| "netget-cluster".to_string());
+        // Both read deadlines are the operator's to choose; who is on the other end is the only
+        // thing that decides them.
+        let secs = |name: &str| -> Result<Option<u64>> {
+            Ok(startup_params
+                .as_ref()
+                .map(|p| p.get_optional_u64(name))
+                .transpose()?
+                .flatten())
+        };
+        let deadlines =
+            EtcdDeadlines::from_secs(secs("first_byte_timeout_secs")?, secs("idle_timeout_secs")?);
+        // One budget for the request bytes every stream of every connection holds at once.
+        let budget = Arc::new(tokio::sync::Semaphore::new(MAX_BUFFERED_REQUEST_BYTES));
 
         let cluster_id = 0x6574636400000001u64; // "etcd" + 1
         let member_id = 0x6d656d6265720001u64; // "member" + 1 (shortened to fit u64)
@@ -568,6 +912,7 @@ impl EtcdServer {
                         let status_clone = status_tx.clone();
                         let meta_clone = meta.clone();
                         let protocol_clone = protocol.clone();
+                        let budget_clone = budget.clone();
                         let conn_owner = app_state.clone();
 
                         // Tracked, not detached: stop_server must abort this task too.
@@ -588,6 +933,8 @@ impl EtcdServer {
                                     server_id,
                                     meta_clone,
                                     protocol_clone,
+                                    deadlines,
+                                    budget_clone,
                                 )
                                 .await
                                 {
@@ -634,6 +981,8 @@ impl EtcdServer {
         server_id: crate::state::ServerId,
         meta: Arc<Mutex<EtcdMeta>>,
         protocol: Arc<EtcdProtocol>,
+        deadlines: EtcdDeadlines,
+        budget: Arc<tokio::sync::Semaphore>,
     ) -> Result<()> {
         use hyper::service::service_fn;
         use hyper_util::rt::TokioIo;
@@ -647,14 +996,14 @@ impl EtcdServer {
         // consuming it, so the HTTP/2 preface is still there for hyper afterwards — and it
         // bounds exactly the case that needs bounding, a peer that has connected and sent
         // nothing at all.
-        match tokio::time::timeout(FIRST_BYTE_READ_TIMEOUT, stream.peek(&mut [0u8; 1])).await {
+        match tokio::time::timeout(deadlines.first_byte, stream.peek(&mut [0u8; 1])).await {
             Ok(Ok(0)) | Ok(Err(_)) => return Ok(()),
             Ok(Ok(_)) => {}
             Err(_) => {
                 Log::new(Some(&status_tx)).debug(format!(
                     "etcd peer {} sent nothing for {}s; closing before the HTTP/2 preface",
                     peer_addr,
-                    FIRST_BYTE_READ_TIMEOUT.as_secs()
+                    deadlines.first_byte.as_secs()
                 ));
                 return Ok(());
             }
@@ -665,7 +1014,8 @@ impl EtcdServer {
         // Tracks whether this connection is answering anything. A request waiting on the model,
         // or parked for a human at the dashboard, holds the count above zero, so the idle
         // watchdog below cannot close the connection the answer belongs to however long it
-        // takes — only genuine silence counts.
+        // takes — only genuine silence counts. A request whose *body* has stopped arriving is
+        // the peer's silence, not ours: the busy mark starts only once the body is in.
         let activity = Arc::new(crate::server::accept_bounded::ConnectionActivity::new());
         let activity_for_service = Arc::clone(&activity);
 
@@ -676,19 +1026,19 @@ impl EtcdServer {
             let meta_ref = meta.clone();
             let proto = protocol.clone();
             let activity = Arc::clone(&activity_for_service);
+            let budget = Arc::clone(&budget);
 
             async move {
-                let _busy = activity.busy();
                 let response = Self::handle_grpc_request(
                     req,
-                    peer_addr,
-                    local_addr,
                     llm,
                     state.clone(),
                     status,
                     server_id,
                     meta_ref,
                     proto,
+                    activity,
+                    budget,
                 )
                 .await;
 
@@ -714,6 +1064,7 @@ impl EtcdServer {
         });
 
         let conn = hyper::server::conn::http2::Builder::new(hyper_util::rt::TokioExecutor::new())
+            .max_concurrent_streams(MAX_CONCURRENT_STREAMS)
             .serve_connection(io, service);
         tokio::pin!(conn);
 
@@ -721,12 +1072,12 @@ impl EtcdServer {
             result = &mut conn => result?,
             _ = crate::server::accept_bounded::watch_idle(
                 Arc::clone(&activity),
-                IDLE_BETWEEN_REQUESTS_TIMEOUT,
+                deadlines.idle,
             ) => {
                 debug!(
                     "etcd connection {} idle for {}s; closing",
                     connection_id,
-                    IDLE_BETWEEN_REQUESTS_TIMEOUT.as_secs()
+                    deadlines.idle.as_secs()
                 );
             }
         }
@@ -734,25 +1085,53 @@ impl EtcdServer {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_grpc_request(
         req: Request<Incoming>,
-        _peer_addr: SocketAddr,
-        _local_addr: SocketAddr,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
         server_id: crate::state::ServerId,
         meta: Arc<Mutex<EtcdMeta>>,
         protocol: Arc<EtcdProtocol>,
+        activity: Arc<crate::server::accept_bounded::ConnectionActivity>,
+        budget: Arc<tokio::sync::Semaphore>,
     ) -> Result<Response<GrpcBody>> {
         // Never return Err from here. hyper turns a service error into an abrupt HTTP/2
         // stream reset with no gRPC status, which a client reports as a transport failure
         // with no explanation; worse, an error out of service_fn tears down the whole
         // multiplexed connection, killing every other in-flight RPC on it. Every failure
         // below becomes a well-formed gRPC status reply instead.
+        let path = req.uri().path().to_string();
+        Log::new(Some(&status_tx)).debug(format!("etcd gRPC {} {}", req.method(), path));
+
+        // The body first, with the connection *not* marked busy: until the last DATA frame is
+        // in, the peer is the one we are waiting on, and a peer that stops sending mid-body is
+        // as silent as one that never sent a request. The budget permit is held until the
+        // reply is built, so the bytes count against the server for as long as they exist.
+        let (whole_body, _held) =
+            match collect_request_body(req.into_body(), &budget, &activity).await {
+                Ok(collected) => collected,
+                Err(GrpcFailure { status, message }) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "etcd {} refused decision=refused_request_body: {}",
+                        path, message
+                    ));
+                    return Ok(grpc_status_reply(status, &message));
+                }
+            };
+        let _busy = activity.busy();
+
         Ok(
             match Self::route_grpc_request(
-                req, llm_client, app_state, status_tx, server_id, meta, protocol,
+                &path,
+                &whole_body,
+                llm_client,
+                app_state,
+                status_tx,
+                server_id,
+                meta,
+                protocol,
             )
             .await
             {
@@ -762,8 +1141,10 @@ impl EtcdServer {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn route_grpc_request(
-        req: Request<Incoming>,
+        path: &str,
+        whole_body: &[u8],
         llm_client: OllamaClient,
         app_state: Arc<AppState>,
         status_tx: mpsc::UnboundedSender<String>,
@@ -771,28 +1152,7 @@ impl EtcdServer {
         meta: Arc<Mutex<EtcdMeta>>,
         protocol: Arc<EtcdProtocol>,
     ) -> std::result::Result<Response<GrpcBody>, GrpcFailure> {
-        // Store owned copies before consuming req
-        let path = req.uri().path().to_string();
-        let method = req.method().as_str().to_string();
-
-        Log::new(Some(&status_tx)).debug(format!("etcd gRPC {} {}", method, path));
-
-        // Cap the body before buffering it. HTTP/2 flow control bounds the window, not the
-        // total, so an unbounded `collect()` lets one client grow the process without limit.
-        // The limit matches etcd's own --max-request-bytes default of 1.5 MiB.
-        let body = Limited::new(req.into_body(), MAX_REQUEST_BYTES);
-        let whole_body = body.collect().await.map_err(|e| {
-            GrpcFailure::new(
-                GRPC_RESOURCE_EXHAUSTED,
-                format!(
-                    "request body rejected (limit {} bytes): {}",
-                    MAX_REQUEST_BYTES, e
-                ),
-            )
-        })?;
-        let whole_body = whole_body.to_bytes();
-
-        let msg_bytes = unary_message(&whole_body).map_err(|e| {
+        let msg_bytes = unary_message(whole_body).map_err(|e| {
             let status = match e {
                 // The message is compressed; nothing here can decompress it, and silently
                 // handing the compressed bytes to prost would decode as garbage.
@@ -803,7 +1163,7 @@ impl EtcdServer {
         })?;
 
         // Route to appropriate handler based on path
-        let response_bytes = match path.as_str() {
+        let response_bytes = match path {
             "/etcdserverpb.KV/Range" => {
                 Self::handle_range(
                     msg_bytes, llm_client, app_state, status_tx, server_id, meta, protocol,
@@ -886,15 +1246,7 @@ impl EtcdServer {
 
         trace!("etcd Range request: {:?}", request);
 
-        // Create event for LLM
-        let event = Event::new(
-            &ETCD_RANGE_REQUEST_EVENT,
-            serde_json::json!({
-                "key": key_str,
-                "range_end": if request.range_end.is_empty() { None } else { Some(String::from_utf8_lossy(&request.range_end).to_string()) },
-                "limit": request.limit,
-            }),
-        );
+        let event = Event::new(&ETCD_RANGE_REQUEST_EVENT, range_request_json(&request));
 
         // Call LLM for decision
         let execution_result = call_llm(
@@ -912,54 +1264,20 @@ impl EtcdServer {
             return Err(failure);
         }
 
-        // Process LLM action results to build response
+        // Process LLM action results to build response. The first etcd_range_response answers.
         let meta_lock = meta.lock().await;
-        let mut kvs = vec![];
-        let mut more = false;
-        let mut count = 0;
-        let mut answered = false;
-
-        for protocol_result in &execution_result.protocol_results {
-            if let crate::llm::actions::protocol_trait::ActionResult::Custom { name, data } =
-                protocol_result
-            {
-                if name == "etcd_range_response" {
-                    answered = true;
-                    // Parse LLM response
-                    if let Some(kvs_array) = data.get("kvs").and_then(|v| v.as_array()) {
-                        for kv_json in kvs_array {
-                            let key = kv_json.get("key").and_then(|v| v.as_str()).unwrap_or("");
-                            let value = kv_json.get("value").and_then(|v| v.as_str()).unwrap_or("");
-                            let create_revision = kv_json
-                                .get("create_revision")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            let mod_revision = kv_json
-                                .get("mod_revision")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0);
-                            let version =
-                                kv_json.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
-                            let lease = kv_json.get("lease").and_then(|v| v.as_i64()).unwrap_or(0);
-
-                            kvs.push(KeyValue {
-                                key: key.as_bytes().to_vec(),
-                                create_revision,
-                                mod_revision,
-                                version,
-                                lease,
-                                value: value.as_bytes().to_vec(),
-                            });
-                        }
-                    }
-                    more = data.get("more").and_then(|v| v.as_bool()).unwrap_or(false);
-                    count = data
-                        .get("count")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(kvs.len() as i64);
+        let answer = execution_result
+            .protocol_results
+            .iter()
+            .find_map(|r| match r {
+                crate::llm::actions::protocol_trait::ActionResult::Custom { name, data }
+                    if name == "etcd_range_response" =>
+                {
+                    Some(data)
                 }
-            }
-        }
+                _ => None,
+            });
+        let answered = answer.is_some();
 
         // The same fail-closed rule `handle_put` already applies, for the same reason.
         // `kvs: [], count: 0` is not the absence of an answer - in etcd it *is* an answer, and
@@ -985,12 +1303,11 @@ impl EtcdServer {
             ));
         }
 
-        let response = RangeResponse {
-            header: Some(meta_lock.get_response_header()),
-            kvs,
-            more,
-            count,
-        };
+        let response = shape_range(
+            &request,
+            answer.unwrap_or(&serde_json::Value::Null),
+            meta_lock.get_response_header(),
+        );
 
         let mut buf = Vec::new();
         response.encode(&mut buf)?;
@@ -1025,6 +1342,9 @@ impl EtcdServer {
                 "key": key_str,
                 "value": value_str,
                 "lease": request.lease,
+                "prev_kv": request.prev_kv,
+                "ignore_value": request.ignore_value,
+                "ignore_lease": request.ignore_lease,
             }),
         );
 
@@ -1059,13 +1379,20 @@ impl EtcdServer {
         let mut meta_lock = meta.lock().await;
         let mut revision: i64 = 0;
         let mut answered = false;
+        let mut prev_kv = None;
 
         for protocol_result in &execution_result.protocol_results {
             if let crate::llm::actions::protocol_trait::ActionResult::Custom { name, data } =
                 protocol_result
             {
-                if name == "etcd_put_response" {
+                if name == "etcd_put_response" && !answered {
                     answered = true;
+                    if request.prev_kv {
+                        prev_kv = data
+                            .get("prev_kv")
+                            .filter(|v| v.is_object())
+                            .map(kv_from_json);
+                    }
                     // LLM provided put response
                     revision = data
                         .get("revision")
@@ -1107,7 +1434,7 @@ impl EtcdServer {
 
         let response = PutResponse {
             header: Some(meta_lock.get_response_header()),
-            prev_kv: None,
+            prev_kv,
         };
 
         let mut buf = Vec::new();
@@ -1137,11 +1464,8 @@ impl EtcdServer {
             &ETCD_DELETE_REQUEST_EVENT,
             serde_json::json!({
                 "key": key_str,
-                "range_end": if request.range_end.is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::json!(String::from_utf8_lossy(&request.range_end))
-                },
+                "range_end": range_end_json(&request.range_end),
+                "prev_kv": request.prev_kv,
             }),
         );
 
@@ -1176,15 +1500,21 @@ impl EtcdServer {
         let mut meta_lock = meta.lock().await;
         let mut deleted: i64 = 0;
         let mut answered = false;
+        let mut prev_kvs = Vec::new();
 
         for protocol_result in &execution_result.protocol_results {
             if let crate::llm::actions::protocol_trait::ActionResult::Custom { name, data } =
                 protocol_result
             {
-                if name == "etcd_delete_range_response" {
-                    answered = true;
-                    // LLM provided delete response
-                    deleted = data.get("deleted").and_then(|v| v.as_i64()).unwrap_or(0);
+                // `deleted` is the claim; an answer without it is no answer, not "deleted 0".
+                if name == "etcd_delete_range_response" && !answered {
+                    if let Some(n) = data.get("deleted").and_then(|v| v.as_i64()) {
+                        answered = true;
+                        deleted = n;
+                        if request.prev_kv {
+                            prev_kvs = kvs_from_json(data.get("prev_kvs"));
+                        }
+                    }
                 }
             }
         }
@@ -1208,12 +1538,16 @@ impl EtcdServer {
             ));
         }
 
-        meta_lock.increment_revision();
+        // A delete that removed nothing changed nothing, and etcd does not move its revision
+        // for it.
+        if deleted > 0 {
+            meta_lock.increment_revision();
+        }
 
         let response = DeleteRangeResponse {
             header: Some(meta_lock.get_response_header()),
             deleted,
-            prev_kvs: vec![],
+            prev_kvs,
         };
 
         let mut buf = Vec::new();
@@ -1223,11 +1557,16 @@ impl EtcdServer {
 
     /// Handle a Txn.
     ///
-    /// The comparison predicates are described to the handler and the handler decides whether
-    /// they hold; the *nested* operations inside the success/failure branches are still not
-    /// executed, so `responses` is always empty. This used to hardcode `succeeded: false`
-    /// with no LLM call at all, which made every etcd distributed-lock acquisition fail
-    /// unconditionally - and `etcd_txn_request` was advertised as an event that never fired.
+    /// The handler sees every comparison (with the value it compares against) and every
+    /// operation of both branches, decides which branch ran, and answers each operation of that
+    /// branch in `responses`, in order. The reply carries one `ResponseOp` per operation of the
+    /// branch taken, as etcd's does — clients index into it (`etcdctl txn` prints one result per
+    /// operation; clientv3's mutex reads the owner out of the failure branch's range).
+    ///
+    /// Fail-closed like every other method: no `etcd_txn_response`, or a branch with a Range or
+    /// DeleteRange whose entry is missing, is `13 INTERNAL` rather than a reply that invents "no
+    /// such key" or "deleted nothing". A nested Txn operation is refused up front, before the
+    /// handler is asked, because its reply would need a branch and responses of its own.
     async fn handle_txn(
         msg_bytes: &[u8],
         llm_client: OllamaClient,
@@ -1238,6 +1577,7 @@ impl EtcdServer {
         protocol: Arc<EtcdProtocol>,
     ) -> std::result::Result<Vec<u8>, GrpcFailure> {
         use crate::server::etcd::actions::ETCD_TXN_REQUEST_EVENT;
+        use etcdserverpb::compare::TargetUnion;
 
         let request = TxnRequest::decode(msg_bytes)?;
 
@@ -1249,18 +1589,23 @@ impl EtcdServer {
         ));
 
         // Describe the predicates as structured JSON. Protobuf enums are rendered as their
-        // spec names rather than raw numbers so a handler can reason about them.
+        // spec names rather than raw numbers so a handler can reason about them, and the
+        // operand the comparison is against goes with them as `value`.
         let compares: Vec<serde_json::Value> = request
             .compare
             .iter()
             .map(|c| {
+                let value = match &c.target_union {
+                    Some(TargetUnion::Version(v))
+                    | Some(TargetUnion::CreateRevision(v))
+                    | Some(TargetUnion::ModRevision(v))
+                    | Some(TargetUnion::Lease(v)) => serde_json::json!(v),
+                    Some(TargetUnion::Value(v)) => serde_json::json!(String::from_utf8_lossy(v)),
+                    None => serde_json::Value::Null,
+                };
                 serde_json::json!({
                     "key": String::from_utf8_lossy(&c.key),
-                    "range_end": if c.range_end.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::json!(String::from_utf8_lossy(&c.range_end))
-                    },
+                    "range_end": range_end_json(&c.range_end),
                     "result": match c.result {
                         0 => "EQUAL",
                         1 => "GREATER",
@@ -1276,9 +1621,20 @@ impl EtcdServer {
                         4 => "LEASE",
                         _ => "UNKNOWN",
                     },
+                    "value": value,
                 })
             })
             .collect();
+        let success = request
+            .success
+            .iter()
+            .map(txn_op_json)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let failure = request
+            .failure
+            .iter()
+            .map(txn_op_json)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let event = Event::new(
             &ETCD_TXN_REQUEST_EVENT,
@@ -1287,6 +1643,8 @@ impl EtcdServer {
                 "success_count": request.success.len(),
                 "failure_count": request.failure.len(),
                 "compares": compares,
+                "success": success,
+                "failure": failure,
             }),
         );
 
@@ -1309,27 +1667,80 @@ impl EtcdServer {
             return Err(failure);
         }
 
-        let mut succeeded = false;
-        for protocol_result in &execution_result.protocol_results {
-            if let crate::llm::actions::protocol_trait::ActionResult::Custom { name, data } =
-                protocol_result
-            {
-                if name == "etcd_txn_response" {
-                    succeeded = data
-                        .get("succeeded")
+        let answer = execution_result
+            .protocol_results
+            .iter()
+            .find_map(|r| match r {
+                crate::llm::actions::protocol_trait::ActionResult::Custom { name, data }
+                    if name == "etcd_txn_response" =>
+                {
+                    data.get("succeeded")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                        .map(|succeeded| (succeeded, data))
+                }
+                _ => None,
+            });
+
+        let refuse = |why: String| {
+            Log::new(Some(&status_tx)).warn(format!(
+                "etcd Txn could not be answered: {why} (decision=fail_closed_no_action). \
+                 Replying grpc-status 13 (INTERNAL); no transaction outcome is being invented."
+            ));
+            GrpcFailure::new(
+                GRPC_INTERNAL,
+                crate::utils::WireFailure::Unavailable.prefixed_text(),
+            )
+        };
+
+        let Some((succeeded, data)) = answer else {
+            return Err(refuse(
+                "the handler produced no etcd_txn_response with a succeeded flag".to_string(),
+            ));
+        };
+        let branch = if succeeded {
+            &request.success
+        } else {
+            &request.failure
+        };
+        let answers: Vec<serde_json::Value> = data
+            .get("responses")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut meta_lock = meta.lock().await;
+
+        // Two passes: the first validates every entry and learns whether the branch wrote
+        // anything, which decides the revision the replies carry; the second builds them with it.
+        let mut wrote = false;
+        for (idx, op) in branch.iter().enumerate() {
+            let header = meta_lock.get_response_header();
+            match txn_op_response(op, answers.get(idx), &header) {
+                Ok((_, w)) => wrote |= w,
+                Err(why) => {
+                    drop(meta_lock);
+                    return Err(refuse(format!("responses[{idx}]: {why}")));
                 }
             }
         }
-
-        let mut meta_lock = meta.lock().await;
-        meta_lock.increment_revision();
+        if wrote {
+            meta_lock.increment_revision();
+        }
+        let header = meta_lock.get_response_header();
+        let responses = branch
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, op)| {
+                txn_op_response(op, answers.get(idx), &header)
+                    .ok()
+                    .map(|(r, _)| r)
+            })
+            .collect();
 
         let response = TxnResponse {
-            header: Some(meta_lock.get_response_header()),
+            header: Some(header),
             succeeded,
-            responses: vec![],
+            responses,
         };
 
         let mut buf = Vec::new();
@@ -1337,6 +1748,9 @@ impl EtcdServer {
         Ok(buf)
     }
 
+    /// Handle a Compact. Nothing is stored, so nothing is discarded, but the revisions are this
+    /// server's own and it answers for them as etcd does: a revision past the current one, or
+    /// one already compacted, is `11 OUT_OF_RANGE` with etcd's own message.
     async fn handle_compact(
         msg_bytes: &[u8],
         _llm_client: OllamaClient,
@@ -1353,7 +1767,20 @@ impl EtcdServer {
             request.revision
         ));
 
-        let meta_lock = meta.lock().await;
+        let mut meta_lock = meta.lock().await;
+        if request.revision > meta_lock.revision {
+            return Err(GrpcFailure::new(
+                GRPC_OUT_OF_RANGE,
+                "etcdserver: mvcc: required revision is a future revision",
+            ));
+        }
+        if request.revision <= meta_lock.compacted {
+            return Err(GrpcFailure::new(
+                GRPC_OUT_OF_RANGE,
+                "etcdserver: mvcc: required revision has been compacted",
+            ));
+        }
+        meta_lock.compacted = request.revision;
 
         let response = CompactionResponse {
             header: Some(meta_lock.get_response_header()),

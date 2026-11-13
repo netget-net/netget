@@ -278,3 +278,293 @@ async fn etcdctl_completes_put_get_prefix_and_delete() -> E2EResult<()> {
     server.stop().await?;
     Ok(())
 }
+
+/// Run `etcdctl txn` with `script` on stdin (compares, blank line, success ops, blank line,
+/// failure ops, blank line — etcdctl's non-interactive format).
+async fn etcdctl_txn(port: u16, script: &str) -> CtlOutput {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    let mut child = Command::new("etcdctl")
+        .arg("--endpoints")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("--command-timeout=30s")
+        .arg("--dial-timeout=30s")
+        .arg("txn")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn etcdctl txn");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(script.as_bytes()).await.expect("write txn");
+    drop(stdin);
+    let out = child.wait_with_output().await.expect("etcdctl txn");
+    CtlOutput {
+        success: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    }
+}
+
+fn kv(key: &str, value: &str, rev: i64) -> serde_json::Value {
+    json!({"key": key, "value": value, "create_revision": rev, "mod_revision": rev,
+           "version": 1, "lease": 0})
+}
+
+/// The server for the second session: the rest of the KV surface. Each rule branches on the
+/// event, so one rule per event answers every shape this session sends.
+fn etcdctl_rest_of_the_surface() -> NetGetConfig {
+    NetGetConfig::new("listen on port {AVAILABLE_PORT} via etcd. Serve KV requests").with_mock(
+        |mock| {
+            mock.on_instruction_containing("via etcd")
+                .respond_with_actions(json!([{
+                    "type": "open_server",
+                    "port": 0,
+                    "base_stack": "ETCD",
+                    "instruction": "Serve etcd KV requests"
+                }]))
+                .expect_calls(1)
+                .and()
+                // put --prev-kv: the previous pair comes from the handler.
+                .on_event("etcd_put_request")
+                .respond_with_actions_from_event(|e| {
+                    if e["prev_kv"] == json!(true) {
+                        json!([{"type": "etcd_put_response",
+                                "prev_kv": kv("/config/database", "localhost:5432", 1)}])
+                    } else {
+                        json!([{"type": "etcd_put_response"}])
+                    }
+                })
+                .expect_calls(2)
+                .and()
+                // Every Range answers with all three keys under /config/ (or an error for
+                // /missing). --limit, --keys-only and --count-only are the server's to apply.
+                .on_event("etcd_range_request")
+                .respond_with_actions_from_event(|e| {
+                    if e["key"] == json!("/missing") {
+                        return json!([{"type": "etcd_error", "code": "KEY_NOT_FOUND",
+                                       "message": "etcdserver: key not found"}]);
+                    }
+                    json!([{"type": "etcd_range_response", "count": 3, "kvs": [
+                        kv("/config/a", "1", 2), kv("/config/b", "2", 3),
+                        kv("/config/database", "db2:5432", 4)
+                    ]}])
+                })
+                .expect_calls(4)
+                .and()
+                .on_event("etcd_delete_request")
+                .respond_with_actions_from_event(|e| {
+                    let prev_kvs = if e["prev_kv"] == json!(true) {
+                        json!([kv("/config/a", "1", 2)])
+                    } else {
+                        json!([])
+                    };
+                    json!([{"type": "etcd_delete_range_response", "deleted": 1,
+                            "prev_kvs": prev_kvs}])
+                })
+                .expect_calls(1)
+                .and()
+                // The lock pattern, both ways round: /lock/a is free (the put runs), /lock/b is
+                // held (the get of the failure branch runs and reads the owner).
+                .on_event("etcd_txn_request")
+                .respond_with_actions_from_event(|e| {
+                    if e["compares"][0]["key"] == json!("/lock/a") {
+                        json!([{"type": "etcd_txn_response", "succeeded": true,
+                                "responses": [{}]}])
+                    } else {
+                        json!([{"type": "etcd_txn_response", "succeeded": false,
+                                "responses": [{"kvs": [kv("/lock/b", "owner-1", 7)],
+                                               "count": 1}]}])
+                    }
+                })
+                .expect_calls(2)
+                .and()
+        },
+    )
+}
+
+/// Non-empty, trimmed lines of `text`.
+fn lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// The second session: Txn both ways, Compact, Range's shaping flags, the previous-pair flags
+/// and an error status — the verbs and paths the first session does not reach.
+///
+/// | command | exercises |
+/// |---|---|
+/// | `txn` (lock free) | Txn, success branch, one `ResponsePut` per put |
+/// | `txn` (lock held) | Txn, failure branch, the `ResponseRange` the handler gave |
+/// | `get --prefix --limit 2` | `limit` applied by the server, not the handler |
+/// | `get --prefix --keys-only` | values dropped by the server |
+/// | `get --prefix --count-only` | pairs dropped, count kept |
+/// | `put --prev-kv` | `PutResponse.prev_kv` from the handler |
+/// | `del --prev-kv` | `DeleteRangeResponse.prev_kvs` from the handler |
+/// | `get /missing` | an `etcd_error` as a Trailers-Only `NotFound` |
+/// | `compaction` | Compact at the current revision, then the same one again (refused) |
+#[tokio::test]
+async fn etcdctl_drives_txn_compaction_range_flags_and_errors() -> E2EResult<()> {
+    let version = require_etcdctl().await?;
+    println!("etcdctl: {version}");
+
+    let server = start_netget_server(etcdctl_rest_of_the_surface()).await?;
+    crate::helpers::wait_for_server_listening(&server, Duration::from_secs(30)).await?;
+    let (relay, streams) = crate::helpers::recording_relay::tcp_relay(
+        format!("127.0.0.1:{}", server.port).parse().unwrap(),
+    )
+    .await;
+    let port = relay.port();
+
+    // --- txn: the lock is free, the put runs ---------------------------------
+    let taken = etcdctl_txn(
+        port,
+        "create(\"/lock/a\") = \"0\"\n\nput /lock/a me\n\nget /lock/a\n\n",
+    )
+    .await;
+    assert!(
+        taken.success,
+        "etcdctl txn failed.\nstdout: {}\nstderr: {}",
+        taken.stdout, taken.stderr
+    );
+    assert_eq!(
+        lines(&taken.stdout),
+        vec!["SUCCESS", "OK"],
+        "etcdctl prints the branch and one line per operation's response; a TxnResponse without \
+         the put's ResponseOp prints SUCCESS alone"
+    );
+
+    // --- txn: the lock is held, the failure branch's get reads the owner ----
+    let held = etcdctl_txn(
+        port,
+        "create(\"/lock/b\") = \"0\"\n\nput /lock/b me\n\nget /lock/b\n\n",
+    )
+    .await;
+    assert!(
+        held.success,
+        "etcdctl txn failed.\nstdout: {}\nstderr: {}",
+        held.stdout, held.stderr
+    );
+    assert_eq!(
+        lines(&held.stdout),
+        vec!["FAILURE", "/lock/b", "owner-1"],
+        "the failure branch's get must print the pair the handler gave"
+    );
+
+    // --- get --limit: three pairs from the handler, two printed --------------
+    let limited = etcdctl(port, &["get", "--prefix", "--limit", "2", "/config/"]).await;
+    assert!(limited.success, "get --limit failed: {}", limited.stderr);
+    assert_eq!(
+        lines(&limited.stdout),
+        vec!["/config/a", "1", "/config/b", "2"],
+        "the server must truncate to the request's limit"
+    );
+
+    // --- get --keys-only: keys, no values ------------------------------------
+    let keys = etcdctl(port, &["get", "--prefix", "--keys-only", "/config/"]).await;
+    assert!(keys.success, "get --keys-only failed: {}", keys.stderr);
+    assert_eq!(
+        lines(&keys.stdout),
+        vec!["/config/a", "/config/b", "/config/database"],
+        "keys-only must carry no values"
+    );
+
+    // --- get --count-only: the count -----------------------------------------
+    // etcdctl prints a count-only reply only as `-w fields`: one `"Count" : N` line, and a
+    // `"Key"` line per pair, of which there must be none.
+    let count = etcdctl(
+        port,
+        &[
+            "get",
+            "--prefix",
+            "--count-only",
+            "-w",
+            "fields",
+            "/config/",
+        ],
+    )
+    .await;
+    assert!(count.success, "get --count-only failed: {}", count.stderr);
+    assert!(
+        count.stdout.contains("\"Count\" : 3") && !count.stdout.contains("\"Key\""),
+        "count-only carries the count and no pairs:\n{}",
+        count.stdout
+    );
+
+    // --- put --prev-kv --------------------------------------------------------
+    let put = etcdctl(port, &["put", "--prev-kv", "/config/database", "db2:5432"]).await;
+    assert!(put.success, "put --prev-kv failed: {}", put.stderr);
+    assert_eq!(
+        lines(&put.stdout),
+        vec!["OK", "/config/database", "localhost:5432"],
+        "put --prev-kv prints OK and then the previous pair the handler gave"
+    );
+
+    // --- del --prev-kv --------------------------------------------------------
+    let del = etcdctl(port, &["del", "--prev-kv", "/config/a"]).await;
+    assert!(del.success, "del --prev-kv failed: {}", del.stderr);
+    assert_eq!(
+        lines(&del.stdout),
+        vec!["1", "/config/a", "1"],
+        "del --prev-kv prints the count and then the deleted pairs"
+    );
+
+    // --- an error status, Trailers-Only ---------------------------------------
+    let missing = etcdctl(port, &["get", "/missing"]).await;
+    assert!(!missing.success, "a get the handler refused must fail");
+    assert!(
+        missing.stderr.contains("NotFound") && missing.stderr.contains("key not found"),
+        "etcdctl must read the handler's NOT_FOUND and its message; stderr: {}",
+        missing.stderr
+    );
+
+    // --- compaction at the current revision, then the same one again ----------
+    // The revision is read from a header etcdctl prints, not assumed.
+    let put_json = etcdctl(port, &["put", "/config/x", "y", "-w", "json"]).await;
+    let header: serde_json::Value =
+        serde_json::from_str(put_json.stdout.trim()).expect("put -w json prints JSON");
+    let revision = header["header"]["revision"]
+        .as_i64()
+        .expect("the put's header carries a revision");
+    let compacted = etcdctl(port, &["compaction", &revision.to_string()]).await;
+    assert!(
+        compacted.success
+            && compacted
+                .stdout
+                .contains(&format!("compacted revision {revision}")),
+        "compaction at the current revision must succeed.\nstdout: {}\nstderr: {}",
+        compacted.stdout,
+        compacted.stderr
+    );
+    let again = etcdctl(port, &["compaction", &revision.to_string()]).await;
+    assert!(
+        !again.success
+            && again
+                .stderr
+                .contains("required revision has been compacted"),
+        "compacting the same revision twice must be refused as etcd refuses it; stderr: {}",
+        again.stderr
+    );
+
+    // --- the pcap oracle over every connection ---------------------------------
+    let connections = crate::helpers::recording_relay::recorded(&streams);
+    assert!(
+        connections.len() >= 11,
+        "eleven etcdctl commands should have crossed the relay, saw {} connections",
+        connections.len()
+    );
+    for chunks in &connections {
+        crate::helpers::recording_relay::replay(
+            crate::helpers::pcap_oracle::PcapOracle::tcp("etcd").also_named("grpc"),
+            chunks,
+        )
+        .assert_clean();
+    }
+
+    server.wait_for_mocks(30).await;
+    server.verify_mocks().await?;
+    server.stop().await?;
+    Ok(())
+}
