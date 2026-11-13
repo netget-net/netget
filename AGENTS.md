@@ -385,6 +385,23 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   `server::ftp::real_client_test`, because the bare form is a substring of TFTP's in
   `cargo test`'s filter too.
 
+  **`ftp` gained binary files, `REST`, `STOU`, `ABOR` and explicit FTPS on 13 November 2026**,
+  each driven by both clients where the client has the verb. `send_ftp_data` takes
+  `encoding: "utf8"|"hex"` and a binary upload reaches the handler as `upload_hex`, bounded by
+  `max_hex_upload_bytes`; `REST` restarts `RETR` and `STOR` in stream mode (`554` past the end);
+  `STOU` names the file in `150 FILE: <name>`; `AUTH TLS`, `PBSZ` and `PROT P` put the control
+  and every data connection on rustls, with `cert_path`/`key_path` or a generated certificate,
+  and ftplib's `FTP_TLS` and curl `--ssl-reqd` each verify it. **`ABOR` needed the control
+  connection to be readable during a transfer, and two things stood in the way.** The line
+  reader was not cancel-safe (a `BufReader` plus a local accumulator), so racing it against the
+  transfer could lose half a line; it now keeps unreturned bytes in its own buffer
+  (`src/server/ftp/control.rs`). And python's `ftplib.abort()` sends `ABOR\r\n` as TCP urgent
+  data, which makes the `\n` the urgent byte: without `SO_OOBINLINE` on the control socket the
+  kernel removes it and the line never ends, and even with it a read stops at the urgent mark
+  and tokio reads the short read as "drained", so the `\n` sits in the kernel until the client's
+  next command. The reader takes `ABOR\r` alone as a complete line. The same is true of any relay in between, which is
+  why ftplib's `ABOR` test connects directly rather than through the recording relay.
+
   **Do not read the rest of this section as the list. Generate it:**
 
   ```bash
