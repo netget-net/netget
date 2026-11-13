@@ -7,9 +7,10 @@
 //!
 //! - **Inbound**, a message whose first frame has RSV1 set is collected across its
 //!   continuation frames, inflated as one (§7.2.2: append `00 00 ff ff`, then inflate) and
-//!   handed up as a single unfragmented frame with RSV1 clear, keeping the peer's masking key
-//!   so a server-role tungstenite still sees a masked client frame. Uncompressed messages and
-//!   every control frame pass through untouched.
+//!   handed up with RSV1 clear, re-fragmented at the frame limit, keeping the peer's masking
+//!   key so a server-role tungstenite still sees a masked client frame. Uncompressed messages
+//!   and every control frame pass through untouched. Every frame the peer sends is held to the
+//!   frame limit, and a compressed message's frames to the message limit between them.
 //! - **Outbound**, every data message tungstenite writes is deflated (§7.2.1: compress, sync
 //!   flush, drop the trailing `00 00 ff ff`) and sent as one frame with RSV1 set, re-masked
 //!   with tungstenite's own key on the client side.
@@ -32,6 +33,45 @@ pub const EXTENSION: &str = "permessage-deflate";
 /// What the offer the client sends looks like: no constraints of its own, and it accepts any
 /// window the server picks for client-to-server messages.
 pub const CLIENT_OFFER: &str = "permessage-deflate; client_max_window_bits";
+
+/// Why the frame layer refused what the peer sent, carried inside the `io::Error` it returns
+/// so the connection can answer with the right close code (1009 or 1002).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameRefusal {
+    /// A frame, a compressed message or an inflated message over its limit.
+    TooBig {
+        /// The limit was hit on compressed data or by inflating it.
+        compressed: bool,
+        message: String,
+    },
+    /// Compressed framing RFC 7692 forbids, or a payload that does not inflate.
+    Protocol(String),
+}
+
+impl std::fmt::Display for FrameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FrameRefusal::TooBig {
+                compressed: true,
+                message,
+            } => write!(f, "permessage-deflate: {message}"),
+            FrameRefusal::TooBig { message, .. } => f.write_str(message),
+            FrameRefusal::Protocol(message) => write!(f, "permessage-deflate: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for FrameRefusal {}
+
+fn too_big(compressed: bool, message: String) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        FrameRefusal::TooBig {
+            compressed,
+            message,
+        },
+    )
+}
 
 /// The tail a sync flush ends with, which §7.2.1 removes and §7.2.2 puts back.
 const TAIL: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
@@ -294,12 +334,9 @@ impl Codec {
                 .decompress_vec(&input[consumed..], &mut out, FlushDecompress::Sync)
                 .map_err(|e| protocol(&format!("inflate: {e}")))?;
             if out.len() > self.max_message {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "permessage-deflate: message inflates past {} bytes",
-                        self.max_message
-                    ),
+                return Err(too_big(
+                    true,
+                    format!("message inflates past {} bytes", self.max_message),
                 ));
             }
             let consumed = (self.inflate.total_in() - start) as usize;
@@ -388,8 +425,8 @@ impl Frame {
             n => (u64::from(n), 2usize),
         };
         if len > max as u64 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
+            return Err(too_big(
+                b0 & 0x40 != 0,
                 format!("frame of {len} bytes exceeds the {max}-byte limit"),
             ));
         }
@@ -595,12 +632,20 @@ impl<S> DeflateStream<S> {
             self.ready.append(&mut self.read.raw);
             return Ok(());
         };
-        let max = self.max_message;
+        // Every frame the peer sent is held to the frame limit, compressed or not — the same
+        // `max_frame_size` tungstenite applies to an uncompressed one.
+        let max = self.max_frame;
+        // Frames are taken from `at` onwards and the consumed bytes drained once, when no
+        // complete frame is left: draining after each frame would move the rest of the buffer
+        // once per frame, so a read full of tiny frames would cost its length squared. (An
+        // error ends the connection, so those paths leave the buffer as it is.)
+        let mut at = 0usize;
         loop {
-            let Some((frame, used)) = Frame::parse(&self.read.raw, max)? else {
+            let Some((frame, used)) = Frame::parse(&self.read.raw[at..], max)? else {
+                self.read.raw.drain(..at);
                 return Ok(());
             };
-            self.read.raw.drain(..used);
+            at += used;
             if frame.is_control_frame() {
                 frame.encode(&mut self.ready);
                 continue;
@@ -634,10 +679,10 @@ impl<S> DeflateStream<S> {
                     if frame.rsv1 {
                         return Err(protocol("RSV1 on a continuation frame"));
                     }
-                    if partial.payload.len() + frame.payload.len() > max {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("compressed message exceeds {max} bytes"),
+                    if partial.payload.len() + frame.payload.len() > self.max_message {
+                        return Err(too_big(
+                            true,
+                            format!("compressed message exceeds {} bytes", self.max_message),
                         ));
                     }
                     partial.payload.extend_from_slice(&frame.payload);
@@ -756,7 +801,7 @@ fn emit_message(
 fn protocol(msg: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("permessage-deflate: {msg}"),
+        FrameRefusal::Protocol(msg.to_string()),
     )
 }
 

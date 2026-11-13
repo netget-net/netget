@@ -1,19 +1,19 @@
 # WebSocket (RFC 6455) Server
 
-**Status**: Beta (see [Validation](#validation) for exactly what was checked)
+**Status**: **Stable**, set 13 November 2026. See "Maturity: the six conditions" at the foot
+of this file for what was checked and what the rating does *not* cover.
 
-Beta rests on **websocat 1.14.1**, which links `websocket-0.27.1` / `websocket-base-0.26.5`
-(rust-websocket) and **not** `tungstenite` — read out of the installed binary's embedded crate
-paths. That matters: this server frames with `tokio-tungstenite`, so a tungstenite-based peer
-would be the circular-evidence case, and rust-websocket is a separate RFC 6455 implementation.
-`test_websocket_with_websocat` is not `#[ignore]`d and **fails** rather than skips when the
-binary is absent; it printed `skipping: websocat is not installed` and returned `Ok(())` until
-September 2026, which is a silent pass and is what held this at Experimental.
+### What "Stable" covers here
 
-Still unproven, and what a human should check before this goes further: `wss://`,
-and any browser.
+RFC 6455 over plain TCP (`ws://`) and RFC 7692 permessage-deflate, as this server implements
+them: the handshake (subprotocol agreement, refusal with a status, a greeting), text, binary,
+fragmented messages, Ping/Pong in both directions, the closing handshake from either side, the
+keepalive, and every bound in "Connection bounds". Three independent clients drive it — Python
+`websockets`, Node `ws` and `websocat` (rust-websocket) — none of them tungstenite, the crate
+this server frames with (`tests/server/websocket/real_client_test.rs`). Not covered: `wss://`
+(not implemented), browsers, extensions other than permessage-deflate, and the Autobahn suite.
 **Spec**: RFC 6455, and RFC 7692 (permessage-deflate) — see "permessage-deflate" below.
-**Feature**: `websocket` · **Privilege**: `None` · **System libraries**: none
+**Feature**: none (every native build) · **Privilege**: `None` · **System libraries**: none
 
 ## Why this protocol is a good fit for NetGet
 
@@ -31,8 +31,8 @@ does not get elsewhere:
 
 ## Library choice
 
-`tokio-tungstenite` **0.21**, which was already an optional dependency in the tree (pulled in by
-the `webrtc` feature). Deliberately **not bumped to 0.30**: the version is shared with
+`tokio-tungstenite` **0.21**, which was already in the tree for
+the `webrtc` protocol. Deliberately **not bumped to 0.30**: the version is shared with
 `webrtc_signaling` and has to agree with whatever the `webrtc` crate itself pins, so bumping it
 is a `webrtc`-wide decision and not this protocol's to make. 0.21 is fully RFC 6455 for
 everything below §5, which is all that is needed here.
@@ -191,6 +191,12 @@ a client backs off rather than recording a permanent fault. The close *reason* i
 string `handler failed` in both cases: a close reason is peer-visible, so the backend's error
 text belongs in the log line beside it and nowhere else.
 
+**What the peer sent can fail the connection too, and the peer is told why** (§7.1.7): a frame or
+message over a limit is Close **1009**, a protocol violation (an unmasked frame, a bad opcode,
+compressed framing RFC 7692 forbids) **1002**, invalid UTF-8 in a text message **1007**.
+tungstenite returns these errors without writing anything, so `mod.rs::read_error_close` maps
+each to its code and the writer sends it before the socket closes.
+
 ## Failure behaviour
 
 Every LLM call site emits one `decision=` line. The important one is `websocket_text_message` /
@@ -211,6 +217,9 @@ that deliberately said nothing and a rule that never matched were the same silen
 | message → no action | **nothing**; the connection stays open | WARN `decision=model_silent` |
 | message → every action refused by the executor | **nothing**; the connection stays open | ERROR `decision=fail_closed_bad_action` |
 | message → backend failed | close **1011** / **1013**, reason `handler failed` | ERROR `decision=fail_closed_llm_error` / `..._overloaded` |
+| a frame or message over a limit | close **1009** | WARN `decision=message_too_big` (`permessage_deflate_refused` when the limit was hit on compressed data or by inflating it) |
+| a protocol violation / invalid UTF-8 | close **1002** / **1007** | WARN `decision=protocol_error` |
+| request head over 16 KiB / unfinished at `handshake_timeout_secs` | **431** / **408** | WARN `decision=protocol_error` / DEBUG |
 | `websocket_connection_opened` → backend failed | nothing; the connection stays open | WARN `decision=llm_error_notice_only` |
 | `websocket_close` → backend failed | nothing; the peer has already closed | WARN `decision=llm_error_notice_only` |
 
@@ -229,20 +238,24 @@ asserts both halves of the handshake row: the 503 on the wire, and
 Per connection: **Idle → Processing → Accumulating**, in `ConnData`.
 
 - messages arriving while the model is thinking go on `queued` (no concurrent model call on one
-  connection, no lost message)
-- `wait_for_websocket_data` moves to `Accumulating` and parks the message in `pending`; the next
-  message of the same kind is joined onto it (text concatenated, binary appended) and the pair is
-  delivered as one event. Different kinds are processed in arrival order instead.
+  connection, no lost message), in arrival order. **The backlog is bounded**:
+  while a handler is running and `queued` holds `MAX_QUEUED_INBOUND_MESSAGES` (1024) messages or
+  `MAX_QUEUED_INBOUND_BYTES` (8 MiB), the read loop reads nothing more until the handler takes
+  some — the socket buffer fills and TCP holds the peer back. Nothing is dropped or refused.
+- `wait_for_websocket_data` parks the message in `held`, at most one per kind, and moves to
+  `Accumulating` once the queue is empty. The next message of the same kind — one already
+  queued, or the next to arrive — is joined onto it (text concatenated, binary appended) and
+  delivered as one event; a message of the other kind is answered on its own while the held one
+  waits. A join that would pass `max_message_size` closes the connection with **1009**, as a
+  message that size would (`decision=message_too_big`).
 - **Batching (`BatchingMode::On`).** When the handler comes back for the next queued message
   and the instance batches, it drains every consecutive text/binary message at the front of
   `queued` (up to `MAX_BATCH_EVENTS`) into one `call_llm_batch`, newest as trigger; off, one
   queued message per call. A ping is a control frame and is always answered alone, and a
   batch stops at one. `wait_for_websocket_data` on a batch parks the trigger (newest) message
-  in `pending`. Test: `tests/server/websocket/batching_test.rs`.
+  in `held`. Test: `tests/server/websocket/batching_test.rs`.
 - **Messages are queued by the read loop itself** (`enqueue_inbound`), and a handler task is
-  spawned only when none is running. Each message used to spawn a task that took the lock on
-  its own, so two messages read during one call could be queued in either order — the test's
-  control caught `third` answered before `second`.
+  spawned only when none is running, so two messages read during one call keep their order.
 
 `tokio::io::split` is not used directly: the socket becomes a `WebSocketStream`, which is split
 with `futures::StreamExt::split()` into a `SplitSink` and a `SplitStream` — the same "one owner
@@ -266,17 +279,34 @@ Every one is declared and read; nothing is declared and unused.
 | Parameter | Effect |
 |---|---|
 | `path` | only this exact path is upgraded; anything else gets 404 without a model call |
-| `max_message_size` | reassembled-message ceiling, default 1 MiB, clamped to 64 MiB |
-| `max_frame_size` | single-frame ceiling, same default and clamp |
+| `max_message_size` | reassembled-message ceiling after inflation, default 1 MiB, clamped to 125..64 MiB |
+| `max_frame_size` | single-frame ceiling, compressed or not, same default and clamp |
 | `idle_timeout_secs` | how long an upgraded connection may send no frame at all, default 600 |
+| `handshake_timeout_secs` | how long a client has to send its request head, default 15 (`HANDSHAKE_TIMEOUT`) |
+| `permessage_deflate` | accept a permessage-deflate offer, default true |
 
 ## Connection bounds
 
-| Bound | Default | Mechanism |
+Every bound below governs what the peer sends, and each is tested on both sides of its number
+in `tests/server/websocket/limits_test.rs` (sizes and the handshake),
+`connection_bounds_test.rs` (cap and idle), `slow_reader_test.rs` (outbox) and
+`deflate_real_client_test.rs` (the decompression bomb).
+
+| Bound | Default | Mechanism, and what the peer gets |
 |---|---|---|
-| Request head | 15s (`HANDSHAKE_TIMEOUT_SECS`) | `timeout` around reading the HTTP head, before the upgrade |
-| Upgraded, no frame from the peer | 600s (`idle_timeout_secs`) | `accept_bounded::watch_idle_with_probe` over a `ConnectionActivity`, the probe a Ping, raced against the frame loop |
+| Request head size | 16 384 bytes (`MAX_REQUEST_HEAD`) | counted as it arrives, before the blank line is found; **431** |
+| Request head time | 15s (`handshake_timeout_secs`) | `timeout` around reading the head; **408** |
+| Frame | 1 MiB (`max_frame_size`) | tungstenite for an uncompressed frame, `DeflateStream` for every frame when deflate is on, so a compressed frame is judged as sent; Close **1009** |
+| Message | 1 MiB (`max_message_size`) | tungstenite across fragments; the inflate is bounded while it runs (output stops at the limit + 1), and a compressed message's frames are held to it before inflating; Close **1009** |
+| Joined message (`wait_for_websocket_data`) | `max_message_size` | checked before joining; Close **1009** |
+| Inbound backlog | 1024 messages / 8 MiB | the read loop stops reading while a busy handler's queue is full; TCP pushes back |
+| Outbound queue | 4096 frames / 8 MiB (`utils::outbox`) | a peer that stops reading is cut off and the socket shut down |
+| Upgraded, no frame from the peer | 600s (`idle_timeout_secs`) | `accept_bounded::watch_idle_with_probe` over a `ConnectionActivity`, the probe a Ping, raced against the frame loop; Close **1001** |
 | Connections | 256 | `accept_bounded`; the peer over the cap reads `503` + `Retry-After` |
+
+The deflate layer takes each read's complete frames from an offset and drains the consumed
+bytes once, so a read full of tiny frames costs its length, not its length squared;
+`limits_test.rs` times a mebibyte compressed message sent as one-byte frames.
 
 **The upgraded bound is on liveness, not on conversation.** A WebSocket client is entitled to
 hold a session open with nothing to say, so at half the bound the server sends a Ping (payload
@@ -323,7 +353,26 @@ the existing mDNS-before-DNS and Proxy-before-HTTP entries. No bare `ws` keyword
 
 ## Validation
 
-Checked against **three peers, two of them not this repository's code**:
+**Three independent clients drive every verb** (`tests/server/websocket/real_client_test.rs`,
+each session through `recording_relay` and the pcap oracle):
+
+- **Python `websockets` 15** and **Node `ws` 8** run the same scenario: an upgrade offering two
+  subprotocols (one agreed) with the handshake's greeting first; a multi-byte UTF-8 text and a
+  non-UTF-8 binary echoed; a message sent as two frames; a client Ping answered with its
+  payload; silence across a 2-second idle bound carried by the server's keepalive Ping and the
+  client's automatic Pong; a server close with the handler's code and reason; a client close
+  echoed with its code; an upgrade with no subprotocol; an upgrade refused with 403.
+- **`websocat` 1.14.1** (rust-websocket) drives what its command line exposes: a subprotocol,
+  text, binary, its own Pings and a close with a status code.
+- permessage-deflate is driven by Python `websockets` and Node `ws` in
+  `deflate_real_client_test.rs` (below).
+
+None of them is tungstenite. Before these tests the third-party clients covered the greeting and
+a text echo (websocat) and deflate's data messages; Ping, the closing handshake in either
+direction, subprotocol agreement and refusal had been asserted only by the hand-written client
+below.
+
+Also checked against:
 
 1. **A hand-written raw TCP client** (`tests/server/websocket/e2e_test.rs`) that composes the
    upgrade itself, recomputes `Sec-WebSocket-Accept` from the RFC algorithm with `sha1` +
@@ -363,12 +412,14 @@ protocol — handlers, events, actions — never sees compression.
   unknown or repeated parameter, or a window of 8 (zlib cannot make one for raw deflate), is
   skipped; none acceptable means uncompressed, which is always allowed. The startup parameter
   `permessage_deflate` (default `true`, `DEFAULT_PERMESSAGE_DEFLATE`) turns it off.
-- **Inbound**: a message whose first frame has RSV1 is collected across its continuations,
-  inflated as one (with `00 00 ff ff` appended, §7.2.2) and handed up re-fragmented at
-  `max_frame_size`, keeping the client's masking key so tungstenite still sees a masked frame.
-  Inflation stops at `max_message_size + 1` bytes of output — the bound is enforced while
-  inflating, so a 1 KB frame cannot allocate a gigabyte — and the connection closes with 1009
-  and `decision=permessage_deflate_refused`.
+- **Inbound**: every frame is held to `max_frame_size` as it was sent. A message whose first
+  frame has RSV1 is collected across its continuations (their compressed bytes held to
+  `max_message_size`), inflated as one (with `00 00 ff ff` appended, §7.2.2) and handed up
+  re-fragmented at `max_frame_size`, keeping the client's masking key so tungstenite still sees
+  a masked frame. Inflation stops at `max_message_size + 1` bytes of output — the bound is
+  enforced while inflating, so a 1 KB frame cannot allocate a gigabyte — and the connection
+  closes with 1009 and `decision=permessage_deflate_refused`. A refusal is a
+  `deflate::FrameRefusal` inside the `io::Error`, which is how the frame loop picks 1009 or 1002.
 - **Outbound**: every data message tungstenite writes is deflated with a sync flush, the tail
   removed (§7.2.1), and sent as one frame with RSV1.
 - **Backend**: flate2's `zlib-rs` (pure Rust, so no system library), because the default miniz
@@ -379,3 +430,45 @@ a pipelined client's first message may be compressed. `websocket_connection_open
 `permessage_deflate` (the agreed parameters, or null).
 
 Evidence: `tests/server/websocket/deflate_real_client_test.rs` — see the tests' AGENTS.md.
+
+## Maturity: the six conditions
+
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source on
+13 November 2026 rather than inherited. **The rating covers the surface this server
+implements**: RFC 6455 over plain TCP and RFC 7692 permessage-deflate, with the handshake
+decided by the model or a rule. `wss://`, every other extension and browser interop are not
+claimed.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — Python `websockets` and Node `ws` each drive every verb in `real_client_test.rs`; `websocat` (rust-websocket) a subset; none is tungstenite, each fails rather than skips without its peer |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — every session of all three clients, and the deflate session, crosses `recording_relay`; tshark's `websocket` dissector must read each upgraded one (`http` the refused one) |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — FUZZ_WS |
+| 4 | every declared bound has a test | **yes, as of this pass** — the "Connection bounds" table, each bound on both sides of its number, verified by removal |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/websocket/AGENTS.md` |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/websocket/` is empty |
+
+**Condition 1 had rested on a sample.** The third-party clients covered websocat's greeting and
+one text echo, and deflate's data messages; Ping, both directions of the closing handshake,
+subprotocol agreement and a refused upgrade had been asserted only by the hand-written client
+in `e2e_test.rs`. Driving them found nothing wrong with those verbs.
+
+**Condition 4 found the defects**, each a bound that was declared or implied and not held:
+
+- The **inbound queue had no bound**: a peer sending faster than its handler answered was read
+  without limit into memory, a message up to `max_message_size` at a time. It is now
+  backpressure — the read loop stops at 1024 messages or 8 MiB queued.
+- **`wait_for_websocket_data` joined messages without limit**, so a handler that kept waiting
+  grew one message past `max_message_size`; and a held message was lost when one of the other
+  kind arrived and was deferred too. The join is held to `max_message_size` (1009), one held
+  message per kind.
+- **A compressed frame was not held to `max_frame_size`**: the deflate layer parsed the peer's
+  frames against the message limit and handed tungstenite re-fragmented ones, so only an
+  uncompressed frame met the frame limit.
+- **No close frame for a refused frame or message**: tungstenite returns its size and protocol
+  errors without writing anything, and the server dropped the socket — so 1009 reached a peer
+  only when the deflate layer refused. Now 1009 / 1002 / 1007 every time.
+- **The request head** was checked only when a read did not complete it, so a head of up to
+  ~17 KiB arriving in one read was accepted, and an over-long one was dropped with no answer;
+  each read rescanned the whole buffer. It is 16 384 bytes exactly, answered 431, scanned once.
+  The 15-second handshake bound is the `handshake_timeout_secs` parameter, so it can be tested.
