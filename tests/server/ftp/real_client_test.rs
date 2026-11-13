@@ -36,7 +36,8 @@
 //! | `PBSZ`, `PROT P` (server) | `prot_p()` | `--ssl-reqd` |
 //!
 //! FTPS certificates: both clients verify the server's certificate, given as `cert_path` /
-//! `key_path` and trusted through `cafile` / `--cacert`.
+//! `key_path` and trusted through `cafile` / `--cacert`. Both FTPS sessions run against a
+//! server started with `require_tls`, so neither could have sent a command in the clear.
 //!
 //! Not implemented, so neither client is asked to: `MODE`s other than stream, `TYPE E`,
 //! implicit FTPS, `CCC`.
@@ -724,7 +725,8 @@ json.dump(out, sys.stdout)
 "#;
 
 /// ftplib's `FTP_TLS`: `AUTH TLS`, `PBSZ 0`, `PROT P`, then listings, text and binary downloads
-/// and uploads with every data connection TLS, verifying the server's certificate.
+/// and uploads with every data connection TLS, verifying the server's certificate, against a
+/// server started with `require_tls`.
 ///
 /// LLM calls: 1 startup + greeting + USER + PASS + NLST + RETR notes.txt + RETR blob.bin +
 /// STOR ×2 + QUIT = **10**. AUTH, PBSZ and PROT are the server's.
@@ -735,7 +737,7 @@ async fn ftplib_ftps_against_the_ftp_server() -> E2EResult<()> {
     let certs = cert_files()?;
 
     let server = start(
-        serde_json::json!({"cert_path": certs.cert, "key_path": certs.key}),
+        serde_json::json!({"cert_path": certs.cert, "key_path": certs.key, "require_tls": true}),
         &[
             ("greeting", 1),
             ("user", 1),
@@ -1037,7 +1039,7 @@ async fn curl_lists_retrieves_and_uploads_against_the_ftp_server() -> E2EResult<
 }
 
 /// curl `--ssl-reqd`: explicit FTPS with the control and every data connection TLS, verifying
-/// the server's certificate against `--cacert`.
+/// the server's certificate against `--cacert`, against a server started with `require_tls`.
 ///
 /// LLM calls: 1 startup + 3 × (greeting + USER + PASS + PWD + QUIT) + LIST + SIZE blob.bin +
 /// RETR blob.bin + STOR = **20**. AUTH, PBSZ and PROT are the server's.
@@ -1048,7 +1050,7 @@ async fn curl_ftps_against_the_ftp_server() -> E2EResult<()> {
     let certs = cert_files()?;
 
     let server = start(
-        serde_json::json!({"cert_path": certs.cert, "key_path": certs.key}),
+        serde_json::json!({"cert_path": certs.cert, "key_path": certs.key, "require_tls": true}),
         &[
             ("greeting", 3),
             ("user", 3),

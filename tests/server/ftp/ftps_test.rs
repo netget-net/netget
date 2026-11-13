@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | control handshake after `234`, `idle_timeout_secs` (3) | the client starts it 1s in: TLS session, commands answered | it never does: closed at ~3s |
 //! | data handshake, `data_connect_timeout_secs` (3) | the client completes it 1s in: the file crosses | TCP connects, no ClientHello: `425` at ~3s |
+//! | `require_tls` | off: `USER` and a clear transfer are served | on: `530` before `AUTH TLS`, `521` before `PROT P` |
 //!
 //! In-process server, mocked model. Loopback only.
 
@@ -52,9 +53,44 @@ fn mock_rules() -> MockLlmBuilder {
             json!([{
                 "type": "send_ftp_response",
                 "code": 226,
-                "message": format!("got {}", e["upload_text"].as_str().unwrap_or("-"))
+                "message": format!(
+                    "got {} (tls={})",
+                    e["upload_text"].as_str().unwrap_or("-"),
+                    e["tls"]
+                )
             }])
         })
+        .expect_at_least(0)
+        .and()
+        // SYST says back the event's `tls` field, so the client reads what the handler saw.
+        .on_event("ftp_command")
+        .and_event_data_contains("command", "SYST")
+        .respond_with_actions_from_event(|e| {
+            json!([{
+                "type": "send_ftp_response",
+                "code": 215,
+                "message": format!("UNIX Type: L8 (tls={})", e["tls"])
+            }])
+        })
+        .expect_at_least(0)
+        .and()
+        .on_event("ftp_command")
+        .and_event_data_contains("command", "FEAT")
+        .respond_with_actions(json!([{
+            "type": "send_ftp_multiline", "code": 211, "lines": ["Features:", " AUTH TLS", "End"]
+        }]))
+        .expect_at_least(0)
+        .and()
+        .on_event("ftp_command")
+        .and_event_data_contains("command", "NOOP")
+        .respond_with_actions(json!([{"type": "send_ftp_response", "code": 200, "message": "ok"}]))
+        .expect_at_least(0)
+        .and()
+        .on_event("ftp_command")
+        .and_event_data_contains("command", "HELP")
+        .respond_with_actions(
+            json!([{"type": "send_ftp_response", "code": 214, "message": "help"}]),
+        )
         .expect_at_least(0)
         .and()
 }
@@ -300,7 +336,11 @@ async fn prot_p_data_connections_are_tls_and_bounded() {
     let mut conn = c.connector.connect(ip(), tcp).await.unwrap();
     conn.write_all(b"over tls").await.unwrap();
     conn.shutdown().await.unwrap();
-    assert_eq!(line(&mut tls).await, "226 got over tls");
+    assert_eq!(
+        line(&mut tls).await,
+        "226 got over tls (tls=true)",
+        "a transfer's event must say the control connection is TLS"
+    );
 
     // ABOR on the TLS control connection ends a TLS upload: 426, then 226.
     let data = epsv_addr(&send(&mut tls, "EPSV").await);
@@ -393,4 +433,90 @@ async fn generated_certificate_serves_ftps() {
     let ftp = start(json!({})).await;
     let mut tls = BufReader::new(connector.connect(ip(), auth(ftp.port).await).await.unwrap());
     assert_eq!(send(&mut tls, "USER alice").await, "230 in");
+}
+
+/// `require_tls`, both sides. On: before `AUTH TLS` only AUTH, FEAT, SYST, QUIT, HELP and NOOP
+/// are answered, the rest is `530` and never reaches the handler; after it, a transfer without
+/// `PROT P` is `521`; with `PROT P` the file crosses. Off: the same commands are served in the
+/// clear. Every event says whether the control connection is TLS.
+#[tokio::test]
+async fn require_tls_refuses_clear_text_until_auth_and_prot_p() {
+    let c = certs();
+    let mut params = c.params.clone();
+    params["require_tls"] = json!(true);
+    let ftp = start(params).await;
+
+    let mut plain = BufReader::new(TcpStream::connect(("127.0.0.1", ftp.port)).await.unwrap());
+    assert!(line(&mut plain).await.starts_with("220"));
+    for refused in [
+        "USER alice",
+        "PASS secret",
+        "PWD",
+        "EPSV",
+        "TYPE I",
+        "RETR notes.txt",
+        "ABOR",
+    ] {
+        assert_eq!(
+            send(&mut plain, refused).await,
+            "530 This server requires TLS: send AUTH TLS first",
+            "{refused} was not refused before AUTH TLS"
+        );
+    }
+    assert_eq!(
+        send(&mut plain, "SYST").await,
+        "215 UNIX Type: L8 (tls=false)",
+        "SYST is allowed before AUTH TLS, and its event says the connection is clear"
+    );
+    assert_eq!(send(&mut plain, "NOOP").await, "200 ok");
+    assert_eq!(send(&mut plain, "HELP").await, "214 help");
+    assert_eq!(send(&mut plain, "FEAT").await, "211-Features:");
+    assert_eq!(line(&mut plain).await, "211- AUTH TLS");
+    assert_eq!(line(&mut plain).await, "211 End");
+
+    assert!(send(&mut plain, "AUTH TLS").await.starts_with("234 "));
+    let mut tls = BufReader::new(c.connector.connect(ip(), plain.into_inner()).await.unwrap());
+    assert_eq!(send(&mut tls, "USER alice").await, "230 in");
+    assert_eq!(send(&mut tls, "SYST").await, "215 UNIX Type: L8 (tls=true)");
+
+    // A transfer before PROT P: refused, its channel left for the next one.
+    let data = epsv_addr(&send(&mut tls, "EPSV").await);
+    assert_eq!(
+        send(&mut tls, "RETR notes.txt").await,
+        "521 Data connections must be protected: send PBSZ 0 and PROT P"
+    );
+    assert_eq!(send(&mut tls, "PBSZ 0").await, "200 PBSZ=0");
+    assert_eq!(
+        send(&mut tls, "PROT C").await,
+        "200 Protection level set to C"
+    );
+    assert!(send(&mut tls, "LIST").await.starts_with("521 "));
+    assert_eq!(
+        send(&mut tls, "PROT P").await,
+        "200 Protection level set to P"
+    );
+    let tcp = TcpStream::connect(data).await.unwrap();
+    assert!(send(&mut tls, "RETR notes.txt").await.starts_with("150 "));
+    let mut conn = c.connector.connect(ip(), tcp).await.unwrap();
+    let mut got = Vec::new();
+    conn.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"first line\r\nsecond line\r\n");
+    assert_eq!(line(&mut tls).await, "226 Transfer complete");
+
+    // Off (the default): the same commands are served in the clear.
+    let ftp = start(c.params.clone()).await;
+    let mut plain = BufReader::new(TcpStream::connect(("127.0.0.1", ftp.port)).await.unwrap());
+    assert!(line(&mut plain).await.starts_with("220"));
+    assert_eq!(send(&mut plain, "USER alice").await, "230 in");
+    assert_eq!(
+        send(&mut plain, "SYST").await,
+        "215 UNIX Type: L8 (tls=false)"
+    );
+    let data = epsv_addr(&send(&mut plain, "EPSV").await);
+    let mut conn = TcpStream::connect(data).await.unwrap();
+    assert!(send(&mut plain, "RETR notes.txt").await.starts_with("150 "));
+    let mut got = Vec::new();
+    conn.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"first line\r\nsecond line\r\n");
+    assert_eq!(line(&mut plain).await, "226 Transfer complete");
 }
