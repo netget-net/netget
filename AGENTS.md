@@ -20,7 +20,12 @@ process started on port 0; a run that fails to start never writes it, and MCP an
 refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. `--server <p>`
 takes `--port`, `--host`, `--server-params` and `--server-handlers` (MCP's `event_handlers`
 shape, as `--client-handlers` is for `--client`); when a `*` rule answers every event the run
-asks no model and needs none (`tests/cli_server_direct_test.rs`). The test
+asks no model and needs none (`tests/cli_server_direct_test.rs`). `--server` and `--client`
+take a protocol *name*, resolved exactly as MCP's `start_server` / `start_client` resolve one
+(`resolve_name`: the canonical name, or a stack name or alias only one protocol declares; an
+alias several share is refused with their names, free text with suggestions —
+`tests/cli_protocol_names_test.rs`). `-h` is a one-line-per-flag screenful; `--help` has each
+flag's detail and the examples (`tests/cli_help_test.rs`). The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.

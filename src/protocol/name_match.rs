@@ -2,17 +2,18 @@
 //!
 //! Two kinds of caller hand the registries a string:
 //!
-//! - **Free text** — a prompt, a model's `base_stack`, a CLI argument — goes through
-//!   `parse_from_str` / `resolve`, which look for a declared keyword anywhere in the input.
-//!   They match keywords as whole words ([`contains_words`]): `mptcp` used to resolve to
-//!   `tcp` because the client registry tested `"mptcp".contains("tcp")` and the server
-//!   registry ended with "anything containing `tcp` is TCP".
-//! - **A name** — MCP `get_protocol_docs` / `start_server` / `start_client`, the model's
-//!   `read_documentation` — goes through `resolve_name`, which accepts only the canonical
-//!   name, the stack name, or a declared keyword equal to the whole input ([`NameMatch`]).
-//!   Anything else is an error with did-you-mean suggestions, never the closest substring
-//!   hit: a caller asking for a protocol by name must get that protocol or be told it does
-//!   not exist.
+//! - **Free text** — a prompt, a model's `base_stack` — goes through `parse_from_str` /
+//!   `resolve`, which look for a declared keyword anywhere in the input. They match keywords
+//!   as whole words ([`contains_words`]): `mptcp` used to resolve to `tcp` because the client
+//!   registry tested `"mptcp".contains("tcp")` and the server registry ended with "anything
+//!   containing `tcp` is TCP".
+//! - **A name** — MCP `get_protocol_docs` / `start_server` / `start_client`, the CLI's
+//!   `--server` / `--client`, the model's `read_documentation` — goes through `resolve_name`,
+//!   which accepts only the canonical name, or a stack name or declared keyword equal to the
+//!   whole input that belongs to exactly one protocol ([`lookup_among`]). A stack name or
+//!   keyword several protocols share is refused with their names; anything else is an error
+//!   with did-you-mean suggestions, never the closest substring hit: a caller asking for a
+//!   protocol by name must get that protocol or be told it does not exist.
 
 /// Lowercase, trimmed, with `-` and spaces folded to `_`: `"SSH Agent"`, `"ssh-agent"` and
 /// `"ssh_agent"` all compare equal.
@@ -38,6 +39,68 @@ impl NameMatch {
             NameMatch::Alias(a) => Some(a),
             _ => None,
         }
+    }
+}
+
+/// The outcome of an exact-name lookup (`ServerRegistry::lookup_name` /
+/// `ClientRegistry::lookup_name`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameLookup {
+    /// The input names exactly one protocol (registry key, and how it was named).
+    Found(String, NameMatch),
+    /// The input is a stack name or a declared keyword of more than one protocol. Picking one
+    /// would start something the operator may not have meant, so the caller is refused and
+    /// shown these canonical names, sorted.
+    Ambiguous(Vec<String>),
+    /// No protocol has this name, stack name or keyword.
+    NotFound,
+}
+
+/// Find the one protocol `wanted` (already [`normalize`]d) names among `protocols` — `(registry
+/// key, canonical name, stack name, keywords)` — or say that it names several or none.
+///
+/// A canonical name always wins: it is unique by construction and an operator who types it
+/// means that protocol even when another protocol happens to declare the same word as a
+/// keyword. A stack name or keyword shared by more than one protocol is
+/// [`NameLookup::Ambiguous`] rather than whichever sorts first.
+pub fn lookup_among<'a, I>(wanted: &str, protocols: I) -> NameLookup
+where
+    I: IntoIterator<Item = (&'a str, &'a str, &'a str, Vec<&'a str>)>,
+{
+    if wanted.is_empty() {
+        return NameLookup::NotFound;
+    }
+    let mut stack_hits: Vec<(&str, &str)> = Vec::new();
+    let mut alias_hits: Vec<(&str, &str, &str)> = Vec::new();
+    for (key, canonical, stack, keywords) in protocols {
+        if normalize(canonical) == wanted || normalize(key) == wanted {
+            return NameLookup::Found(key.to_string(), NameMatch::Canonical);
+        }
+        if normalize(stack) == wanted {
+            stack_hits.push((key, canonical));
+        }
+        if let Some(keyword) = keywords.into_iter().find(|k| normalize(k) == wanted) {
+            alias_hits.push((key, canonical, keyword));
+        }
+    }
+    let ambiguous = |mut names: Vec<String>| {
+        names.sort();
+        names.dedup();
+        NameLookup::Ambiguous(names)
+    };
+    match stack_hits.as_slice() {
+        [(key, _)] => return NameLookup::Found(key.to_string(), NameMatch::StackName),
+        [] => {}
+        several => {
+            return ambiguous(several.iter().map(|(_, c)| c.to_string()).collect());
+        }
+    }
+    match alias_hits.as_slice() {
+        [(key, _, keyword)] => {
+            NameLookup::Found(key.to_string(), NameMatch::Alias(keyword.to_string()))
+        }
+        [] => NameLookup::NotFound,
+        several => ambiguous(several.iter().map(|(_, c, _)| c.to_string()).collect()),
     }
 }
 

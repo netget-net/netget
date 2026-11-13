@@ -38,6 +38,9 @@ pub struct InterceptModel {
     pub error: Option<String>,
     /// Index into [`Self::buttons`].
     pub focused: usize,
+    /// First row of the scrolled body in view (↑/↓, PageUp/PageDown, the
+    /// wheel); the renderer clamps it to the body.
+    pub scroll: u16,
 }
 
 impl InterceptModel {

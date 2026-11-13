@@ -636,7 +636,8 @@ async fn run_composer_action(
     Outcome::Continue
 }
 
-/// The intercept modal: three buttons, Tab between them, Enter acts.
+/// The intercept modal: ↑/↓ scroll what arrived, three buttons with Tab
+/// (or ←/→) between them, Enter acts.
 async fn handle_intercept_key(app: &mut DashboardApp, key: KeyEvent, state: &AppState) -> Outcome {
     let Some(Modal::Intercept(model)) = app.modals.last_mut() else {
         return Outcome::Continue;
@@ -647,8 +648,12 @@ async fn handle_intercept_key(app: &mut DashboardApp, key: KeyEvent, state: &App
         KeyCode::Esc => {
             app.modals.pop();
         }
-        KeyCode::Tab | KeyCode::Right | KeyCode::Down => model.cycle_focus(false),
-        KeyCode::BackTab | KeyCode::Left | KeyCode::Up => model.cycle_focus(true),
+        KeyCode::Tab | KeyCode::Right => model.cycle_focus(false),
+        KeyCode::BackTab | KeyCode::Left => model.cycle_focus(true),
+        KeyCode::Down => model.scroll = model.scroll.saturating_add(1),
+        KeyCode::Up => model.scroll = model.scroll.saturating_sub(1),
+        KeyCode::PageDown => model.scroll = model.scroll.saturating_add(10),
+        KeyCode::PageUp => model.scroll = model.scroll.saturating_sub(10),
         KeyCode::Enter | KeyCode::Char(' ') => {
             if let Some(action) = model.focused_action() {
                 return run_intercept_action(app, action, state).await;
