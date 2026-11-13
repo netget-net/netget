@@ -169,17 +169,22 @@ MCP caller actually has:
 
 **The `protocol` argument is a name, resolved exactly.** `get_protocol_docs`, `start_server`
 and `start_client` use `ServerRegistry::resolve_name` / `ClientRegistry::resolve_name`
-(`src/protocol/name_match.rs`): the canonical name, the stack name, or a declared keyword equal to
-the whole input, case- and `-`/`_`/space-insensitive. Anything else is an error with
-did-you-mean suggestions — the free-text parser's pick among them — never the closest
-substring hit. `mptcp` used to return TCP's page headed "`mptcp` — MCP reference" because the
+(`src/protocol/name_match.rs`): the canonical name, or a stack name or declared keyword equal
+to the whole input, case- and `-`/`_`/space-insensitive. A canonical name always wins (`ftp`
+is FTP although TCP declares `ftp` as a keyword); a stack name or keyword more than one
+protocol declares (`rpc`: JSON-RPC, MessagePack-RPC, Thrift and WAMP) names none of them and is
+refused with their names. Anything else is an error with did-you-mean suggestions — the
+free-text parser's pick among them — never the closest substring hit. The CLI's `--server` and
+`--client` resolve their protocol the same way (`cli::resolve_server_name` /
+`resolve_client_name`), so `netget --server "a tcp server"` is refused with "did you mean
+'tcp'" as `start_server` is (`tests/cli_protocol_names_test.rs`). `mptcp` used to return TCP's page headed "`mptcp` — MCP reference" because the
 client registry matched keywords as raw substrings and the server registry ended with
 "anything containing `tcp` is TCP". The page is now headed with the **canonical** name, the
 `protocol` value in the argument lists is the canonical name, and an alias is announced
 ("`mptcp` is an alias of `tcp`", plus the protocol's `alias_note`). The model's
-`read_documentation` resolves the same way. Free-text paths (`open_server`'s protocol, CLI,
-prompts) still go through `resolve` / `parse_from_str`, which now match keywords as whole
-words only.
+`read_documentation` resolves the same way. Free-text paths (`open_server`'s protocol, a
+prompt) still go through `resolve` / `parse_from_str`, which match keywords as whole words
+only.
 
 An event's example answer is derived per role when it declares only a placeholder
 (`protocol::docs::example_fallback_actions`): a server event from its own actions (or the sync
@@ -244,6 +249,20 @@ An agent acts on the tool result alone, so the result carries what the next step
 
 `tests/mcp_first_try_test.rs` drives each of these with `--ollama-url` at a closed port.
 
+**A malformed argument names itself.** Every tool takes its arguments through
+`mcp_stdio::params::Parameters`, a drop-in for rmcp's extractor (the `#[tool]` macro finds the
+parameter type by its last path segment, `Parameters`, so `tools.rs` imports this one and no
+signature changes). rmcp's extractor answered `start_server {"port": "abc"}` with `failed to
+deserialize parameters: invalid digit found in string`; this one deserializes through
+`serde_path_to_error`, reads the failing argument's type out of the tool's own input schema
+(the one `tools/list` advertises) and answers ``start_server: argument `port` must be an
+integer from 0 to 65535; got the string "abc"``. A missing required argument reads
+``missing required argument `protocol` (a string)``, and when something failed, keys the
+tool does not take are named too (``Not arguments of start_server: `protocl` ``), since one
+of them is usually the intended field. It stays an `invalid_params` (-32602) JSON-RPC error. Numeric ids and
+ports still accept a numeric string. `tests/mcp_argument_errors_test.rs` drives the binary
+over stdio.
+
 ## Client control surface
 
 `start_client` / `list_clients` / `client_status` / `stop_client` mirror the
@@ -300,7 +319,13 @@ connection task and coming back as an executor error.
   (`state::intercepts::server_answer_actions` / `client_answer_actions`): a server event's own
   declared actions — redis's `redis_subscribe` declares four of the protocol's eighteen — with
   the protocol's sync set only where the event declares none, and for a client its async ∪
-  sync ∪ the event's; plus the common actions. The dashboard's composer offers the same list.
+  sync ∪ the event's. Beside them (`list_intercepts`' "Alongside, if needed" line) only the
+  common actions the model is offered with an event (`state::intercepts::intercept_common_actions`):
+  `set_memory` / `append_memory`, the connection-memory pair on a lasting connection,
+  `append_to_log`, and `notify_operator` only where the event has no protocol answer. Not the
+  management actions (`open_server`, `close_all_servers`, `change_model`, …) and not the
+  deprecated `show_message`; a refusal's "Accepted:" list is this list and nothing else
+  (`tests/mcp_intercept_test.rs`). The dashboard's composer offers the same list.
   A refused answer leaves the request waiting. **`[]` is a real answer**: nothing is written
   and the connection carries on, which is distinct from a timeout.
 - **A parked request lives as long as its connection.** Closing the connection, stopping the
@@ -565,6 +590,15 @@ All of those are wired now, plus the model falling back to the saved setting and
 web-search degrading to `Off` (MCP has no terminal to prompt on, same as the
 non-interactive runner). `tests/mcp_startup_config_test.rs` asserts each one from the
 service's `app_state()`, so a new flag that skips this path fails a test.
+
+**The scripting runtimes are not probed here.** `AppState` used to run `python3 --version`,
+`node --version`, `go version` and `perl` while it was built, ahead of the `initialize` answer:
+measured on a debug build (13 November 2026, a loaded machine, 15 starts each), `initialize`
+was answered in a median 206–466 ms with the probes and 31–34 ms without. Nothing at startup
+probes now (`tests/scripting_environment_lazy_test.rs`); the first prompt that lists the
+runtimes, the first script handler, or an `--env <runtime>` check probes once
+(`AppState::get_scripting_env`). Checking `--env on` / `off` — what a saved setting usually
+says — needs no runtime and does not probe (`AppState::scripting_mode_available`).
 
 **The configured model is checked against the endpoint before it is stored**
 (`llm::model_selection::resolve_configured_model`). Ollama lists its models, so a configured

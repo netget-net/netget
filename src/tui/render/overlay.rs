@@ -27,16 +27,8 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
     let hint = modal.hint();
 
     let body_lines: Vec<Line> = match modal {
-        Modal::Help { .. } => help::help_lines()
-            .into_iter()
-            .map(|(key, text)| match key {
-                Some(key) => Line::from(vec![
-                    Span::styled(format!("  {key:<22}"), app.styles.accent),
-                    Span::styled(text.to_string(), app.styles.normal),
-                ]),
-                None => Line::from(Span::styled(format!("\n{text}"), app.styles.title)),
-            })
-            .collect(),
+        // Inside the border: two cells narrower than the box.
+        Modal::Help { .. } => help_body_lines(app, rect.width.saturating_sub(2)),
         Modal::RequestDetail { entry, .. } => request_detail::detail_lines(entry)
             .into_iter()
             .map(|l| Line::from(Span::styled(l, app.styles.normal)))
@@ -157,79 +149,73 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
             return;
         }
 
-        use crate::tui::modal::routing::RoutingFocus;
-
+        // The handler table: the rules scroll to the selected one, the error
+        // stays above the buttons, and the fallback note stays under them.
+        // Past a screenful of rules the selection and the error used to fall
+        // off the bottom of the box.
+        let note = wrapped(
+            model.fallback_note(),
+            "",
+            inner.width as usize,
+            app.styles.dimmed,
+        );
+        let note_height = (note.len() as u16).min(inner.height.saturating_sub(4) / 2);
         let rows = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
                 ratatui::layout::Constraint::Min(3),
-                ratatui::layout::Constraint::Length(1),
-                ratatui::layout::Constraint::Length(2),
+                ratatui::layout::Constraint::Length(note_height),
             ])
             .split(inner);
-
-        // --- handler list ---
-        let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-            "Rules are matched in order; the first match wins.",
-            app.styles.dimmed,
-        ))];
-        let handler_rows = model.rows();
-        if handler_rows.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (none yet — Add one to answer an event without the model)",
-                app.styles.dimmed,
-            )));
-        }
-        let mut offsets = Vec::with_capacity(handler_rows.len());
-        for (index, row) in handler_rows.iter().enumerate() {
-            offsets.push(lines.len() as u16);
-            let selected = model.focus == RoutingFocus::List && index == model.selected;
-            lines.push(Line::from(vec![
-                Span::styled(if selected { "▸ " } else { "  " }, app.styles.accent),
-                Span::styled(
-                    row.clone(),
-                    if selected {
-                        app.styles.selected
-                    } else {
-                        app.styles.normal
-                    },
-                ),
-            ]));
-        }
-        if let Some(error) = &model.error {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                format!("✗ {error}"),
-                app.styles.error,
-            )));
-        }
+        let body = routing_table_lines(app, model, inner.width);
+        let error = model.error.clone();
         let buttons = model.buttons();
         let focused = model.focused_button();
-        let note = model.fallback_note();
-        frame.render_widget(Paragraph::new(lines), rows[0]);
-        push_row_hits(app, rows[0], &offsets);
-        draw_button_row(frame, app, rows[1], &buttons, focused);
-        frame.render_widget(
-            Paragraph::new(Span::styled(note, app.styles.dimmed)).wrap(Wrap { trim: false }),
-            rows[2],
+        draw_scrolled(
+            frame,
+            app,
+            rect,
+            rows[0],
+            body,
+            error.as_deref(),
+            &buttons,
+            focused,
         );
+        frame.render_widget(Paragraph::new(note), rows[1]);
         return;
     }
 
     // A pending intercept: what arrived, the answer being composed, buttons.
+    // The event and its deadline are pinned at the top, the error above the
+    // buttons; what arrived scrolls between them (↑/↓, the wheel). A long
+    // payload used to push the explanation and the buttons out of the box.
     if let Some(Modal::Intercept(model)) = app.modals.last() {
         let buttons = model.buttons();
         let focused = model.focused_action();
-        let lines = intercept_lines(app, model);
+        let error = model.error.clone();
+        let header = intercept_header_lines(app, model, inner.width);
+        let body = intercept_body_lines(app, model, inner.width);
         let rows = ratatui::layout::Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
+                ratatui::layout::Constraint::Length(header.len() as u16),
                 ratatui::layout::Constraint::Min(3),
-                ratatui::layout::Constraint::Length(1),
             ])
             .split(inner);
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), rows[0]);
-        draw_button_row(frame, app, rows[1], &buttons, focused);
+        frame.render_widget(Paragraph::new(header), rows[0]);
+        let scroll = draw_scrolled(
+            frame,
+            app,
+            rect,
+            rows[1],
+            body,
+            error.as_deref(),
+            &buttons,
+            focused,
+        );
+        if let Some(modal) = app.modals.last_mut() {
+            modal.settle_scroll(scroll);
+        }
         return;
     }
 
@@ -413,30 +399,71 @@ pub fn draw(frame: &mut Frame, app: &mut DashboardApp, area: Rect) {
         return;
     }
 
-    let paragraph = Paragraph::new(body_lines)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-    frame.render_widget(paragraph, inner);
+    // Help, the Wireshark recipe, the request and instance details and the
+    // web-search approval: read by scrolling (↑/↓, PageUp/PageDown, the
+    // wheel), with the box's edge saying when there is more, and the scroll
+    // clamped so it never runs past the last row into an empty box.
+    let width = inner.width as usize;
+    let lines: Vec<Line> = body_lines
+        .into_iter()
+        .flat_map(|line| {
+            if line.spans.len() == 1 {
+                let span = &line.spans[0];
+                wrapped_keeping_indent(&span.content, width, span.style)
+            } else {
+                // Already laid out to the width (help).
+                vec![line]
+            }
+        })
+        .collect();
+    let body = ScrolledBody {
+        lines,
+        offsets: Vec::new(),
+        view: View::From(scroll),
+        noun: "lines",
+    };
+    let used = draw_scrolled(frame, app, rect, inner, body, None, &[], None);
+    if let Some(modal) = app.modals.last_mut() {
+        modal.settle_scroll(used);
+    }
 }
 
 /// A modal body as pre-split rows: one `Line` per terminal row (nothing here
 /// is wrapped by ratatui, so the row count is known), the row each selectable
-/// item starts on (for hit-testing), and the first and one-past-last row of
-/// what has focus (kept in view when the body is taller than the box).
+/// item starts on (for hit-testing), which rows must be in view, and what the
+/// rows are, for the "↓ more …" hint.
 struct ScrolledBody<'a> {
     lines: Vec<Line<'a>>,
     offsets: Vec<u16>,
-    selection: (u16, u16),
+    view: View,
+    /// "fields", "rules", "lines": what there is more of off the view.
+    noun: &'static str,
 }
 
-/// Draw a body that scrolls to its selection, an error pinned above the
-/// buttons, and the buttons, in `area`; say on `rect`'s top edge when there
-/// are rows above or below the view.
+/// Which rows of a [`ScrolledBody`] the view shows.
+#[derive(Clone, Copy)]
+enum View {
+    /// The first and one-past-last row of what has focus, kept in view (its
+    /// top row first when it is taller than the view).
+    Selection(u16, u16),
+    /// The view starts at this row, for a body read by scrolling rather than
+    /// by moving a focus; clamped so the last row never rises above the
+    /// bottom of the view.
+    From(u16),
+}
+
+/// Draw a body scrolled to its [`View`], an error pinned above the buttons,
+/// and the buttons, in `area`; say on `rect`'s top edge when there are rows
+/// above or below the view. Returns the row the view starts on, so a modal
+/// that keeps its own scroll can store the clamped value.
 ///
-/// The instance form, the composer and the routing draft all draw through
-/// this. The error sits outside the scrolled rows because it answers the
-/// button just pressed: it must be on screen whatever has focus and however
-/// many fields there are. It takes at most half of what the buttons leave.
+/// Every modal whose body can outgrow its box draws through this: the
+/// instance form, the composer, the routing table and its draft, the answer
+/// modal, help, the Wireshark recipe and the detail views. The error sits
+/// outside the scrolled rows because it answers the button just pressed: it
+/// must be on screen whatever has focus and however long the body is. It
+/// takes at most half of what the buttons leave. With no buttons there is no
+/// button row.
 #[allow(clippy::too_many_arguments)]
 fn draw_scrolled(
     frame: &mut Frame,
@@ -447,32 +474,37 @@ fn draw_scrolled(
     error: Option<&str>,
     buttons: &[crate::tui::hit::ModalAction],
     focused: Option<crate::tui::hit::ModalAction>,
-) {
+) -> u16 {
+    // Buttons that do not fit one row take two: a button Tab can focus must
+    // be drawn.
+    let button_height = button_rows(buttons, area.width).min(area.height.saturating_sub(2) / 2);
     let error_rows: Vec<String> = error
         .map(|e| crate::tui::wrap::wrap(&format!("✗ {e}"), area.width as usize))
         .unwrap_or_default();
-    let error_height = (error_rows.len() as u16).min(area.height.saturating_sub(3) / 2);
+    let error_height =
+        (error_rows.len() as u16).min(area.height.saturating_sub(2 + button_height) / 2);
     let rows = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
             ratatui::layout::Constraint::Min(2),
             ratatui::layout::Constraint::Length(error_height),
-            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Length(button_height),
         ])
         .split(area);
     let ScrolledBody {
         lines,
         offsets,
-        selection: (top, bottom),
+        view,
+        noun,
     } = body;
-    // Scroll so the selection is in view, its top row first when it is
-    // taller than the view.
     let viewport = rows[0].height;
-    let mut scroll = bottom.saturating_sub(viewport);
-    if top < scroll {
-        scroll = top;
-    }
     let total = lines.len() as u16;
+    let scroll = match view {
+        // Scroll so the selection is in view, its top row first when it is
+        // taller than the view.
+        View::Selection(top, bottom) => bottom.saturating_sub(viewport).min(top),
+        View::From(from) => from.min(total.saturating_sub(viewport)),
+    };
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), rows[0]);
     for (index, offset) in offsets.iter().enumerate() {
         if *offset < scroll || *offset - scroll >= viewport {
@@ -491,11 +523,12 @@ fn draw_scrolled(
     let above = scroll > 0;
     let below = total > scroll + viewport;
     if above || below {
-        let hint = match (above, below) {
-            (true, true) => " ↑↓ more fields ",
-            (true, false) => " ↑ more fields ",
-            _ => " ↓ more fields ",
+        let arrows = match (above, below) {
+            (true, true) => "↑↓",
+            (true, false) => "↑",
+            _ => "↓",
         };
+        let hint = format!(" {arrows} more {noun} ");
         let width = (hint.chars().count() as u16).min(rect.width.saturating_sub(2));
         frame.render_widget(
             Paragraph::new(Span::styled(hint, app.styles.dimmed)),
@@ -515,7 +548,10 @@ fn draw_scrolled(
             .collect();
         frame.render_widget(Paragraph::new(lines), rows[1]);
     }
-    draw_button_row(frame, app, rows[2], buttons, focused);
+    if !buttons.is_empty() {
+        draw_button_row(frame, app, rows[2], buttons, focused);
+    }
+    scroll
 }
 
 /// The end of what is being typed into a `room`-cell value column, with the
@@ -583,7 +619,24 @@ fn push_row_hits(app: &mut DashboardApp, area: ratatui::layout::Rect, offsets: &
     }
 }
 
-/// Draw a row of modal buttons, registering each as a hit target.
+/// Rows `buttons` take when laid out left to right in `width` cells, a
+/// button that does not fit on a row starting the next.
+fn button_rows(buttons: &[crate::tui::hit::ModalAction], width: u16) -> u16 {
+    let mut rows = u16::from(!buttons.is_empty());
+    let mut used = 0u16;
+    for action in buttons {
+        let w = action.label().chars().count() as u16;
+        if used > 0 && used + w > width {
+            rows += 1;
+            used = 0;
+        }
+        used += w + 1;
+    }
+    rows
+}
+
+/// Draw modal buttons left to right in `area`, starting a new row when one
+/// does not fit and `area` has another row, registering each as a hit target.
 fn draw_button_row(
     frame: &mut ratatui::Frame,
     app: &mut DashboardApp,
@@ -591,13 +644,20 @@ fn draw_button_row(
     buttons: &[crate::tui::hit::ModalAction],
     focused: Option<crate::tui::hit::ModalAction>,
 ) {
+    let mut lines: Vec<Line> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
     let mut x = area.x;
+    let mut y = area.y;
     for action in buttons {
         let label = action.label();
         let width = label.chars().count() as u16;
         if x + width > area.x + area.width {
-            break;
+            if x == area.x || y + 1 >= area.y + area.height {
+                break;
+            }
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            x = area.x;
+            y += 1;
         }
         spans.push(Span::styled(
             label,
@@ -611,7 +671,7 @@ fn draw_button_row(
         app.hits.push(
             ratatui::layout::Rect {
                 x,
-                y: area.y,
+                y,
                 width,
                 height: 1,
             },
@@ -619,7 +679,8 @@ fn draw_button_row(
         );
         x += width + 1;
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    lines.push(Line::from(spans));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn picker_detail_lines<'a>(
@@ -642,10 +703,9 @@ fn picker_detail_lines<'a>(
         Span::styled(format!(" {}", entry.kind_label()), app.styles.normal),
         Span::styled(format!("  {}", entry.badge()), app.styles.dimmed),
     ])];
-    lines.push(Line::from(Span::styled(
-        entry.description.clone(),
-        app.styles.normal,
-    )));
+    // Where it starts and whether it can start come before what it is: the
+    // pane is a fixed height, and a long description put the warning that the
+    // protocol will refuse to start below its last row.
     lines.push(Line::from(Span::styled(
         match (entry.kind, &entry.default_port) {
             (crate::tui::app::Section::Clients, _) => {
@@ -668,6 +728,10 @@ fn picker_detail_lines<'a>(
             app.styles.warning,
         )));
     }
+    lines.push(Line::from(Span::styled(
+        entry.description.clone(),
+        app.styles.normal,
+    )));
     if let Some(notes) = &entry.notes {
         lines.push(Line::from(Span::styled(
             crate::utils::truncate_for_log(notes, 200),
@@ -750,7 +814,8 @@ fn form_lines_with_offsets<'a>(
     ScrolledBody {
         lines,
         offsets,
-        selection: selected_rows,
+        view: View::Selection(selected_rows.0, selected_rows.1),
+        noun: "fields",
     }
 }
 
@@ -1060,30 +1125,136 @@ fn draft_body_lines<'a>(
     ScrolledBody {
         lines,
         offsets: Vec::new(),
-        selection,
+        view: View::Selection(selection.0, selection.1),
+        noun: "fields",
     }
 }
 
-/// A pending intercept: what arrived and the answer composed so far.
-fn intercept_lines<'a>(
+/// The routing table's rows, `width` cells wide: a heading, one row per
+/// rule (cut to the width with an ellipsis), each rule's row offset, and the
+/// selected rule as the selection to keep in view. The error is not here:
+/// the caller pins it above the buttons.
+fn routing_table_lines<'a>(
+    app: &DashboardApp,
+    model: &crate::tui::modal::routing::RoutingModel,
+    width: u16,
+) -> ScrolledBody<'a> {
+    use crate::tui::modal::routing::RoutingFocus;
+    use crate::tui::rail::fit;
+    let width = width as usize;
+    let mut lines = wrapped(
+        "Rules are matched in order; the first match wins.",
+        "",
+        width,
+        app.styles.dimmed,
+    );
+    let handler_rows = model.rows();
+    if handler_rows.is_empty() {
+        lines.extend(wrapped(
+            "(none yet — Add one to answer an event without the model)",
+            "  ",
+            width,
+            app.styles.dimmed,
+        ));
+    }
+    let mut offsets = Vec::with_capacity(handler_rows.len());
+    let mut selection = (0u16, 0u16);
+    for (index, row) in handler_rows.iter().enumerate() {
+        let top = lines.len() as u16;
+        offsets.push(top);
+        // The selected rule stays in view whether or not the list has focus,
+        // so Tab onto [ Delete ] still shows which rule it deletes.
+        if index == model.selected {
+            selection = (top, top + 1);
+        }
+        let marked = model.focus == RoutingFocus::List && index == model.selected;
+        lines.push(Line::from(vec![
+            Span::styled(if marked { "▸ " } else { "  " }, app.styles.accent),
+            Span::styled(
+                fit(row, width.saturating_sub(2)),
+                if marked {
+                    app.styles.selected
+                } else {
+                    app.styles.normal
+                },
+            ),
+        ]));
+    }
+    ScrolledBody {
+        lines,
+        offsets,
+        view: View::Selection(selection.0, selection.1),
+        noun: "rules",
+    }
+}
+
+/// Rows of the request detail, band detail and Wireshark bodies: `text`
+/// wrapped to `width`, continuation rows indented like the first, so a long
+/// JSON value stays under its key.
+fn wrapped_keeping_indent<'a>(
+    text: &str,
+    width: usize,
+    style: ratatui::style::Style,
+) -> Vec<Line<'a>> {
+    let body = text.trim_start_matches(' ');
+    let indent = &text[..text.len() - body.len()];
+    if crate::tui::wrap::cells(indent) * 2 >= width {
+        return wrapped(text, "", width, style);
+    }
+    wrapped(body, indent, width, style)
+}
+
+/// The help modal's rows, `width` cells wide: each key in a column with its
+/// description wrapped beside it, and a blank row before each heading.
+fn help_body_lines<'a>(app: &DashboardApp, width: u16) -> Vec<Line<'a>> {
+    let width = width as usize;
+    let mut lines = Vec::new();
+    for (key, text) in help::help_lines() {
+        match key {
+            Some(key) => {
+                // A space after the column even for the 22-cell key
+                // (`+ new server or client`), which used to run into its text.
+                let column = format!("  {key:<22} ");
+                let column_width = crate::tui::wrap::cells(&column);
+                let room = width.saturating_sub(column_width).max(1);
+                for (index, row) in crate::tui::wrap::wrap(text, room).into_iter().enumerate() {
+                    let lead = if index == 0 {
+                        Span::styled(column.clone(), app.styles.accent)
+                    } else {
+                        Span::raw(" ".repeat(column_width))
+                    };
+                    lines.push(Line::from(vec![lead, Span::styled(row, app.styles.normal)]));
+                }
+            }
+            None => {
+                if !lines.is_empty() {
+                    lines.push(Line::from(""));
+                }
+                lines.extend(wrapped(text, "", width, app.styles.title));
+            }
+        }
+    }
+    lines
+}
+
+/// Payload rows the answer modal shows before saying how many more there are.
+/// The body scrolls, so this only bounds the work of a frame on a huge event.
+const INTERCEPT_PAYLOAD_ROWS: usize = 400;
+
+/// The answer modal's pinned rows: the event and the time left before the
+/// request fails closed. They sit above the scrolled body, so no payload can
+/// push the deadline out of view.
+fn intercept_header_lines<'a>(
     app: &DashboardApp,
     model: &crate::tui::modal::intercept::InterceptModel,
+    width: u16,
 ) -> Vec<Line<'a>> {
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("event      ", app.styles.dimmed),
-            Span::styled(model.event_type.clone(), app.styles.accent),
-        ]),
-        Line::from(vec![
-            Span::styled("what       ", app.styles.dimmed),
-            Span::styled(
-                crate::utils::sanitize::line_field(&model.description),
-                app.styles.normal,
-            ),
-        ]),
-    ];
-    // Near the top, so a long payload cannot push it out of a short box: the
-    // operator has this long, and then the peer is refused without them.
+    use crate::tui::rail::fit;
+    let room = (width as usize).saturating_sub(11);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("event      ", app.styles.dimmed),
+        Span::styled(fit(&model.event_type, room), app.styles.accent),
+    ])];
     if let Some(deadline) = model.deadline_unix_ms {
         let left = deadline.saturating_sub(crate::state::intercepts::now_unix_ms()) / 1000;
         lines.push(Line::from(vec![
@@ -1106,12 +1277,43 @@ fn intercept_lines<'a>(
             Span::styled(" if nobody answers", app.styles.dimmed),
         ]));
     }
-    if let Some(error) = &model.error {
-        lines.push(Line::from(Span::styled(
-            format!("✗ {error}"),
-            app.styles.error,
-        )));
-    }
+    lines
+}
+
+/// A pending intercept's scrolled body, `width` cells wide: what arrived, the
+/// payload, and what each button does. The event and the deadline are pinned
+/// above it and the error above the buttons, by the caller.
+fn intercept_body_lines<'a>(
+    app: &DashboardApp,
+    model: &crate::tui::modal::intercept::InterceptModel,
+    width: u16,
+) -> ScrolledBody<'a> {
+    let width = width as usize;
+    // A label column, then its text wrapped beside it.
+    let labelled = |lines: &mut Vec<Line<'a>>,
+                    label: &str,
+                    label_style: ratatui::style::Style,
+                    text: &str,
+                    style: ratatui::style::Style| {
+        let column = crate::tui::wrap::cells(label);
+        let room = width.saturating_sub(column).max(1);
+        for (index, row) in crate::tui::wrap::wrap(text, room).into_iter().enumerate() {
+            let lead = if index == 0 {
+                Span::styled(label.to_string(), label_style)
+            } else {
+                Span::raw(" ".repeat(column))
+            };
+            lines.push(Line::from(vec![lead, Span::styled(row, style)]));
+        }
+    };
+    let mut lines = Vec::new();
+    labelled(
+        &mut lines,
+        "what       ",
+        app.styles.dimmed,
+        &crate::utils::sanitize::line_field(&model.description),
+        app.styles.normal,
+    );
     if let Some(data) = &model.event_data {
         lines.push(Line::from(Span::styled("payload", app.styles.dimmed)));
         // The peer's own bytes: `serde_json` escapes C0 inside a string but writes DEL and C1
@@ -1119,13 +1321,17 @@ fn intercept_lines<'a>(
         let pretty = crate::utils::sanitize::json_text(
             &serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string()),
         );
-        for line in pretty.lines().take(20) {
-            lines.push(Line::from(Span::styled(
-                format!("  {line}"),
-                app.styles.info,
-            )));
+        let (mut rows_shown, mut lines_shown) = (0usize, 0usize);
+        for line in pretty.lines() {
+            if rows_shown >= INTERCEPT_PAYLOAD_ROWS {
+                break;
+            }
+            let rows = wrapped_keeping_indent(&format!("  {line}"), width, app.styles.info);
+            rows_shown += rows.len();
+            lines_shown += 1;
+            lines.extend(rows);
         }
-        let hidden = pretty.lines().count().saturating_sub(20);
+        let hidden = pretty.lines().count() - lines_shown;
         if hidden > 0 {
             lines.push(Line::from(Span::styled(
                 format!("  … {hidden} more line(s)"),
@@ -1134,36 +1340,43 @@ fn intercept_lines<'a>(
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Compose answer…      ", app.styles.normal),
-        Span::styled(
-            format!(
-                "pick one of {}'s {} action(s) and fill in its fields",
-                model.protocol,
-                model.vocabulary.len()
-            ),
-            app.styles.dimmed,
+    labelled(
+        &mut lines,
+        "Compose answer…      ",
+        app.styles.normal,
+        &format!(
+            "pick one of {}'s {} action(s) and fill in its fields",
+            model.protocol,
+            model.vocabulary.len()
         ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Answer with nothing  ", app.styles.normal),
-        Span::styled(
-            "acknowledge and send no reply (fine for a connect event)",
-            app.styles.dimmed,
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Fail closed          ", app.styles.normal),
-        Span::styled(
-            "refuse: the peer gets the protocol's error reply now",
-            app.styles.dimmed,
-        ),
-    ]));
-    lines.push(Line::from(Span::styled(
-        "The connection is waiting on you; Esc keeps it waiting.",
         app.styles.dimmed,
-    )));
-    lines
+    );
+    labelled(
+        &mut lines,
+        "Answer with nothing  ",
+        app.styles.normal,
+        "acknowledge and send no reply (fine for a connect event)",
+        app.styles.dimmed,
+    );
+    labelled(
+        &mut lines,
+        "Fail closed          ",
+        app.styles.normal,
+        "refuse: the peer gets the protocol's error reply now",
+        app.styles.dimmed,
+    );
+    lines.extend(wrapped(
+        "The connection is waiting on you; Esc keeps it waiting.",
+        "",
+        width,
+        app.styles.dimmed,
+    ));
+    ScrolledBody {
+        lines,
+        offsets: Vec::new(),
+        view: View::From(model.scroll),
+        noun: "lines",
+    }
 }
 
 /// The composer's rows, `width` cells wide: the actions while choosing, the
@@ -1310,7 +1523,8 @@ fn composer_lines_with_offsets<'a>(
     ScrolledBody {
         lines,
         offsets,
-        selection,
+        view: View::Selection(selection.0, selection.1),
+        noun: "fields",
     }
 }
 

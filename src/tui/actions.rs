@@ -230,6 +230,7 @@ pub fn open_intercept(app: &mut DashboardApp, key: UiKey, intercept_id: u64, sta
         ),
         error: None,
         focused: 0,
+        scroll: 0,
     })));
 }
 
