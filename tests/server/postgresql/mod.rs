@@ -1,6 +1,9 @@
+mod bounds_test;
 mod decoder_panic_test;
 mod extended_query_test;
 mod llm_failure_test;
 mod one_answer_per_query_test;
+mod parameters_test;
+mod psycopg_client_test;
 mod real_client_test;
 mod test;

@@ -151,8 +151,8 @@ netget --mcp   # then call list_protocols / get_protocol_docs
 
 Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/protocol/metadata.rs`):
 
-- **Stable** — **seven as of 8 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot` and
-  `doh`.** Before
+- **Stable** — **nine as of 13 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot`,
+  `doh`, `etcd` and `postgresql`.** Before
   16 September 2026 there were none, and three protocols had held the rating and lost it, each
   for the same reason: nobody had said what it required, so "Stable" meant whoever set it felt
   good about the code. The bar below is what replaced that, and these seven are the ones
@@ -257,17 +257,34 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   1 November 2026): it has a fuzz target (`fuzz_targets/bson_document.rs`) and no pcap-oracle
   test. Seven that were in this list held conditions 1, 2, 3 and 6 that day, which left each
   of them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
-  re-verified — from Stable; `dot` and `doh` have since been measured (below), the other five
-  have not:
+  re-verified — from Stable; `dot`, `doh`, `etcd` and `postgresql` have since been measured
+  (below), the other three have not:
 
   - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
-    `tests/helpers/recording_relay.rs` and the oracle reads what crossed (etcdctl's six
-    connections; psql's two sessions and tokio-postgres's extended-protocol session; Python
-    websockets' permessage-deflate session). The targets are `etcd_request` (prost behind
-    `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level bomb),
-    `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
+    `tests/helpers/recording_relay.rs` and the oracle reads what crossed. The targets are
+    `etcd_request` (prost behind `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level
+    bomb), `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
     too — without it the fuzz workspace would build crates.io's panicking pgwire) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
+    **`etcd` and `postgresql` went Stable on 13 November 2026**, and condition 1 was again true
+    of a sample. Each "second client" shared the server's own codec: `etcd-client` is tonic
+    over prost — the server's h2 and prost at both ends — and tokio-postgres decodes binary
+    cells with `postgres-types`, the crate pgwire encodes them with; and neither etcd client
+    issued Txn or Compact, and no PostgreSQL client bound a parameter. Python grpcio (C-core,
+    upb) and psycopg 3 over libpq are the second clients now
+    (`tests/server/etcd/grpcio_client_test.rs`, `tests/server/postgresql/psycopg_client_test.rs`).
+    They found what the shared codecs had agreed on: the PostgreSQL model **never saw a bound
+    parameter** (the statement declared none, so tokio-postgres would not bind, and psycopg's
+    values were dropped), a binary `date` went out as text, and a cell that did not fit its
+    column was sent as `0` or `false`; the etcd handler decided a Txn seeing only the *counts*
+    of its compares and operations, the reply carried no per-operation results, and Range's
+    `limit`/`keys_only`/`count_only` were ignored. Condition 4 found two bounds that bounded
+    nothing in total: etcd's 1.5 MiB per request with 200 streams per connection (now a 48 MiB
+    server-wide budget) and pgwire's 1 GB per unauthenticated message (now 1 MiB, screened by
+    `src/server/postgresql/guard.rs` in front of pgwire, which has no seam of its own) — and
+    an etcd request whose body stopped arriving held its connection busy, so the idle bound
+    never fired. **A second client that shares the server's codec is a sample of one**: count
+    the libraries at both ends, not the binaries.
   - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
     DNS inside the TLS was dissected, so a TLS oracle cannot pass on the record layer alone.
@@ -328,7 +345,7 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (68 servers as of 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (66 servers as of 13 November 2026, after `etcd` and `postgresql` went to Stable; 68 on 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),

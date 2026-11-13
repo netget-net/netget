@@ -50,7 +50,40 @@ pub static ETCD_RANGE_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "limit".to_string(),
             type_hint: "number".to_string(),
-            description: "Maximum number of keys to return".to_string(),
+            description: "Maximum number of keys to return (0 = no limit). The server truncates \
+                          kvs to it and sets more, so answer with every matching key."
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "keys_only".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The client wants keys without values; the server drops the values"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "count_only".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The client wants only the count; the server drops the pairs and \
+                          keeps count"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "revision".to_string(),
+            type_hint: "number".to_string(),
+            description: "Present only for a point-in-time read: the revision to read at"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "sort_order".to_string(),
+            type_hint: "string".to_string(),
+            description: "Present only when sorting was asked for: ASCEND or DESCEND, by \
+                          sort_target (KEY, VERSION, CREATE, MOD or VALUE). Return kvs in that \
+                          order."
+                .to_string(),
             required: false,
         },
     ])
@@ -85,6 +118,26 @@ pub static ETCD_PUT_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             description: "Lease ID attached to the key (0 = no lease)".to_string(),
             required: false,
         },
+        Parameter {
+            name: "prev_kv".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The client asked for the key's previous value: answer with prev_kv \
+                          (omit it when the key did not exist)"
+                .to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "ignore_value".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "Keep the key's current value and change only its lease".to_string(),
+            required: false,
+        },
+        Parameter {
+            name: "ignore_lease".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "Keep the key's current lease and change only its value".to_string(),
+            required: false,
+        },
     ])
     .with_actions(vec![etcd_put_response_action(), etcd_error_action()])
 });
@@ -111,6 +164,12 @@ pub static ETCD_DELETE_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             description: "End of key range for prefix/range deletes".to_string(),
             required: false,
         },
+        Parameter {
+            name: "prev_kv".to_string(),
+            type_hint: "boolean".to_string(),
+            description: "The client asked for the deleted pairs: answer with prev_kvs".to_string(),
+            required: false,
+        },
     ])
     .with_actions(vec![
         etcd_delete_range_response_action(),
@@ -124,7 +183,8 @@ pub static ETCD_TXN_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         "Triggered when a client sends a transaction request",
         json!({
             "type": "etcd_txn_response",
-            "succeeded": true
+            "succeeded": true,
+            "responses": [{}]
         }),
     )
     .with_parameters(vec![
@@ -149,9 +209,26 @@ pub static ETCD_TXN_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
         Parameter {
             name: "compares".to_string(),
             type_hint: "array".to_string(),
-            description: "Comparison predicates as objects with 'key', 'target' \
-                          (VERSION/CREATE/MOD/VALUE), 'result' (EQUAL/GREATER/LESS/NOT_EQUAL) \
-                          and 'value' fields"
+            description: "Comparison predicates as objects with 'key', 'range_end', 'target' \
+                          (VERSION/CREATE/MOD/VALUE/LEASE), 'result' \
+                          (EQUAL/GREATER/LESS/NOT_EQUAL) and 'value', the operand the key's \
+                          target is compared with"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "success".to_string(),
+            type_hint: "array".to_string(),
+            description: "The operations run when every comparison holds, in order, each with \
+                          'op' (range, put or delete_range) and its key, range_end, value and \
+                          flags"
+                .to_string(),
+            required: true,
+        },
+        Parameter {
+            name: "failure".to_string(),
+            type_hint: "array".to_string(),
+            description: "The operations run when any comparison fails, in the same shape"
                 .to_string(),
             required: true,
         },
@@ -206,13 +283,25 @@ fn etcd_put_response_action() -> ActionDefinition {
         description: "Acknowledge a Put. The server increments its own revision counter if you \
                       omit one."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "revision".to_string(),
-            type_hint: "number".to_string(),
-            description: "Revision this write is recorded at. Omit to let the server increment."
-                .to_string(),
-            required: false,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "revision".to_string(),
+                type_hint: "number".to_string(),
+                description: "Revision this write is recorded at. Omit to let the server \
+                              increment."
+                    .to_string(),
+                required: false,
+            },
+            Parameter {
+                name: "prev_kv".to_string(),
+                type_hint: "object".to_string(),
+                description: "Only when the request had prev_kv: the key's previous pair \
+                              ('key', 'value', 'create_revision', 'mod_revision', 'version', \
+                              'lease'). Omit it when the key did not exist."
+                    .to_string(),
+                required: false,
+            },
+        ],
         example: json!({
             "type": "etcd_put_response",
             "revision": 2
@@ -229,12 +318,20 @@ fn etcd_delete_range_response_action() -> ActionDefinition {
     ActionDefinition {
         name: "etcd_delete_range_response".to_string(),
         description: "Acknowledge a DeleteRange, reporting how many keys were removed".to_string(),
-        parameters: vec![Parameter {
-            name: "deleted".to_string(),
-            type_hint: "number".to_string(),
-            description: "Number of keys deleted. etcdctl prints this as 'deleted N'.".to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "deleted".to_string(),
+                type_hint: "number".to_string(),
+                description: "Number of keys deleted. etcdctl prints this count.".to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "prev_kvs".to_string(),
+                type_hint: "array".to_string(),
+                description: "Only when the request had prev_kv: the deleted pairs".to_string(),
+                required: false,
+            },
+        ],
         example: json!({
             "type": "etcd_delete_range_response",
             "deleted": 1
@@ -250,20 +347,36 @@ fn etcd_delete_range_response_action() -> ActionDefinition {
 fn etcd_txn_response_action() -> ActionDefinition {
     ActionDefinition {
         name: "etcd_txn_response".to_string(),
-        description: "Report whether a transaction's comparisons held. The per-operation results \
-                      are returned empty: nested Range/Put/Delete results inside a Txn are not \
-                      implemented."
+        description: "Answer a transaction: whether its comparisons held, and one entry in \
+                      responses per operation of the branch that ran, in order. A range \
+                      operation's entry is {kvs, count, more}; a delete_range's is {deleted} \
+                      (plus prev_kvs if it asked); a put's may be {} (plus prev_kv if it \
+                      asked). A missing range or delete_range entry fails the transaction."
             .to_string(),
-        parameters: vec![Parameter {
-            name: "succeeded".to_string(),
-            type_hint: "boolean".to_string(),
-            description: "True if the comparisons held and the success branch was taken"
-                .to_string(),
-            required: true,
-        }],
+        parameters: vec![
+            Parameter {
+                name: "succeeded".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "True if the comparisons held and the success branch ran; false \
+                              if the failure branch ran"
+                    .to_string(),
+                required: true,
+            },
+            Parameter {
+                name: "responses".to_string(),
+                type_hint: "array".to_string(),
+                description: "One object per operation of the branch that ran, in order"
+                    .to_string(),
+                required: false,
+            },
+        ],
         example: json!({
             "type": "etcd_txn_response",
-            "succeeded": true
+            "succeeded": false,
+            "responses": [
+                {"kvs": [{"key": "/lock", "value": "owner-1", "create_revision": 4,
+                          "mod_revision": 4, "version": 1, "lease": 0}], "count": 1}
+            ]
         }),
         log_template: Some(
             LogTemplate::new()
@@ -310,15 +423,38 @@ impl Protocol for EtcdProtocol {
         // Only parameters the server actually reads are declared. `initial_cluster_state` and
         // `max_keys` used to be declared here and were never read; `max_keys` in particular
         // advertised a key store this protocol does not and must not have.
-        vec![ParameterDefinition {
-            name: "cluster_name".to_string(),
-            type_hint: "string".to_string(),
-            description: "Cluster identifier name, used in log lines (default: netget-cluster)"
-                .to_string(),
-            required: false,
-            example: json!("my-cluster"),
-            default: None,
-        }]
+        vec![
+            ParameterDefinition {
+                name: "cluster_name".to_string(),
+                type_hint: "string".to_string(),
+                description: "Cluster identifier name, used in log lines (default: netget-cluster)"
+                    .to_string(),
+                required: false,
+                example: json!("my-cluster"),
+                default: None,
+            },
+            ParameterDefinition {
+                name: "first_byte_timeout_secs".to_string(),
+                type_hint: "number".to_string(),
+                description: "Seconds a connected peer may send nothing at all (not even the \
+                              HTTP/2 preface) before the server closes it."
+                    .to_string(),
+                required: false,
+                example: json!(30),
+                default: Some(json!(super::FIRST_BYTE_READ_TIMEOUT.as_secs())),
+            },
+            ParameterDefinition {
+                name: "idle_timeout_secs".to_string(),
+                type_hint: "number".to_string(),
+                description: "Seconds a connection may go with no request in flight and no \
+                              frame of a request body arriving before the server closes it. A \
+                              request waiting on the model or a human never counts as idle."
+                    .to_string(),
+                required: false,
+                example: json!(900),
+                default: Some(json!(super::IDLE_BETWEEN_REQUESTS_TIMEOUT.as_secs())),
+            },
+        ]
     }
     fn get_async_actions(&self, _state: &AppState) -> Vec<ActionDefinition> {
         vec![]
@@ -345,48 +481,50 @@ impl Protocol for EtcdProtocol {
         use crate::protocol::metadata::{DevelopmentState, ProtocolMetadataV2};
 
         ProtocolMetadataV2::builder()
-            // Beta, restored September 2026 -- and on different evidence than the rating it
-            // lost. The old Beta rested on `etcd-client` alone, which is tonic-based and
-            // accepts a gRPC status wherever it finds one; pointing etcd's own Go client at
-            // this server showed no grpc-go client could complete a single RPC. That bug is
-            // fixed (the status is in trailing HEADERS now) and BOTH clients are asserted, so
-            // the `mysql`/mysql_async shape -- one lenient client agreeing with one bug -- no
-            // longer applies.
-            .state(DevelopmentState::Beta)
+            // Stable, 13 November 2026, against the six conditions in the root AGENTS.md; the
+            // table is at the foot of src/server/etcd/AGENTS.md. The rating covers the surface
+            // implemented: the five KV methods, unary, cleartext, UTF-8 keys and values.
+            .state(DevelopmentState::Stable)
             .well_known_port(2379)
             .implementation(
                 "hyper HTTP/2 + prost, hand-routed gRPC; etcd protobuf schemas compiled by \
                  build.rs. tonic is a dependency but this server does not use it.",
             )
             .llm_control(
-                "Range, Put, DeleteRange and Txn. Compact is answered without consulting the \
-                 handler; a Txn's nested operations are not executed, only its outcome.",
+                "Range, Put, DeleteRange and Txn: the key space, previous pairs, which Txn \
+                 branch ran and each of its operations' results. The server applies Range's \
+                 limit/keys_only/count_only and owns the revision counter, so Compact is \
+                 answered from it without consulting the handler.",
             )
             .e2e_testing(
-                "TWO independent clients, neither #[ignore]d and neither skipping when \
-                 anything is missing. etcd-client (the official Rust client, tonic) in \
-                 tests/server/etcd/e2e_test.rs completes put, get, prefix-get and delete and \
-                 asserts on the decoded key/value pairs. The real etcdctl binary (grpc-go, the \
-                 reference implementation) in tests/server/etcd/real_client_test.rs does the \
-                 same four verbs through the CLI and asserts on what it printed; it hard-fails \
-                 when etcdctl is absent rather than skipping. \
-                 The second client is there because the first was not enough: until September \
-                 2026 a successful reply put `grpc-status` in the INITIAL HEADERS and then sent \
-                 a DATA frame, so the stream ended with no trailing HEADERS. tonic tolerated \
-                 that; grpc-go answered `server closed the stream without sending trailers` to \
-                 every RPC carrying a body -- the first Put included. Error replies were \
-                 unaffected because they are Trailers-Only by construction, which is precisely \
-                 why the whole suite passed. The success path now emits real HTTP/2 trailers \
-                 and the error path stays Trailers-Only, and removing either is a red test. \
-                 UNPROVEN: Watch, Lease, Auth, Cluster and Maintenance (none are routed -- they \
-                 return UNIMPLEMENTED), Txn's nested operations, and binary keys or values, \
-                 which cross the action boundary as lossy UTF-8. PCAP ORACLE: real_client_test.rs runs etcdctl through a recording relay and tshark's http2/grpc dissectors read all six connections (Put, Range, prefix Range, DeleteRange success paths). FUZZ: fuzz/fuzz_targets/etcd_request.rs (unary_message + the KV prost decoders, 20 000-level TxnRequest and unknown-group bombs).",
+                "TWO clients independent of the server's hyper/h2/prost stack and of each \
+                 other, neither #[ignore]d and both failing rather than skipping when absent: \
+                 the real etcdctl binary (grpc-go, golang/protobuf) in \
+                 tests/server/etcd/real_client_test.rs, and Python grpcio (gRPC C-core's \
+                 chttp2, upb protobuf) in tests/server/etcd/grpcio_client_test.rs. Between \
+                 them every method: Put (with prev_kv), Range (single, prefix, limit, \
+                 keys_only, count_only), DeleteRange (with prev_kv), Txn with the success and \
+                 the failure branch and each branch's per-operation results, Compact (success, \
+                 an already-compacted and a future revision), and an etcd_error as a \
+                 Trailers-Only status. etcd-client (tonic over prost) in e2e_test.rs is also \
+                 driven but not counted: it shares the server's h2 and prost. etcdctl is also \
+                 why trailers matter: until September 2026 a success reply put grpc-status in \
+                 the initial HEADERS beside a DATA frame, which tonic tolerated and grpc-go \
+                 refused on every RPC. PCAP ORACLE: every etcdctl and grpcio connection \
+                 crosses a recording relay and tshark's http2/grpc dissectors read it, Txn, \
+                 Compact and error replies included. FUZZ: fuzz/fuzz_targets/etcd_request.rs \
+                 (unary_message and the KV prost decoders, 20 000-level TxnRequest and \
+                 unknown-group bombs). BOUNDS: tests/server/etcd/bounds_test.rs drives every \
+                 declared bound from the wire on both sides. NOT COVERED: Watch, Lease, Auth, \
+                 Cluster, Maintenance (all UNIMPLEMENTED), nested transactions \
+                 (UNIMPLEMENTED), TLS, and binary keys or values (lossy UTF-8).",
             )
             .notes(
-                "KV service only: no Watch, Lease, Auth, Cluster or Maintenance. No storage - \
-                 the handler answers every request; the server keeps only a revision counter. \
-                 Keys and values cross the action boundary as UTF-8 strings, so binary keys \
-                 are lossy.",
+                "KV service only: no Watch, Lease, Auth, Cluster or Maintenance, no nested Txn. \
+                 No storage - the handler answers every request; the server keeps only a \
+                 revision counter and the last compacted revision. Request bodies are bounded \
+                 at 1.5 MiB each and 48 MiB across the server. Keys and values cross the \
+                 action boundary as UTF-8 strings, so binary keys are lossy.",
             )
             .max_inbound_bytes(crate::server::etcd::MAX_REQUEST_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Off)

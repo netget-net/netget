@@ -6,26 +6,26 @@ answer to every statement. **There is no database** — no tables, no planner, n
 storage in Rust. The only per-connection state is a Describe→Execute correlation
 cache (see below).
 
-**State**: Beta (this file said Experimental while `actions.rs` said Beta; the
-code was right). **Two** independent clients, sharing no code with each other or
-with `pgwire`:
+**State**: Stable (13 November 2026; see "Maturity: the six conditions" at the
+foot). Two independent clients **on each query protocol**, none sharing code with
+`pgwire`:
 
-- **tokio-postgres** (Rust) covers both query protocols — `test.rs` for simple,
-  `extended_query_test.rs` for Parse/Describe/Bind/Execute with binary result
-  columns decoded into real Rust types.
-- **psql 14 / libpq** (C) covers what tokio-postgres cannot reach:
-  `real_client_test.rs` drives the real binary, which hard-fails when psql is
-  absent. libpq defaults to `sslmode=prefer`, so psql opens every connection with
-  an `SSLRequest` and expects `N` back — an exchange `NoTls` skips entirely, so
-  nothing else here had ever driven it. It then asserts the *rendered* result:
-  `t`/`f` booleans, a real NULL distinguished from an empty string by
-  `\pset null`, four columns and three rows in order, the `INSERT 0 1` tag, and
-  the SQLSTATE psql prints under `\set VERBOSITY verbose`.
-
-**psql 14 does not exercise the extended protocol** — it sends every statement as
-a simple `Query` (`\bind` arrived in psql 16) — so Parse/Bind/Describe/Execute
-and the binary result format still rest on tokio-postgres alone. The two clients
-are complementary, not overlapping.
+- **Simple query**: psql 14 / libpq (C), `real_client_test.rs` — the real binary,
+  hard-failing when absent. libpq defaults to `sslmode=prefer`, so psql opens every
+  connection with an `SSLRequest` and expects `N` back. It asserts the *rendered*
+  result: `t`/`f` booleans, a real NULL distinguished from an empty string by
+  `\pset null`, four columns and three rows in order, the `INSERT 0 1` tag, and the
+  SQLSTATE psql prints under `\set VERBOSITY verbose`. And tokio-postgres's
+  `simple_query` (`test.rs`).
+- **Extended query**: psycopg 3 over libpq, `psycopg_client_test.rs` — bound
+  parameters (int, text, NULL), binary results for int4, text, bool, float8, date
+  and timestamp, text results, a parameterised write's tag, an error's SQLSTATE and
+  a named prepared statement executed twice. And tokio-postgres
+  (`extended_query_test.rs`, `parameters_test.rs`). tokio-postgres alone was not
+  enough here: pgwire encodes binary values with `postgres-types`, the crate
+  tokio-postgres decodes them with, so its agreement on binary cells is the
+  server's own codec at both ends. psql 14 sends every statement as a simple
+  `Query`, which is why the extended path needed psycopg.
 **Port**: 5432 by default. **Privilege**: `None` (5432 > 1024).
 **Stack**: `ETH>IP>TCP>PostgreSQL`.
 
@@ -37,6 +37,10 @@ the extended query paths.
 | Field | Notes |
 |---|---|
 | `query` | the SQL text |
+| `parameters` | the values bound to `$1`…`$n`, in order (`null` is SQL NULL): text-format values as strings, binary ones decoded by type; present when the statement has placeholders, `null` while it is only being described |
+| `parameter_types` | the type of each placeholder |
+| `describe_only` | `true` when the client prepared the statement and asked for its columns before binding anything |
+| `columns` | the columns a Describe already promised for this statement; the answer must use exactly these |
 | `answer_with` | which response shape the statement needs — `postgresql_query_response` for a statement that returns rows, `postgresql_ok_response` for one that does not — from its first keyword (`crate::utils::sql`); absent when the keyword does not say |
 
 `client_ip`, `client_port`, `connection_id` and `server_id` are added by the
@@ -55,6 +59,16 @@ event logger, so log templates may reference them.
 `int2`/`smallint`, `int4`/`int`/`integer`, `int8`/`bigint`, `float4`/`real`,
 `float8`/`double`, `bool`/`boolean`, `date`, `time`, `timestamp`, `text`,
 `varchar`. Anything unrecognised is sent as `varchar`.
+
+Every value is checked against its column's type before anything is sent
+(`coerce_cell`): integers must be integers in range (a numeric string is read as
+its number), floats numbers (or `NaN`/`Infinity`), booleans booleans or
+`t`/`f`/`true`/`false`/`1`/`0`, and `date`/`time`/`timestamp` must parse
+(`YYYY-MM-DD`, `HH:MM:SS`, `YYYY-MM-DD HH:MM:SS`). A value that does not fails
+the statement `XX000`, logged `decision=fail_closed_unencodable_value`. It used
+to be sent as something else — `"abc"` in an `int4` column as `0`, `"true"` in a
+`bool` as `false`, `3000000000` in an `int4` wrapped negative — and a date in a
+binary-format column went out as its ten ASCII bytes, which no driver decodes.
 
 Row handling, as implemented in `build_row_outcome`:
 
@@ -92,6 +106,9 @@ Row handling, as implemented in `build_row_outcome`:
   model names and `anyhow` context chains do not reach the peer. Covered by
   `tests/server/postgresql/llm_failure_test.rs`.
 - **Action result the handler does not recognise** → logged at WARN and skipped.
+- **An answer in a different shape from the one already described** → `ERROR
+  XX000`, logged `decision=fail_closed_column_mismatch`: rows with a different
+  number of columns, or a command tag where rows were described.
 
 ## The extended query protocol
 
@@ -101,9 +118,34 @@ have to agree.
 
 `do_describe_statement` / `do_describe_portal` resolve the statement, return its
 `FieldInfo` list, and stash the whole outcome in a small per-connection cache
-keyed by SQL text (`MAX_PENDING_DESCRIBES` = 64, oldest evicted). `do_query`
-takes the cached outcome, so a Parse/Bind/Describe/Execute round costs **one**
-model call, not two, and the RowDescription always matches the DataRows.
+keyed by SQL text and bound parameters (`MAX_PENDING_DESCRIBES` = 64, oldest
+evicted). `do_query` takes the cached outcome, so a Parse/Bind/Describe/Execute
+round costs **one** model call, not two, and the RowDescription always matches
+the DataRows.
+
+### Parameters
+
+`PostgresqlQueryParser` gives every statement one type per placeholder: the type
+the Parse named, or `text` where it named none (PostgreSQL infers one from
+context; a server with no planner cannot, and an unknown literal resolves to
+`text` there too). The count is the higher of the types named and the highest
+`$n` in the text (`highest_placeholder`, which skips string literals, quoted
+identifiers, dollar-quoted strings and nested comments). The
+ParameterDescription carries those types, and `bound_parameters` decodes each
+Bind into the event's `parameters`; a count that does not match the statement is
+`08P01`, invalid UTF-8 `22021`, a binary value of a type other than the integers,
+floats, bool and text `0A000`.
+
+Describe Statement happens **before** any Bind — tokio-postgres always does it —
+so a statement with parameters is described with `describe_only` and nothing
+cached; its Execute is a second model call, with the values and with `columns`
+set to what was described. Each statement's described columns are kept
+(bounded like the cache) so every later Execute of it is held to them.
+
+This was the largest defect of the Stable pass: the model never saw a bound
+value. `do_describe_statement` reported zero parameters, so tokio-postgres
+refused to bind any, and psycopg's parameterised statements were answered with
+`$1` still in the text and the value nowhere.
 
 This is protocol bookkeeping, not storage: an entry is consumed by the matching
 Execute and nothing survives the connection.
@@ -190,11 +232,12 @@ Two consequences worth keeping:
 
 - **Authentication** — `NoopStartupHandler`; user and database are ignored.
 - **TLS** — `process_socket(stream, None, …)`, no TLS acceptor.
-- **Binary format, inbound** — bound parameter *values* are not decoded (see
-  below). Outbound result columns do honour the requested format.
-- **Parameter substitution** — `$1` placeholders reach the model as literal text;
-  `do_describe_statement` reports zero parameters.
-- **Cursors, `FETCH`, `max_rows`** — `do_query` always returns the whole result.
+- **Binary parameters of types other than** int2/4/8, float4/8, bool and text —
+  refused `0A000`; bind them in text format.
+- **Type inference for untyped parameters** — they are `text`.
+- **SQL-level cursors** (`DECLARE`/`FETCH`) reach the model as statements.
+  Execute's `max_rows` is honoured — pgwire sends that many rows and
+  `PortalSuspended` — but the model's whole answer is resolved at once.
 - **Transactions** — `BEGIN`/`COMMIT`/`ROLLBACK` reach the model as ordinary
   statements; no transaction state is tracked.
 - **`COPY`**, **`LISTEN`/`NOTIFY`**, arrays, JSON, ranges and other composite
@@ -203,7 +246,11 @@ Two consequences worth keeping:
 
 ## Testing
 
-Five files, all declared in `tests/server/postgresql/mod.rs`:
+Nine files, all declared in `tests/server/postgresql/mod.rs` (`tests/server/postgresql/AGENTS.md` has the table); besides those below,
+`psycopg_client_test.rs` (psycopg/libpq, extended protocol), `parameters_test.rs`
+(tokio-postgres: parameters, promised columns, cell values),
+`bounds_test.rs` (every declared bound, both sides) and
+`one_answer_per_query_test.rs`:
 
 - `test.rs` (note: `test.rs`, not `e2e_test.rs`) — four `client.simple_query`
   cases through the mock-model harness.
@@ -264,8 +311,9 @@ more. It now declares both halves; the constants and the reasoning live beside t
 
 | Bound | Value | Why this number |
 |---|---|---|
-| `FIRST_BYTE_READ_TIMEOUT` | 60s | Enforced with `TcpStream::peek` before the socket reaches pgwire, so the StartupMessage is untouched. Matches pgwire's own internal `STARTUP_TIMEOUT`, which bounds the startup *exchange*; this bounds the silence before it begins, which pgwire does not. |
-| `IDLE_SESSION_TIMEOUT` | 600s | Real PostgreSQL's `idle_session_timeout` ships disabled, so there is no upstream default to copy. Ten minutes, for the same reason as MySQL's: no tables, no temp tables, no open transaction, so a reaped pooled connection costs `tokio-postgres`, SQLAlchemy or pgbouncer one transparent reconnect. |
+| `FIRST_BYTE_READ_TIMEOUT` (`first_byte_timeout_secs`) | 60s | Enforced with `TcpStream::peek` before the socket reaches pgwire, so the StartupMessage is untouched. Matches pgwire's own internal `STARTUP_TIMEOUT`, which bounds the startup *exchange*; this bounds the silence before it begins, which pgwire does not. |
+| `IDLE_SESSION_TIMEOUT` (`idle_timeout_secs`) | 600s | Real PostgreSQL's `idle_session_timeout` ships disabled, so there is no upstream default to copy. Ten minutes, for the same reason as MySQL's: no tables, no temp tables, no open transaction, so a reaped pooled connection costs `tokio-postgres`, SQLAlchemy or pgbouncer one transparent reconnect. |
+| `MAX_FRONTEND_MESSAGE_BYTES` | 1 MiB | See "The frontend-size guard" below. `MAX_STARTUP_PACKET_BYTES` (10 000, pgwire's and PostgreSQL's own) is checked by the same screen. |
 | `MAX_CONNECTIONS` | 256 | Refusal: **a v3 `ErrorResponse` with SQLSTATE `53300 too_many_connections`** — the state real PostgreSQL uses for "sorry, too many clients already", and the one this file already maps backend overload onto, so a driver treats it as transient. Sending it before the StartupMessage is a small liberty that libpq-family clients handle: they write startup, then read, and an ErrorResponse is a legal thing to find there. |
 
 **NetGet's own PostgreSQL client *speaks inside `connect()`*, so it is never the silent peer
@@ -281,6 +329,29 @@ TFTP evicted live transfers because "idle" was measured wrongly.
 `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound is removed;
 `tests/accept_bounded_test.rs` drives the shared helper, including the guarantee that a busy
 connection is never reported as idle.
+
+## The frontend-size guard
+
+pgwire bounds a Query, Parse or Bind at 0x3ffffffe bytes — PostgreSQL's 1 GB —
+and buffers a message whole before decoding it. PostgreSQL can afford that
+because a peer authenticates before it may send a Query; this server
+authenticates nobody, so a stranger could make it hold a gigabyte per
+connection. Everything a message carries goes to the model, so 1 MiB is the
+bound (`guard::MAX_FRONTEND_MESSAGE_BYTES`), and 256 connections hold 256 MiB at
+most rather than 256 GiB.
+
+pgwire has no seam for it — `process_socket` takes a concrete `TcpStream` and
+owns every read — so NetGet keeps the peer's socket and serves pgwire one end of
+a loopback pair (`guard::Backend::pair`, which accepts only the connection it
+opened). `guard::relay` copies between the two, reading the frontend framing as
+it goes, and refuses a message by its **declared** length, before a byte of its
+body is forwarded: it half-closes pgwire's side so pgwire answers everything it
+already has and ends, then writes `FATAL 08P01` and closes, logged
+`decision=refused_oversize_message`. A header is held back until it is whole, so
+pgwire never sees part of a refused message; the screen counts bodies rather
+than buffering them, so its memory per connection is constant and the walk to
+the bound is linear. `fuzz/fuzz_targets/pgwire_frontend.rs` feeds the same bytes
+to the screen whole and a byte at a time and requires the same verdict.
 
 ## No peer handle — `[ message this peer ]` / `[ disconnect this peer ]` stay disabled
 
@@ -319,3 +390,33 @@ nothing) instead of the value; and it answered single queries with several respo
 
 Measured with seed 42, five runs per case: `postgresql/current-user` went 2/5 → 5/5 and `postgresql/users-table` 0/5 → 5/5.
 
+## Maturity: the six conditions
+
+The root `AGENTS.md` defines `Stable` as six conditions. Re-derived against source on
+13 November 2026 rather than inherited. **The rating covers the surface this server
+implements**: startup without authentication or TLS, the simple and extended query protocols,
+bound parameters of the types above, results in the types above in either format. COPY,
+LISTEN/NOTIFY, transactions as state, authentication, TLS and composite types are not
+implemented, and the rating claims none of them.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — simple query: psql (libpq) and tokio-postgres; extended query: psycopg 3 (libpq) and tokio-postgres. Before the pass the extended path rested on tokio-postgres alone, whose binary decoding shares `postgres-types` with pgwire's encoding, and no client bound a parameter |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — psql's sessions, tokio-postgres's prepared statement and psycopg's whole session (Parse/Bind with parameters, binary DataRows, the error) cross `recording_relay` and tshark's `pgsql` dissector reads them |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — `pgwire_frontend`, which now also drives NetGet's frontend screen and placeholder scanner, with 30 000-level nested-comment and parenthesis bombs in the corpus; rebuilt this pass and run (nightly-2025-12-04, `-s none`, the `-undefined,dynamic_lookup` link flag, the fuzz workspace's lockfile seeded from the root `Cargo.lock`) `-max_total_time=300 -timeout=25` from the 18 committed seeds, both bombs among them, on 13 November 2026: 60 716 executions in 301 s, clean, 564 new units (kept out of the tree) |
+| 4 | every declared bound has a test | **yes, as of this pass** — `tests/server/postgresql/bounds_test.rs`: `MAX_FRONTEND_MESSAGE_BYTES` (at the bound, timed; one past, after a pipelined query is answered), `MAX_STARTUP_PACKET_BYTES`, `MAX_CONNECTIONS`, `MAX_PENDING_DESCRIBES` (64 stay cached, the 65th evicts), `first_byte_timeout_secs`, `idle_timeout_secs`, each verified by removing it |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/postgresql/AGENTS.md` |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/postgresql/` is empty; psql and psycopg fail rather than skip |
+
+What the pass found, each fixed and each with a test that fails without the fix:
+
+- **Bound parameters never reached the model**, and the statement declared none (above).
+- **The rows did not have to match the columns already described**: a prepared statement
+  executed again was answered fresh, with nothing holding the model to its first answer.
+- **Cell values were invented** when they did not fit their column, and **binary date, time
+  and timestamp columns were undecodable**.
+- **A gigabyte per unauthenticated connection** (the guard above).
+- **A connection closed by the first-byte bound kept its row `Active`**: the early return
+  skipped `close_connection_on_server`.
+- This file said `max_rows` was ignored (pgwire honours it) and that results were text only
+  (`metadata().notes`); both were wrong.

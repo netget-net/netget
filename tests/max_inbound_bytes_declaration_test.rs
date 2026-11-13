@@ -8,7 +8,8 @@
 //!
 //! No source scan can decide whether a read is bounded. The bound may be a `MAX_*` const, the
 //! width of a length field (`db2` and `mssql` are safe only because their length is a `u16`),
-//! a third-party codec (`postgresql` is bounded by pgwire's own `max_size` check), or the fact
+//! a third-party codec's own check (read the number it checks against: pgwire's is PostgreSQL's
+//! 1 GB, so `postgresql` declares a bound of its own in front of it), or the fact
 //! that a body is never read at all (`npm`, `oci_registry` and `rss` drop `Incoming` unread).
 //! Each of those is correct and none of them looks alike.
 //!
@@ -201,11 +202,6 @@ const UNDECLARED_BASELINE: &[(&str, &str)] = &[
     (
         "torrent_tracker",
         "one fixed 8192-byte read, no accumulation",
-    ),
-    // ---- 4. Bounded inside a third-party crate ----
-    (
-        "postgresql",
-        "pgwire codec.rs rejects on the declared msg_len before buffering",
     ),
     // ---- 5. The request body is never read ----
     (

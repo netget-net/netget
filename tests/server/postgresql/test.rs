@@ -1,18 +1,6 @@
-//! End-to-end PostgreSQL tests for NetGet
-//!
-//! These tests spawn the actual NetGet binary with PostgreSQL prompts
-//! and validate the responses using PostgreSQL protocol clients.
-//!
-//! ## Known Issues
-//!
-//! PostgreSQL extended query protocol has an LLM call timeout issue where the LLM
-//! call in do_query (ExtendedQueryHandler) does not complete within the protocol timeout.
-//! This appears to be specific to how pgwire/tokio-postgres handles extended queries.
-//!
-//! MySQL and Redis e2e tests work correctly with the same model and similar patterns.
-//! The issue may be related to pgwire's internal timeouts or the extended query protocol flow.
-//!
-//! TODO: Investigate pgwire ExtendedQueryHandler timeout behavior and fix LLM call completion.
+//! End-to-end PostgreSQL tests for NetGet: the simple query protocol through tokio-postgres's
+//! `simple_query`, against the mock-model harness. The extended protocol is
+//! `extended_query_test.rs`, `parameters_test.rs` and `psycopg_client_test.rs`.
 
 // Helper module imported from parent
 
