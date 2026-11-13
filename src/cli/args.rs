@@ -468,6 +468,7 @@ pub struct Args {
     /// DEPRECATED AND IGNORED. Accepted for compatibility only; it locks nothing.
     #[clap(
         long = "ollama-lock",
+        hide_short_help = true,
         help = "DEPRECATED AND IGNORED; use --llm-max-concurrent",
         long_help = "DEPRECATED AND IGNORED. Accepted for compatibility only: nothing is locked, nothing is written to disk, and NetGet instances are not serialized against each other. It has never done any of those things. To bound LLM concurrency use --llm-max-concurrent (with --llm-queue-timeout and --llm-max-queued), which are enforced."
     )]

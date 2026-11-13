@@ -91,6 +91,15 @@ fn short_help_fits_a_screen_or_two_and_long_help_keeps_the_detail() {
         assert!(short.contains(flag), "{flag} in -h:\n{short}");
     }
     assert!(short.contains("--help"), "-h points at --help:\n{short}");
+    // A deprecated, ignored flag stays accepted and documented in --help, but is not offered in -h.
+    assert!(
+        !short.contains("--ollama-lock"),
+        "-h offers the deprecated --ollama-lock:\n{short}"
+    );
+    assert!(
+        long.contains("--ollama-lock"),
+        "--help still documents --ollama-lock"
+    );
     // The paragraphs and the examples are --help's.
     for detail in ["EXAMPLES:", "Written atomically", "process table"] {
         assert!(!short.contains(detail), "{detail:?} is --help's:\n{short}");
