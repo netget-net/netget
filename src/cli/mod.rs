@@ -237,19 +237,8 @@ pub async fn run() -> Result<()> {
 
         if let Some(mode) = mode_to_set {
             // Validate that the requested environment is available
-            debug!("Getting scripting environment for validation...");
-            let scripting_env = state.get_scripting_env().await;
-            debug!("Scripting environment retrieved");
-            let available = match mode {
-                crate::state::app_state::ScriptingMode::On => true, // LLM chooses runtime
-                crate::state::app_state::ScriptingMode::Off => true, // Always available
-                crate::state::app_state::ScriptingMode::Python => scripting_env.python.is_some(),
-                crate::state::app_state::ScriptingMode::JavaScript => {
-                    scripting_env.javascript.is_some()
-                }
-                crate::state::app_state::ScriptingMode::Go => scripting_env.go.is_some(),
-                crate::state::app_state::ScriptingMode::Perl => scripting_env.perl.is_some(),
-            };
+            debug!("Checking the scripting mode is available...");
+            let available = state.scripting_mode_available(mode).await;
 
             if !available {
                 anyhow::bail!(

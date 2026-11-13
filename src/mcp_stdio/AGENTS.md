@@ -591,6 +591,15 @@ web-search degrading to `Off` (MCP has no terminal to prompt on, same as the
 non-interactive runner). `tests/mcp_startup_config_test.rs` asserts each one from the
 service's `app_state()`, so a new flag that skips this path fails a test.
 
+**The scripting runtimes are not probed here.** `AppState` used to run `python3 --version`,
+`node --version`, `go version` and `perl` while it was built, ahead of the `initialize` answer:
+measured on a debug build (13 November 2026, a loaded machine, 15 starts each), `initialize`
+was answered in a median 206–466 ms with the probes and 31–34 ms without. Nothing at startup
+probes now (`tests/scripting_environment_lazy_test.rs`); the first prompt that lists the
+runtimes, the first script handler, or an `--env <runtime>` check probes once
+(`AppState::get_scripting_env`). Checking `--env on` / `off` — what a saved setting usually
+says — needs no runtime and does not probe (`AppState::scripting_mode_available`).
+
 **The configured model is checked against the endpoint before it is stored**
 (`llm::model_selection::resolve_configured_model`). Ollama lists its models, so a configured
 model it does not have is replaced by the largest installed one — the dashboard's choice — and

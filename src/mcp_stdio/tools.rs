@@ -1097,17 +1097,7 @@ impl NetGetMcpService {
             .parse_scripting_mode()?
             .or_else(|| settings.parse_scripting_mode())
         {
-            let scripting_env = app_state.get_scripting_env().await;
-            let available = match mode {
-                crate::state::app_state::ScriptingMode::On
-                | crate::state::app_state::ScriptingMode::Off => true,
-                crate::state::app_state::ScriptingMode::Python => scripting_env.python.is_some(),
-                crate::state::app_state::ScriptingMode::JavaScript => {
-                    scripting_env.javascript.is_some()
-                }
-                crate::state::app_state::ScriptingMode::Go => scripting_env.go.is_some(),
-                crate::state::app_state::ScriptingMode::Perl => scripting_env.perl.is_some(),
-            };
+            let available = app_state.scripting_mode_available(mode).await;
             if available {
                 app_state.set_selected_scripting_mode(mode).await;
             } else {
