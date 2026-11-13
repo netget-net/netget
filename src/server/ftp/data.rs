@@ -2,17 +2,19 @@
 //! the representation type, and moving bytes over the second socket.
 //!
 //! Everything here is mechanics, not content. The setup verbs — `PASV`, `EPSV`, `PORT`,
-//! `EPRT`, `TYPE`, `MODE`, `STRU` — are answered by the server itself, because their replies
-//! name a socket only the server can open or change how the server frames bytes; a model
-//! inventing a `227` would point the client at a port nothing listens on. What crosses the data
-//! connection (a listing, a file, an upload) is the handler's, through `send_ftp_list` and
-//! `send_ftp_data`, and the protocol stores none of it.
+//! `EPRT`, `TYPE`, `MODE`, `STRU`, `REST`, `PBSZ`, `PROT` — are answered by the server itself,
+//! because their replies name a socket only the server can open or change how the server frames
+//! bytes; a model inventing a `227` would point the client at a port nothing listens on. What
+//! crosses the data connection (a listing, a file, an upload) is the handler's, through
+//! `send_ftp_list` and `send_ftp_data`, and the protocol stores none of it.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+use super::tls::MaybeTls;
 
 /// How long the server waits for a data connection to open once a transfer starts: the client
 /// connecting to the passive port, or the server's connect to the client's `PORT`/`EPRT`.
@@ -41,6 +43,14 @@ pub const DATA_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// handler. Overridable per server with `max_upload_bytes`.
 pub const MAX_UPLOAD_BYTES: usize = 1024 * 1024;
 
+/// The largest binary upload whose bytes reach the handler, as `upload_hex`.
+///
+/// A file that is not UTF-8 text can only reach a model as hex, two characters per byte, so
+/// this bounds what one event carries into a prompt at 128 KiB of hex. A larger binary upload
+/// is still read (up to [`MAX_UPLOAD_BYTES`]) and still reaches the handler, described by its
+/// size alone. Overridable per server with `max_hex_upload_bytes`.
+pub const MAX_HEX_UPLOAD_BYTES: usize = 64 * 1024;
+
 /// Write granularity on the data connection, so [`DATA_IDLE_TIMEOUT`] bounds a stall rather
 /// than the length of a whole transfer.
 const DATA_CHUNK: usize = 64 * 1024;
@@ -51,6 +61,7 @@ pub struct DataLimits {
     pub connect: Duration,
     pub idle: Duration,
     pub max_upload: usize,
+    pub max_hex_upload: usize,
 }
 
 impl DataLimits {
@@ -58,6 +69,7 @@ impl DataLimits {
         connect_secs: Option<u64>,
         idle_secs: Option<u64>,
         max_upload: Option<u64>,
+        max_hex_upload: Option<u64>,
     ) -> Self {
         Self {
             connect: connect_secs
@@ -69,6 +81,9 @@ impl DataLimits {
             max_upload: max_upload
                 .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
                 .unwrap_or(MAX_UPLOAD_BYTES),
+            max_hex_upload: max_hex_upload
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
+                .unwrap_or(MAX_HEX_UPLOAD_BYTES),
         }
     }
 }
@@ -115,6 +130,14 @@ pub struct DataState {
     pub channel: Option<DataChannel>,
     /// After `EPSV ALL` (RFC 2428 §4) every other setup command is refused.
     pub epsv_all: bool,
+    /// The `REST` marker (RFC 3659 §5): a byte offset, consumed by the next transfer command.
+    pub restart: Option<u64>,
+    /// The control connection is TLS (`AUTH TLS` succeeded).
+    pub control_tls: bool,
+    /// `PBSZ` has been answered, which RFC 4217 §9 requires before `PROT`.
+    pub pbsz: bool,
+    /// `PROT P`: every data connection is TLS.
+    pub protect: bool,
 }
 
 impl Default for DataState {
@@ -124,6 +147,10 @@ impl Default for DataState {
             transfer_type: TransferType::Ascii,
             channel: None,
             epsv_all: false,
+            restart: None,
+            control_tls: false,
+            pbsz: false,
+            protect: false,
         }
     }
 }
@@ -157,6 +184,12 @@ pub enum Verb {
     Retr,
     Stor,
     Appe,
+    Stou,
+    Rest,
+    Abor,
+    Auth,
+    Pbsz,
+    Prot,
     /// Everything else: answered by the handler on the control connection.
     Other,
 }
@@ -182,6 +215,12 @@ impl Verb {
             "RETR" => Verb::Retr,
             "STOR" => Verb::Stor,
             "APPE" => Verb::Appe,
+            "STOU" => Verb::Stou,
+            "REST" => Verb::Rest,
+            "ABOR" => Verb::Abor,
+            "AUTH" => Verb::Auth,
+            "PBSZ" => Verb::Pbsz,
+            "PROT" => Verb::Prot,
             _ => Verb::Other,
         }
     }
@@ -197,6 +236,9 @@ impl Verb {
                 | Verb::Type
                 | Verb::Mode
                 | Verb::Stru
+                | Verb::Rest
+                | Verb::Pbsz
+                | Verb::Prot
         )
     }
 
@@ -204,12 +246,23 @@ impl Verb {
     pub fn is_transfer(self) -> bool {
         matches!(
             self,
-            Verb::List | Verb::Nlst | Verb::Mlsd | Verb::Retr | Verb::Stor | Verb::Appe
+            Verb::List
+                | Verb::Nlst
+                | Verb::Mlsd
+                | Verb::Retr
+                | Verb::Stor
+                | Verb::Appe
+                | Verb::Stou
         )
     }
 
     pub fn is_upload(self) -> bool {
-        matches!(self, Verb::Stor | Verb::Appe)
+        matches!(self, Verb::Stor | Verb::Appe | Verb::Stou)
+    }
+
+    /// Takes the `REST` marker (RFC 3659 §5.3: a restarted `RETR` or `STOR`).
+    pub fn restarts(self) -> bool {
+        matches!(self, Verb::Retr | Verb::Stor)
     }
 
     pub fn is_listing(self) -> bool {
@@ -265,6 +318,9 @@ pub async fn answer_setup(
                 "504 Only file structure (F) is implemented".into(),
             ),
         },
+        Verb::Rest => answer_rest(arg, state),
+        Verb::Pbsz => answer_pbsz(arg, state),
+        Verb::Prot => answer_prot(arg, state),
         Verb::Pasv | Verb::Epsv | Verb::Port | Verb::Eprt => {
             // Any setup command replaces a channel no transfer has used yet.
             state.channel = None;
@@ -302,6 +358,61 @@ fn answer_type(arg: &str, state: &mut DataState) -> SetupReply {
         TransferType::Image => "I",
     };
     setup_reply("server_answer", format!("200 Type set to {letter}"))
+}
+
+/// `REST <offset>` in stream mode (RFC 3659 §5): the next `RETR` starts at that byte of the
+/// file, or the next `STOR` carries the file from that byte on. `REST 0` clears the marker.
+fn answer_rest(arg: &str, state: &mut DataState) -> SetupReply {
+    let Ok(offset) = arg.parse::<u64>() else {
+        return setup_reply(
+            "refused_syntax",
+            "501 REST needs a byte offset (stream mode)".into(),
+        );
+    };
+    state.restart = (offset > 0).then_some(offset);
+    setup_reply(
+        "server_answer",
+        format!("350 Restarting at {offset}. Send STOR or RETR to start the transfer"),
+    )
+}
+
+/// `PBSZ` (RFC 4217 §8-9): meaningful only once the control connection is TLS, and always 0
+/// for TLS, which is a stream.
+fn answer_pbsz(arg: &str, state: &mut DataState) -> SetupReply {
+    if !state.control_tls {
+        return setup_reply("refused_sequence", "503 PBSZ needs AUTH TLS first".into());
+    }
+    if arg.is_empty() {
+        return setup_reply("refused_syntax", "501 PBSZ needs an argument".into());
+    }
+    state.pbsz = true;
+    setup_reply("server_answer", "200 PBSZ=0".into())
+}
+
+/// `PROT C` / `PROT P` (RFC 4217 §9): clear or TLS-protected data connections.
+fn answer_prot(arg: &str, state: &mut DataState) -> SetupReply {
+    if !state.control_tls {
+        return setup_reply("refused_sequence", "503 PROT needs AUTH TLS first".into());
+    }
+    if !state.pbsz {
+        return setup_reply("refused_sequence", "503 PROT needs PBSZ first".into());
+    }
+    match arg.to_ascii_uppercase().as_str() {
+        "C" => {
+            state.protect = false;
+            setup_reply("server_answer", "200 Protection level set to C".into())
+        }
+        "P" => {
+            state.protect = true;
+            setup_reply("server_answer", "200 Protection level set to P".into())
+        }
+        "S" | "E" => setup_reply(
+            "refused_unsupported",
+            "536 Only PROT C and PROT P are supported with TLS".into(),
+        ),
+        "" => setup_reply("refused_syntax", "501 PROT needs an argument".into()),
+        _ => setup_reply("refused_unsupported", "504 Unknown protection level".into()),
+    }
 }
 
 /// Bind a passive listener on the configured host, on a port the OS picks.
@@ -489,7 +600,9 @@ pub fn opening_reply(transfer_type: TransferType, what: &str) -> String {
     )
 }
 
-/// Open the data connection a transfer will use, within `limits.connect`.
+/// Open the data connection a transfer will use, within `limits.connect`, and with `tls`
+/// (`PROT P`) complete its TLS handshake within the same deadline: a data connection is not
+/// open until it can carry the file.
 ///
 /// A passive connection from any host but the control connection's peer is dropped and the
 /// wait goes on: otherwise another host that guessed the port could take the transfer
@@ -498,8 +611,29 @@ pub async fn open(
     channel: DataChannel,
     ends: &ControlEnds,
     limits: &DataLimits,
-) -> Result<TcpStream, String> {
+    tls: Option<&tokio_rustls::TlsAcceptor>,
+) -> Result<MaybeTls, String> {
     let deadline = tokio::time::Instant::now() + limits.connect;
+    let tcp = connect(channel, ends, limits, deadline).await?;
+    let Some(acceptor) = tls else {
+        return Ok(MaybeTls::Plain(tcp));
+    };
+    match tokio::time::timeout_at(deadline, acceptor.accept(tcp)).await {
+        Err(_) => Err(format!(
+            "the data connection's TLS handshake did not complete within {}s",
+            limits.connect.as_secs()
+        )),
+        Ok(Err(e)) => Err(format!("the data connection's TLS handshake failed: {e}")),
+        Ok(Ok(stream)) => Ok(MaybeTls::Tls(Box::new(stream))),
+    }
+}
+
+async fn connect(
+    channel: DataChannel,
+    ends: &ControlEnds,
+    limits: &DataLimits,
+    deadline: tokio::time::Instant,
+) -> Result<TcpStream, String> {
     match channel {
         DataChannel::Passive(listener) => loop {
             match tokio::time::timeout_at(deadline, listener.accept()).await {
@@ -536,7 +670,10 @@ pub async fn open(
 }
 
 /// Write `bytes` and close the data connection, each chunk within `idle`.
-pub async fn send_all(stream: &mut TcpStream, bytes: &[u8], idle: Duration) -> Result<(), String> {
+pub async fn send_all<S>(stream: &mut S, bytes: &[u8], idle: Duration) -> Result<(), String>
+where
+    S: AsyncWrite + Unpin,
+{
     for chunk in bytes.chunks(DATA_CHUNK) {
         match tokio::time::timeout(idle, stream.write_all(chunk)).await {
             Err(_) => return Err(format!("the peer read nothing for {}s", idle.as_secs())),
@@ -566,7 +703,14 @@ pub enum Upload {
 }
 
 /// Read an upload to EOF, refusing more than `limits.max_upload` bytes.
-pub async fn receive_all(stream: &mut TcpStream, limits: &DataLimits) -> Upload {
+///
+/// On a TLS data connection EOF is the client's `close_notify`; rustls reports a TCP close
+/// without one as an error, which is what a truncated upload looks like, so it is a failure
+/// (`426`) rather than a complete file.
+pub async fn receive_all<S>(stream: &mut S, limits: &DataLimits) -> Upload
+where
+    S: AsyncRead + Unpin,
+{
     let mut data = Vec::new();
     let mut buf = vec![0u8; 16 * 1024];
     loop {

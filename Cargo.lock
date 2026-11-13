@@ -9637,6 +9637,7 @@ dependencies = [
  "serde_bencode",
  "serde_cbor",
  "serde_json",
+ "serde_path_to_error",
  "serde_urlencoded",
  "serde_yaml",
  "sha1 0.10.6",

@@ -61,7 +61,7 @@ it costs no model call, is reproducible, and returns in milliseconds.
 | `manager.rs` | Routes an event to a script when the config handles that context; falls back to LLM |
 | `types.rs` | `ScriptLanguage`, `ScriptConfig`, `ScriptSource`, `ScriptInput`, `ScriptResponse`, response parsing |
 | `event_handler.rs` | `EventHandler` / `EventHandlerType` (`llm` \| `script` \| `static` \| `manual`), pattern matching, and the optional `match` conditions on event fields (`matches_event`, `find_handler_for`) |
-| `environment.rs` | Startup detection of which interpreters are installed |
+| `environment.rs` | Detection, on first use, of which interpreters are installed |
 | `resident.rs` | Long-lived (persistent) script processes — opt-in `"resident": true`, keeps in-process state across events |
 | `highlight.rs` | Syntax highlighting of script source for the TUI |
 
@@ -96,7 +96,11 @@ child stderr  ──►  logged (warn on success, error on failure)
 | `perl` | `perl` | `perl -e <code>` | Script must read stdin itself (`<STDIN>`) |
 | `go` | `go` (full toolchain) | temp `.go` file + `go run` | netget wraps the code in a `main`; `input` is a pre-parsed `map[string]interface{}`. Compiles on every invocation — noticeably slower than the others |
 
-Availability is probed once at startup (`environment.rs`) and re-checked before
+Availability is probed once per process, by the first caller that needs it
+(`AppState::get_scripting_env`: a prompt listing the runtimes, a script handler, an
+`--env <runtime>` check), never at startup — `node --version` alone costs 130–280 ms,
+and `netget --mcp` answered `initialize` in a median 206–466 ms with the probes against
+31–34 ms without (`tests/scripting_environment_lazy_test.rs`). The cached answer is consulted before
 each script handler runs; an unavailable language falls back to the LLM handler
 rather than erroring. If the interpreter disappears between the probe and the
 spawn, the executor reports which executable was missing, which language needs
@@ -368,7 +372,7 @@ that runs code as you is defensible; one that does so silently is not.
 
 Interpreter probes run concurrently, collect stdout/stderr concurrently, cap each
 pipe at 64 KiB and include pipe EOF in their five-second deadline. A subprocess
-that leaves inherited pipes open cannot hold startup indefinitely. Browser builds
+that leaves inherited pipes open cannot hold the probing caller indefinitely. Browser builds
 report no subprocess interpreters without spawning threads or probing the host.
 
 Per-event stdout is capped at 8 MiB and stderr at 1 MiB. An excess aborts the

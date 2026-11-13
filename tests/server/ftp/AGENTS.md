@@ -56,17 +56,54 @@ All tests use mock LLM responses via `.with_mock()` builder:
 
 | Test | Client | LLM calls |
 |---|---|---|
-| `ftplib_lists_retrieves_and_stores_against_the_ftp_server` | python3 stdlib `ftplib`, one control connection through the recording relay (pcap oracle `ftp`) | 16 |
-| `curl_lists_retrieves_and_uploads_against_the_ftp_server` | curl, ten connections | see the test's doc comment |
+| `ftplib_lists_retrieves_and_stores_against_the_ftp_server` | python3 stdlib `ftplib`, one control connection through the recording relay (pcap oracle `ftp`) | 19 |
+| `ftplib_restarts_stores_unique_and_aborts_against_the_ftp_server` | `ftplib`: `REST` (`RETR`, `STOR`, past the end), `STOU`, `ABOR` during an upload, a 1 MiB download and nothing; straight to the server, since a relay would drop the urgent byte `abort()` ends its line with | 11 |
+| `ftplib_ftps_against_the_ftp_server` | `ftplib.FTP_TLS` verifying a `cert_path` certificate against a `require_tls` server: `AUTH TLS`, `PBSZ`, `PROT P`, TLS transfers both ways | 10 |
+| `curl_lists_retrieves_and_uploads_against_the_ftp_server` | curl, fourteen connections | 93 |
+| `curl_ftps_against_the_ftp_server` | curl `--ssl-reqd --cacert` against a `require_tls` server, three connections | 20 |
 
-Both **fail** when their client is absent. The file's header has the verb-by-verb table of what
-each client drives against what the server implements; between them they cover `PASV`, `EPSV`,
-`PORT`, `EPRT`, `TYPE A`/`I`, `LIST`, `NLST`, `MLSD`, `RETR` (both types, all four channel
-kinds, and a `550` refusal), `SIZE`, `STOR` (ASCII, binary text, binary non-UTF-8) and `APPE`.
-Each upload is answered by a rule that compares what reached the handler with what the client
-sent and says `intact` or `DIFFERENT` in the reply the client returns, so a conversion error on
-either side fails on the client's own output. The relay records only the control connection;
-data connections go straight to the server at the port its `227`/`229` named.
+Every test **fails** when its client is absent. The file's header has the verb-by-verb table of
+what each client drives against what the server implements; between them they cover `PASV`,
+`EPSV`, `PORT`, `EPRT`, `TYPE A`/`I`, `LIST`, `NLST`, `MLSD`, `RETR` (both types, all four
+channel kinds, a binary file byte-exact, and a `550` refusal), `SIZE`, `MDTM`, `REST`, `STOR`
+(ASCII, binary text, binary non-UTF-8, restarted), `APPE`, `STOU`, `ABOR`, `AUTH TLS`/`SSL`,
+`PBSZ` and `PROT P`. Each upload is answered by a rule that compares what reached the handler —
+size, text or hex, restart offset — with what the client sent and says `intact` or `DIFFERENT`
+in the reply the client returns, so a conversion error on either side fails on the client's own
+output. The relay records only the control connection; data connections go straight to the
+server at the port its `227`/`229` named.
+
+## `transfer_control_test.rs` — `REST`, `STOU`, `ABOR`, hex, from a raw socket
+
+In-process, mocked. A binary download given as hex arrives byte-exact in `TYPE I` and
+line-converted in `TYPE A`; a hex field that does not decode, or an encoding that is neither
+`utf8` nor `hex`, is `451` before any `150`. `max_hex_upload_bytes` (8) from both sides: 8 binary
+bytes reach the handler as `upload_hex`, 9 as their size alone. `REST` from both sides of its
+bound: at the file's length an empty transfer and `226`, one past it `554` and no `150`; it is
+consumed by the next transfer, reaches a restarted `STOR` as `restart_offset`, is dropped before
+`APPE`, and never reaches the handler. `STOU`'s `150 FILE: <name>` names what the event's
+`unique_name` carries, and two `STOU`s get two names. `ABOR` while the data connection is still
+being waited for, while an upload is read (behind Telnet `IAC IP IAC DM`) and while a 12 MiB
+download is written: `426` then `226`, the data connection closed, the upload never asked about;
+with nothing in progress `225`; and a command pipelined behind an upload is answered after the
+upload's `226`.
+
+## `ftps_test.rs` — FTPS from a rustls client
+
+In-process, mocked. `PBSZ`/`PROT` before `AUTH` and `PROT` before `PBSZ` are `503`, another
+mechanism `504`, a second `AUTH` `503`, `AUTH SSL` accepted; `PROT C` keeps data connections
+clear under a TLS control connection. The control handshake bound (`idle_timeout_secs` 3): a
+ClientHello 1s after the `234` makes a session, none closes the connection at ~3s with nothing
+written after the `234`. `PROT P`: a download and an upload over TLS data connections
+byte-exact, `ABOR` over the TLS control connection during a TLS upload, and the data handshake
+bound (`data_connect_timeout_secs` 3): a handshake 1s in completes, a TCP connection that never
+sends a ClientHello is `425` at ~3s and the file never crosses in the clear. With no
+`cert_path`/`key_path` the generated certificate serves a session. `require_tls`, both sides:
+on, `USER`, `PASS`, `PWD`, `EPSV`, `TYPE`, `RETR` and `ABOR` are `530` before `AUTH TLS` while
+`SYST`, `NOOP`, `HELP` and `FEAT` are answered, and after it a transfer is `521` until `PROT P`
+(`PROT C` included), then crosses over TLS; off, `USER` and a clear transfer are served. `SYST`
+says back the event's `tls` field (`false` before `AUTH TLS`, `true` after) and the TLS upload's
+reply carries it too.
 
 ## `data_connection_test.rs` — bounds and fail-closed paths, in-process, mocked
 

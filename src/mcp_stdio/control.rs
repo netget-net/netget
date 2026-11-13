@@ -16,8 +16,10 @@
 //! - **server peer**: the server protocol's sync ∪ async actions.
 //! - **parked request**: what the model would be offered for the same event — a server
 //!   event's own declared actions (the protocol's sync set only where the event declares
-//!   none), a client's async ∪ sync ∪ the event's — plus the common actions every protocol
-//!   accepts. See `crate::state::intercepts::server_answer_actions`.
+//!   none), a client's async ∪ sync ∪ the event's — plus the common actions the model is
+//!   offered beside them (memory, connection memory, a log line), never the management
+//!   actions or deprecated names. See `crate::state::intercepts::server_answer_actions` and
+//!   `intercept_common_actions`.
 
 use crate::llm::actions::client_trait::client_llm_action_set;
 use crate::llm::actions::ActionDefinition;
@@ -58,32 +60,60 @@ pub fn peer_vocabulary(
     Ok(actions)
 }
 
-/// The protocol a parked request belongs to, and the actions it may be answered with.
+/// The protocol a parked request belongs to, and what it may be answered with.
+pub struct InterceptVocabulary {
+    /// The owning instance's protocol name.
+    pub protocol: String,
+    /// The protocol's own answers to this event: [`crate::state::intercepts::server_answer_actions`]
+    /// / [`crate::state::intercepts::client_answer_actions`] — what the model would be offered.
+    pub answers: Vec<ActionDefinition>,
+    /// The common actions that may go beside them
+    /// ([`crate::state::intercepts::intercept_common_actions`]).
+    pub common: Vec<ActionDefinition>,
+}
+
+impl InterceptVocabulary {
+    /// Every action an answer may use: the protocol's answers, then the common ones.
+    pub fn all(&self) -> Vec<ActionDefinition> {
+        let mut all = self.answers.clone();
+        union_into(&mut all, self.common.clone());
+        all
+    }
+}
+
+/// What a parked request may be answered with.
 ///
-/// The set is [`crate::state::intercepts::server_answer_actions`] /
-/// [`crate::state::intercepts::client_answer_actions`] — what the model would be offered for
-/// the same event — so `list_intercepts` offers, `answer_intercept` accepts and the dashboard's
-/// composer lists one and the same vocabulary.
+/// `list_intercepts` offers and `answer_intercept` accepts one and the same vocabulary: the
+/// protocol's answers to the event plus the common actions the model is offered with it —
+/// never the management actions or deprecated names.
 ///
 /// `Err` when the owning instance is gone (the request is then no longer answerable anyway).
 pub async fn intercept_vocabulary(
     state: &AppState,
     view: &InterceptView,
-) -> Result<(String, Vec<ActionDefinition>), String> {
+) -> Result<InterceptVocabulary, String> {
     match view.owner {
         InterceptOwner::Server(server_id) => {
             let server = state
                 .get_server(server_id)
                 .await
                 .ok_or_else(|| format!("server #{} no longer exists", server_id.as_u32()))?;
-            crate::protocol::server_registry::registry()
+            let protocol = crate::protocol::server_registry::registry()
                 .resolve(&server.protocol_name)
                 .map_err(|e| e.to_string())?;
-            let actions = crate::state::intercepts::server_answer_actions(
+            let answers = crate::state::intercepts::server_answer_actions(
                 &server.protocol_name,
                 &view.event_type,
             );
-            Ok((server.protocol_name, actions))
+            let on_a_connection =
+                view.connection_id.is_some() && !protocol.metadata().connectionless;
+            let common =
+                crate::state::intercepts::intercept_common_actions(&answers, on_a_connection);
+            Ok(InterceptVocabulary {
+                protocol: server.protocol_name,
+                answers,
+                common,
+            })
         }
         InterceptOwner::Client(client_id) => {
             let client = state
@@ -98,12 +128,20 @@ pub async fn intercept_vocabulary(
                         client.protocol_name
                     )
                 })?;
-            let actions = crate::state::intercepts::client_answer_actions(
+            let answers = crate::state::intercepts::client_answer_actions(
                 &client.protocol_name,
                 state,
                 &view.event_type,
             );
-            Ok((client.protocol_name, actions))
+            let common = crate::state::intercepts::intercept_common_actions(
+                &answers,
+                view.connection_id.is_some(),
+            );
+            Ok(InterceptVocabulary {
+                protocol: client.protocol_name,
+                answers,
+                common,
+            })
         }
     }
 }

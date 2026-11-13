@@ -1118,6 +1118,7 @@ jobs:
           for filter in \
             bolt::real_client_test \
             coap::real_client_test dict::real_client_test dns::dig_test dns::kdig_test \
+            dns::padding_test dot::padding_test doh::padding_test doq::padding_test \
             gemini::real_client_test beanstalkd::real_client_test zabbix::real_client_test \
             gearman::real_client_test nsq::real_client_test nostr::real_client_test \
             docker::real_client_test doh::real_client_test dot::real_client_test doq::real_client_test dynamo::real_client_test \
