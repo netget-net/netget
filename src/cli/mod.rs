@@ -421,7 +421,9 @@ pub fn resolve_server_name(protocol: &str) -> Result<String> {
     crate::protocol::server_registry::registry()
         .resolve_name(protocol)
         .map(|(p, _)| p.protocol_name().to_string())
-        .map_err(|e| anyhow::anyhow!("{e}\n   (netget --docs lists every protocol and its aliases)"))
+        .map_err(|e| {
+            anyhow::anyhow!("{e}\n   (netget --docs lists every protocol and its aliases)")
+        })
 }
 
 /// The client counterpart of [`resolve_server_name`], for `--client <name>`: exactly what MCP's

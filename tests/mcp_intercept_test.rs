@@ -205,12 +205,7 @@ async fn answering_parked_requests_over_mcp_reaches_the_wire() {
         serde_json::json!({"intercept_id": first, "actions": [{"type": "close_all_servers"}]}),
     )
     .await;
-    assert_eq!(
-        management.is_error,
-        Some(true),
-        "{}",
-        text_of(&management)
-    );
+    assert_eq!(management.is_error, Some(true), "{}", text_of(&management));
     let still = text_of(&call(&client, "list_intercepts", serde_json::json!({})).await);
     assert!(
         still.contains(&format!("intercept_id {first}")),

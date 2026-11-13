@@ -211,13 +211,12 @@ async fn a_wrong_argument_is_named_with_its_tool_and_expected_type() {
     let message = session
         .refusal("stop_server", json!({"server_id": "first"}))
         .await;
-    assert_all(
-        &message,
-        &["argument `server_id`", "integer", "\"first\""],
-    );
+    assert_all(&message, &["argument `server_id`", "integer", "\"first\""]);
 
     // A required id left out.
-    let message = session.refusal("answer_intercept", json!({"actions": []})).await;
+    let message = session
+        .refusal("answer_intercept", json!({"actions": []}))
+        .await;
     assert_all(&message, &["missing required argument `intercept_id`"]);
 
     // The session carries on after every refusal.
