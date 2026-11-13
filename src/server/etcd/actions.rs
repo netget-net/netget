@@ -484,7 +484,7 @@ impl Protocol for EtcdProtocol {
             // Stable, 13 November 2026, against the six conditions in the root AGENTS.md; the
             // table is at the foot of src/server/etcd/AGENTS.md. The rating covers the surface
             // implemented: the five KV methods, unary, cleartext, UTF-8 keys and values.
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             .well_known_port(2379)
             .implementation(
                 "hyper HTTP/2 + prost, hand-routed gRPC; etcd protobuf schemas compiled by \

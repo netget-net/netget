@@ -105,7 +105,7 @@ impl Protocol for PostgresqlProtocol {
             // table is at the foot of src/server/postgresql/AGENTS.md. The rating covers the
             // surface implemented: no authentication or TLS; the simple and extended query
             // protocols; parameters and results of the types listed there.
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             .well_known_port(5432)
             .implementation(
                 "pgwire v0.35 (NetGet's netget-pgwire fork) behind NetGet's frontend-size \
