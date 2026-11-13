@@ -1148,6 +1148,15 @@ to the current name; a server event that offers protocol actions leaves it out o
 (`common::network_event_common_actions_for`), though a model that names it anyway is executed,
 not retried (`tests/notify_operator_test.rs`).
 
+**A decision event is offered its own answers and nothing else.** An event declared
+`EventType::decision_only` (Bolt's login) gets no memory, connection-memory or log action from
+`call_llm`, and its prompt has no memory section. Over 40 replayed seeds for each of the three
+Bolt eval instructions, llama3.1:8b refused "accepts any login" on 14 of 120 draws with those
+actions beside accept and refuse (quoting the instruction's login sentence in the event still
+left 3 of 80), and on none of 120 without them, while an instruction refusing the user was
+still refused 40 of 40 (`eval-results/2026-11-13-structural-cases/`). Use it where the event is
+one yes/no question, not where the model should be able to remember something about the peer.
+
 **Actions**: protocols implement `ProtocolActions` (`src/llm/actions/protocol_trait.rs`) with
 async actions (user-triggered) and sync actions (network-event-triggered), in
 `src/server/<protocol>/actions.rs`. Clients implement `Client` (`llm/actions/client_trait.rs`).

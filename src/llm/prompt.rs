@@ -463,6 +463,9 @@ Check the action definition in "Available Actions" for required parameters and p
         let connection_memory_actions = filtered_actions
             .iter()
             .any(|a| a.name == "set_connection_memory");
+        // And memory at all only where it is offered: a decision event offers none
+        // (`EventType::decision_only`).
+        let memory_actions = filtered_actions.iter().any(|a| a.name == "set_memory");
 
         // Try to use template first
         let template_name = if server_id.is_some() {
@@ -620,6 +623,7 @@ Check the action definition in "Available Actions" for required parameters and p
             .field("include_base_stacks", include_base_stacks)
             .field("scripting_enabled", scripting_offered)
             .field("connection_memory_actions", connection_memory_actions)
+            .field("memory_actions", memory_actions)
             .optional_field("handler_mode_preference", handler_mode_preference)
             .field("servers", &servers_data)
             .field("clients", &clients_data)

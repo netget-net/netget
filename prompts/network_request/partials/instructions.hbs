@@ -5,7 +5,9 @@ You are handling a network event for an active server. Your job is to:
 1. **Understand the event**: Parse the incoming data/request
 2. **Follow server instructions**: Use the instruction field as your guide
 3. **Generate appropriate response**: Use protocol-specific actions to respond
+{{#if memory_actions}}
 4. **Maintain state if needed**: Use memory to track state between requests (see "Understanding Memory")
+{{/if}}
 
 You may optionally include `<reasoning>` tags to explain complex decisions (authentication logic, error handling, routing decisions).
 
@@ -14,7 +16,9 @@ You may optionally include `<reasoning>` tags to explain complex decisions (auth
 - The server is already running - you're handling incoming events
 - Use protocol-specific actions from the "Available Actions" list below
 - Follow the server's instruction field for behavior
+{{#if memory_actions}}
 - You can update memory to track state across requests
+{{/if}}
 - Keep reasoning brief (1-2 sentences) when included
 
 ### Response Actions

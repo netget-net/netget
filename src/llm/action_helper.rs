@@ -854,11 +854,20 @@ async fn call_llm_inner(
 
     // `notify_operator` only where there is no protocol answer to confuse it with, and the
     // per-connection memory only where there is a connection that lasts beyond one datagram.
+    // A decision event (a login's accept or refuse) is offered its own answers and nothing
+    // else; see `EventType::decision_only`.
     let on_a_connection = connection_id.is_some() && !protocol.metadata().connectionless;
-    let mut all_actions = crate::llm::actions::common::network_event_common_actions_for(
-        !event_actions.is_empty(),
-        on_a_connection,
-    );
+    let decision_only = event.event_type.decision_only
+        && earlier.iter().all(|e| e.event_type.decision_only)
+        && !event_actions.is_empty();
+    let mut all_actions = if decision_only {
+        Vec::new()
+    } else {
+        crate::llm::actions::common::network_event_common_actions_for(
+            !event_actions.is_empty(),
+            on_a_connection,
+        )
+    };
     let wire_answers: Vec<String> = event_actions.iter().map(|a| a.name.clone()).collect();
 
     // Add provide_feedback action only if server has feedback_instructions configured
