@@ -47,6 +47,7 @@ impl FtpServer {
         idle_timeout_secs: Option<u64>,
         data_limits: data::DataLimits,
         tls_config: Arc<rustls::ServerConfig>,
+        require_tls: bool,
     ) -> Result<SocketAddr> {
         // Both bounds are tunable because their right value is a property of who is on the
         // other end, which only the operator knows. The defaults serve NetGet's own FTP client
@@ -58,6 +59,7 @@ impl FtpServer {
             // Passive listeners bind the host the server was configured with, never wider.
             bind_ip: listen_addr.ip(),
             tls: tokio_rustls::TlsAcceptor::from(tls_config),
+            require_tls,
         };
         let listener =
             crate::server::socket_helpers::create_reusable_tcp_listener(listen_addr).await?;
@@ -215,7 +217,24 @@ struct SessionConfig {
     bind_ip: std::net::IpAddr,
     /// FTPS: the control connection after `AUTH TLS`, data connections after `PROT P`.
     tls: tokio_rustls::TlsAcceptor,
+    /// `require_tls`: nothing but [`ALLOWED_BEFORE_TLS`] before `AUTH TLS`, and no transfer
+    /// without `PROT P`.
+    require_tls: bool,
 }
+
+/// `require_tls` when the server is started without it: FTPS is offered, not demanded.
+pub const REQUIRE_TLS_DEFAULT: bool = false;
+
+/// What a client may send before `AUTH TLS` when the server requires TLS: the upgrade itself,
+/// and the commands a client uses to find out that it should (RFC 4217 §11.1 has the server
+/// refuse the rest with `530`).
+const ALLOWED_BEFORE_TLS: [&str; 6] = ["AUTH", "FEAT", "SYST", "QUIT", "HELP", "NOOP"];
+
+/// The refusal for a command sent in the clear to a server that requires TLS.
+const TLS_REQUIRED: &[u8] = b"530 This server requires TLS: send AUTH TLS first\r\n";
+
+/// The refusal for a transfer whose data connection would be clear text (RFC 4217 §9: 521).
+const PROT_REQUIRED: &[u8] = b"521 Data connections must be protected: send PBSZ 0 and PROT P\r\n";
 
 /// Read TCP urgent data in line with the rest of the control connection.
 ///
@@ -452,10 +471,11 @@ fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, 
     )
 }
 
-/// The `ftp_command` event for one command line.
-fn command_event(command: &str) -> Event {
+/// The `ftp_command` event for one command line. `tls` says whether the control connection is
+/// TLS (`AUTH TLS` succeeded), so a handler can decide on it.
+fn command_event(command: &str, tls: bool) -> Event {
     Event::new(&FTP_COMMAND_EVENT, {
-        let mut data = serde_json::json!({ "command": command });
+        let mut data = serde_json::json!({ "command": command, "tls": tls });
         if let Some(hint) = actions::answer_with_for_command(command) {
             data["answer_with"] = serde_json::json!(hint);
         }
@@ -593,6 +613,7 @@ impl FtpSession {
             &FTP_COMMAND_EVENT,
             serde_json::json!({
                 "command": "CONNECTION_ESTABLISHED",
+                "tls": false,
                 "answer_with": actions::answer_with_for_command("CONNECTION_ESTABLISHED"),
             }),
         );
@@ -894,6 +915,44 @@ impl FtpSession {
             log.debug(format!("FTP received: {}", command));
 
             let verb = data::Verb::of(command);
+            let gated = config.require_tls && !data_state.control_tls;
+            if gated {
+                let word = command
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                if !ALLOWED_BEFORE_TLS.contains(&word.as_str()) {
+                    log.info(format!(
+                        "FTP {command:?} on connection {connection_id} \
+                         decision=refused_tls_required (530, sent before AUTH TLS)"
+                    ));
+                    Self::write_out(
+                        write_half,
+                        TLS_REQUIRED,
+                        app_state,
+                        server_id,
+                        connection_id,
+                    )
+                    .await?;
+                    continue;
+                }
+            }
+            if config.require_tls && verb.is_transfer() && !data_state.protect {
+                log.info(format!(
+                    "FTP {command:?} on connection {connection_id} \
+                     decision=refused_prot_required (521, no PROT P)"
+                ));
+                Self::write_out(
+                    write_half,
+                    PROT_REQUIRED,
+                    app_state,
+                    server_id,
+                    connection_id,
+                )
+                .await?;
+                continue;
+            }
             if verb.is_setup() {
                 // Data-connection setup and representation type: answered here, because each
                 // reply names a socket only the server can open or changes how it frames bytes.
@@ -965,6 +1024,7 @@ impl FtpSession {
                     ends: &ends,
                     limits: &config.data,
                     tls: &config.tls,
+                    control_tls: data_state.control_tls,
                 }
                 .run(&mut data_state, &mut reader)
                 .await?;
@@ -981,7 +1041,9 @@ impl FtpSession {
                 .await
                 .is_some_and(|(_, batching)| batching);
             let mut commands = vec![command.to_string()];
-            if batching {
+            // Before AUTH TLS on a server that requires it, every line has to pass the check
+            // above on its own, so none is gathered into a batch.
+            if batching && !gated {
                 for (more, consumed) in reader
                     .lines_already_here(
                         crate::protocol::metadata::MAX_BATCH_EVENTS - 1,
@@ -1006,7 +1068,10 @@ impl FtpSession {
                     commands.push(more.trim().to_string());
                 }
             }
-            let events: Vec<Event> = commands.iter().map(|c| command_event(c)).collect();
+            let events: Vec<Event> = commands
+                .iter()
+                .map(|c| command_event(c, data_state.control_tls))
+                .collect();
 
             // Get handler/LLM response
             match call_llm_batch(
@@ -1292,6 +1357,8 @@ struct Transfer<'a, W> {
     ends: &'a data::ControlEnds,
     limits: &'a data::DataLimits,
     tls: &'a tokio_rustls::TlsAcceptor,
+    /// For the event's `tls` field.
+    control_tls: bool,
 }
 
 /// Why the data phase of a transfer did not complete.
@@ -1419,7 +1486,7 @@ where
     }
 
     fn event(&self, transfer_type: data::TransferType, restart: Option<u64>) -> Event {
-        let mut event = command_event(self.command);
+        let mut event = command_event(self.command, self.control_tls);
         event.data["transfer_type"] = serde_json::json!(transfer_type.event_name());
         if let Some(offset) = restart {
             event.data["restart_offset"] = serde_json::json!(offset);

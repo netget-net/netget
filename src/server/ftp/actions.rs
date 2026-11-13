@@ -246,6 +246,18 @@ impl Protocol for FtpProtocol {
                 default: None,
             },
             crate::llm::actions::ParameterDefinition {
+                name: "require_tls".to_string(),
+                type_hint: "boolean".to_string(),
+                description: "Refuse every command but AUTH, FEAT, SYST, QUIT, HELP and NOOP with \
+                              530 until the client has sent AUTH TLS, so no password crosses in \
+                              the clear, and refuse every transfer with 521 until it has sent \
+                              PBSZ 0 and PROT P."
+                    .to_string(),
+                required: false,
+                example: json!(true),
+                default: Some(serde_json::json!(super::REQUIRE_TLS_DEFAULT)),
+            },
+            crate::llm::actions::ParameterDefinition {
                 name: "max_hex_upload_bytes".to_string(),
                 type_hint: "number".to_string(),
                 description: "Largest binary (not UTF-8) upload whose bytes reach the handler, \
@@ -393,8 +405,8 @@ impl Protocol for FtpProtocol {
                 "Beta for the surface it implements, which is RFC 959 stream mode, file \
                  structure, types A and I, with RFC 2428's EPSV/EPRT, RFC 3659's REST STREAM \
                  and RFC 4217's explicit FTPS. Not implemented: implicit FTPS (port 990), \
-                 CCC, block and compressed modes, TYPE E, a TLS-only mode that refuses USER \
-                 before AUTH. A binary upload reaches the handler as hex up to \
+                 CCC, block and compressed modes, TYPE E (require_tls refuses everything but \
+                 AUTH, FEAT, SYST, QUIT, HELP and NOOP before AUTH TLS). A binary upload reaches the handler as hex up to \
                  max_hex_upload_bytes and as its size beyond. No storage: the handler supplies \
                  every listing and file.",
             )
@@ -526,6 +538,13 @@ impl Server for FtpProtocol {
                 path("cert_path")?.as_deref(),
                 path("key_path")?.as_deref(),
             )?;
+            let require_tls = ctx
+                .startup_params
+                .as_ref()
+                .map(|p| p.get_optional_bool("require_tls"))
+                .transpose()?
+                .flatten()
+                .unwrap_or(crate::server::ftp::REQUIRE_TLS_DEFAULT);
 
             FtpServer::spawn_with_llm_actions(
                 listen_addr,
@@ -537,6 +556,7 @@ impl Server for FtpProtocol {
                 idle_timeout_secs,
                 data_limits,
                 tls_config,
+                require_tls,
             )
             .await
         })
@@ -792,6 +812,14 @@ pub static FTP_COMMAND_EVENT: LazyLock<EventType> =
             'QUIT'). The verb is NOT upper-cased or split out for you. One exception: the \
             literal value 'CONNECTION_ESTABLISHED' is not from the client - it means the TCP \
             connection has just been accepted and the server is waiting for your 220 greeting"
+            .to_string(),
+        required: true,
+    },
+    Parameter {
+        name: "tls".to_string(),
+        type_hint: "boolean".to_string(),
+        description: "Whether the control connection is TLS (the client sent AUTH TLS), so the \
+            password in a PASS, and everything after it, did not cross in the clear"
             .to_string(),
         required: true,
     },

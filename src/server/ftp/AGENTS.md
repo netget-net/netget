@@ -35,6 +35,7 @@ logged `decision=server_answer` or `decision=refused_*`):
 | `AUTH TLS` (also `SSL`, `TLS-C`) | `234`, then the TLS handshake on the same socket; another mechanism `504`; a second `AUTH` `503`; bytes already sent behind the `AUTH` line `503` |
 | `PBSZ <n>` | `200 PBSZ=0` once the control connection is TLS; before that `503` |
 | `PROT C` / `PROT P` | `200`; before `AUTH` or `PBSZ` `503`; `S`/`E` `536`; anything else `504` |
+| anything but `AUTH`, `FEAT`, `SYST`, `QUIT`, `HELP`, `NOOP` before `AUTH TLS`, with `require_tls` | `530`; a transfer without `PROT P` afterwards `521` |
 
 A passive listener binds the host the server was configured with and nowhere wider — `0.0.0.0`
 only when that is the configured host. A passive data connection from any address but the
@@ -106,8 +107,16 @@ a TLS data connection ends at the client's `close_notify`; a TCP close without o
 truncated upload looks like and is `426`. The server answers the client's close with its own
 `close_notify`, which python's `unwrap()` waits for. The certificate is `cert_path`/`key_path`
 (PEM) or, without both, a self-signed one generated at startup for `localhost`, `127.0.0.1`
-and `::1`. There is no TLS-required mode: a client may log in without `AUTH`, and the event does
-not say whether the session is TLS.
+and `::1`. Every `ftp_command` event carries `tls`, whether the control connection is TLS, so a
+handler can decide on it (refuse a `PASS` in the clear, say).
+
+**`require_tls`** (default `false`, `REQUIRE_TLS_DEFAULT` in `mod.rs`) makes FTPS mandatory. Before
+`AUTH TLS` only `AUTH`, `FEAT`, `SYST`, `QUIT`, `HELP` and `NOOP` are answered; every other command —
+`USER` and `PASS` above all, but also the setup verbs and `ABOR` — is `530 This server requires
+TLS: send AUTH TLS first` and never reaches the handler (`decision=refused_tls_required`), and
+none is gathered into a batch. After it, a transfer command without `PROT P` is `521 Data
+connections must be protected: send PBSZ 0 and PROT P` (`decision=refused_prot_required`),
+before any `150` and leaving the prepared channel for the next transfer.
 
 A transfer command with no prepared channel is answered `425 Use PASV, EPSV, PORT or EPRT
 first` without consulting the handler. A `150`/`226` the handler wrote beside a payload is not
@@ -116,8 +125,7 @@ server's default `226 Transfer complete` text; anything else is dropped with WAR
 `decision=transfer_reply_dropped`. `send_ftp_list` / `send_ftp_data` in answer to any other
 command have no data connection to go to: `decision=fail_closed_bad_action`, answered `451`.
 
-Also missing: implicit FTPS (port 990), `CCC`, a mode that refuses `USER` before `AUTH TLS`,
-`STAT` during a transfer, `MODE`s other than stream, `TYPE E`, and any notion of a current
+Also missing: implicit FTPS (port 990), `CCC`, `STAT` during a transfer, `MODE`s other than stream, `TYPE E`, and any notion of a current
 working directory — the handler tracks the cwd in its own memory or not at all.
 
 ### Data-connection bounds
@@ -180,8 +188,8 @@ with `?`, so a port clash is reported as `Error` and not as a phantom `Running` 
 `first_byte_timeout_secs` and `idle_timeout_secs` (the control connection's read deadlines,
 "Connection bounds" below), `max_upload_bytes`, `max_hex_upload_bytes`,
 `data_connect_timeout_secs` and `data_idle_timeout_secs` (the data-connection bounds above),
-and `cert_path`/`key_path` (FTPS; both or neither — read at startup, so a bad path fails the
-start rather than the first `AUTH TLS`). There is no passive port range:
+`cert_path`/`key_path` (FTPS; both or neither — read at startup, so a bad path fails the
+start rather than the first `AUTH TLS`), and `require_tls`. There is no passive port range:
 a passive listener takes an OS-assigned port on the configured host. `send_first` is not
 declared: the server always sends the greeting event itself, so passing `send_first` would only
 earn an "unsupported" warning from `server_startup`.
@@ -217,6 +225,8 @@ event, which is a sentinel and not something a client sends).
 | `REST` offset past the end of the file the handler gave | `554 Restart offset <n> is past the end of the file (<len> bytes)`, no `150` | INFO `decision=refused_restart_offset` |
 | `ABOR` during a transfer | `426 Connection closed; transfer aborted`, then `226 Abort successful`; an aborted upload never reaches the handler | INFO `decision=transfer_aborted_by_client` |
 | TLS handshake after `234` failed or never started | connection closed | WARN `decision=refused_tls_handshake` |
+| `require_tls`: a command other than AUTH/FEAT/SYST/QUIT/HELP/NOOP before `AUTH TLS` | `530 This server requires TLS: send AUTH TLS first`; the handler is not asked | INFO `decision=refused_tls_required` |
+| `require_tls`: a transfer before `PROT P` | `521 Data connections must be protected: send PBSZ 0 and PROT P` | INFO `decision=refused_prot_required` |
 | `PROT P` data connection's handshake failed or never started | `425 Can't open data connection` | WARN `decision=refused_data_connection` |
 
 421 rather than silence because an FTP client may not send a command until it has read a
@@ -245,7 +255,7 @@ handler matches does the model get invoked, once per command line.
 
 | Event         | When                                            | Parameters |
 |---------------|-------------------------------------------------|------------|
-| `ftp_command` | connection accepted, and once per command line the handler answers (not the setup verbs, `ABOR` or `AUTH`) | `command`, `answer_with`; on transfers `transfer_type`; on a restarted `RETR`/`STOR` `restart_offset`; on uploads `upload_bytes`, `upload_is_text`, and `upload_text` or `upload_hex`; on `STOU` `unique_name` |
+| `ftp_command` | connection accepted, and once per command line the handler answers (not the setup verbs, `ABOR` or `AUTH`) | `command`, `tls`, `answer_with`; on transfers `transfer_type`; on a restarted `RETR`/`STOR` `restart_offset`; on uploads `upload_bytes`, `upload_is_text`, and `upload_text` or `upload_hex`; on `STOU` `unique_name` |
 
 `command` is the raw line with the trailing CRLF stripped — not upper-cased, not split into
 verb and argument. The single sentinel value `CONNECTION_ESTABLISHED` means "TCP connection
@@ -402,11 +412,12 @@ every test fails rather than skips when its client is absent: python3's stdlib `
 TYPE A and over `PORT`, a binary `RETR` byte-exact, `SIZE`, `MDTM`, a refused `RETR`, `STOR` in
 TYPE A and in TYPE I with a non-UTF-8 file checked as hex, `REST` before `RETR` and `STOR` and
 past the end, `STOU`, `ABOR` during an upload, a download and nothing, `QUIT`; and through
-`FTP_TLS`, `AUTH TLS`, `PBSZ`, `PROT P` and TLS transfers both ways) and curl's libcurl FTP
+`FTP_TLS`, `AUTH TLS`, `PBSZ`, `PROT P` and TLS transfers both ways against a `require_tls`
+server) and curl's libcurl FTP
 (`LIST` and `NLST` over `EPSV`, `RETR` in TYPE I and TYPE A and over `PASV`, `EPRT` and `PORT`,
 a binary `RETR` byte-exact, `SIZE`, `MDTM` (`-R`), `REST` (`-C`), `STOR` text and binary,
 `APPE`, a refused `RETR`; and with `--ssl-reqd`, `AUTH SSL`, `PBSZ`, `PROT P`, `LIST` and binary
-transfers both ways). The pcap oracle reads ftplib's clear-text control connection through a
+transfers both ways against a `require_tls` server). The pcap oracle reads ftplib's clear-text control connection through a
 recording relay. Every data-connection bound has a test on both sides
 (`data_connection_test.rs`, `transfer_control_test.rs`, `ftps_test.rs`), and the control
 connection's bounds have theirs (`connection_bounds_test.rs`, `test.rs`, `ftps_test.rs`).

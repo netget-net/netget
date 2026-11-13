@@ -58,9 +58,9 @@ All tests use mock LLM responses via `.with_mock()` builder:
 |---|---|---|
 | `ftplib_lists_retrieves_and_stores_against_the_ftp_server` | python3 stdlib `ftplib`, one control connection through the recording relay (pcap oracle `ftp`) | 19 |
 | `ftplib_restarts_stores_unique_and_aborts_against_the_ftp_server` | `ftplib`: `REST` (`RETR`, `STOR`, past the end), `STOU`, `ABOR` during an upload, a 1 MiB download and nothing; straight to the server, since a relay would drop the urgent byte `abort()` ends its line with | 11 |
-| `ftplib_ftps_against_the_ftp_server` | `ftplib.FTP_TLS` verifying a `cert_path` certificate: `AUTH TLS`, `PBSZ`, `PROT P`, TLS transfers both ways | 10 |
+| `ftplib_ftps_against_the_ftp_server` | `ftplib.FTP_TLS` verifying a `cert_path` certificate against a `require_tls` server: `AUTH TLS`, `PBSZ`, `PROT P`, TLS transfers both ways | 10 |
 | `curl_lists_retrieves_and_uploads_against_the_ftp_server` | curl, fourteen connections | 93 |
-| `curl_ftps_against_the_ftp_server` | curl `--ssl-reqd --cacert`, three connections | 20 |
+| `curl_ftps_against_the_ftp_server` | curl `--ssl-reqd --cacert` against a `require_tls` server, three connections | 20 |
 
 Every test **fails** when its client is absent. The file's header has the verb-by-verb table of
 what each client drives against what the server implements; between them they cover `PASV`,
@@ -98,7 +98,12 @@ written after the `234`. `PROT P`: a download and an upload over TLS data connec
 byte-exact, `ABOR` over the TLS control connection during a TLS upload, and the data handshake
 bound (`data_connect_timeout_secs` 3): a handshake 1s in completes, a TCP connection that never
 sends a ClientHello is `425` at ~3s and the file never crosses in the clear. With no
-`cert_path`/`key_path` the generated certificate serves a session.
+`cert_path`/`key_path` the generated certificate serves a session. `require_tls`, both sides:
+on, `USER`, `PASS`, `PWD`, `EPSV`, `TYPE`, `RETR` and `ABOR` are `530` before `AUTH TLS` while
+`SYST`, `NOOP`, `HELP` and `FEAT` are answered, and after it a transfer is `521` until `PROT P`
+(`PROT C` included), then crosses over TLS; off, `USER` and a clear transfer are served. `SYST`
+says back the event's `tls` field (`false` before `AUTH TLS`, `true` after) and the TLS upload's
+reply carries it too.
 
 ## `data_connection_test.rs` — bounds and fail-closed paths, in-process, mocked
 
