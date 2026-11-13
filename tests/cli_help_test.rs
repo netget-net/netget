@@ -47,3 +47,53 @@ fn help_is_grouped_indented_and_states_the_real_defaults() {
     // Developer notes in doc comments are not --help text.
     assert!(!help.contains("--suppress-art"), "{help}");
 }
+
+/// `-h` is the screenful: one line per flag under the same headings, pointing at `--help` for
+/// the rest. It was 12 KB — every flag's whole paragraph and the examples — because every
+/// flag set only `help`, which clap shows for both.
+#[test]
+fn short_help_fits_a_screen_or_two_and_long_help_keeps_the_detail() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+    assert!(
+        short.len() <= 7 * 1024,
+        "-h is {} bytes; keep it to a screen or two:\n{short}",
+        short.len()
+    );
+    assert!(
+        short.lines().count() <= 110,
+        "-h is {} lines:\n{short}",
+        short.lines().count()
+    );
+    assert!(
+        long.len() > 2 * short.len(),
+        "--help keeps the detail -h leaves out"
+    );
+    for heading in [
+        "Start a server or client directly",
+        "Non-interactive run:",
+        "MCP and agents:",
+        "Model:",
+        "Model concurrency and budgets:",
+    ] {
+        assert!(
+            short.contains(heading),
+            "heading {heading:?} in -h:\n{short}"
+        );
+    }
+    // Every flag is still listed.
+    for flag in [
+        "--server <PROTOCOL>",
+        "--server-handlers <JSON>",
+        "--mcp",
+        "--llm-max-queued",
+    ] {
+        assert!(short.contains(flag), "{flag} in -h:\n{short}");
+    }
+    assert!(short.contains("--help"), "-h points at --help:\n{short}");
+    // The paragraphs and the examples are --help's.
+    for detail in ["EXAMPLES:", "Written atomically", "process table"] {
+        assert!(!short.contains(detail), "{detail:?} is --help's:\n{short}");
+        assert!(long.contains(detail), "{detail:?} in --help");
+    }
+}

@@ -172,6 +172,40 @@ async fn answering_parked_requests_over_mcp_reaches_the_wire() {
         refused_text.contains("still waiting") && refused_text.contains("send_tcp_data"),
         "the refusal says the request still waits and lists what is accepted: {refused_text}"
     );
+    // What it lists is what a person answering this request should send: the protocol's
+    // answers and the memory/log actions the model is offered beside them — not the
+    // management actions every handler may name, nor notify_operator's deprecated name.
+    let accepted = &refused_text[refused_text.find("Accepted: ").expect("Accepted list")..];
+    for listed in ["send_tcp_data", "set_memory", "append_connection_memory"] {
+        assert!(accepted.contains(listed), "{listed} accepted: {accepted}");
+    }
+    for unlisted in [
+        "show_message",
+        "open_server",
+        "close_all_servers",
+        "change_model",
+        "schedule_task",
+        "notify_operator",
+    ] {
+        assert!(
+            !accepted.contains(unlisted),
+            "{unlisted} is not an answer to a parked request: {accepted}"
+        );
+    }
+    let listing_now = text_of(&call(&client, "list_intercepts", serde_json::json!({})).await);
+    assert!(
+        listing_now.contains("Alongside, if needed**: set_memory(")
+            && !listing_now.contains("show_message"),
+        "list_intercepts offers the same common actions: {listing_now}"
+    );
+    // And a management action is refused as an answer, leaving the request waiting.
+    let management = call(
+        &client,
+        "answer_intercept",
+        serde_json::json!({"intercept_id": first, "actions": [{"type": "close_all_servers"}]}),
+    )
+    .await;
+    assert_eq!(management.is_error, Some(true), "{}", text_of(&management));
     let still = text_of(&call(&client, "list_intercepts", serde_json::json!({})).await);
     assert!(
         still.contains(&format!("intercept_id {first}")),
