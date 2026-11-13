@@ -93,6 +93,17 @@ fn fixture_metrics() -> Value {
             ]
         },
         {
+            // Per-bucket counts, which NetGet adds up; one observation lies above the largest
+            // bound, so +Inf and _count exceed the 1.0 bucket.
+            "name": "netget_upload_seconds",
+            "type": "histogram",
+            "help": "Upload latency.",
+            "labels": {"route": "/upload"},
+            "bucket_counts": {"1": 0, "0.1": 30, "0.5": 10},
+            "count": 41,
+            "sum": 3.25
+        },
+        {
             "name": "netget_rpc_seconds",
             "type": "summary",
             "help": "RPC latency quantiles.",
@@ -226,6 +237,17 @@ async fn promtool_accepts_what_a_scrape_returned_and_rejects_a_broken_exposition
     assert!(
         body.contains("netget_latency_seconds_bucket{le=\"0.1\"} 900\nnetget_latency_seconds_bucket{le=\"0.5\"} 1010\nnetget_latency_seconds_bucket{le=\"+Inf\"} 1030\n"),
         "buckets were not sorted and completed with +Inf:\n{body}"
+    );
+    assert!(
+        body.contains(
+            "netget_upload_seconds_bucket{route=\"/upload\",le=\"0.1\"} 30\n\
+             netget_upload_seconds_bucket{route=\"/upload\",le=\"0.5\"} 40\n\
+             netget_upload_seconds_bucket{route=\"/upload\",le=\"1.0\"} 40\n\
+             netget_upload_seconds_bucket{route=\"/upload\",le=\"+Inf\"} 41\n\
+             netget_upload_seconds_sum{route=\"/upload\"} 3.25\n\
+             netget_upload_seconds_count{route=\"/upload\"} 41\n"
+        ),
+        "bucket_counts were not added up into cumulative buckets:\n{body}"
     );
 
     let (code, output) = promtool_check(&promtool, &body).await;
@@ -412,6 +434,15 @@ async fn a_real_prometheus_scrapes_netget_in_both_formats() -> TestResult {
         )
         .await;
         assert_eq!(inf[0]["value"][1], "1030", "[{protocol}] {inf:?}");
+
+        // Per-bucket counts added up by NetGet, read back through Prometheus' own parser.
+        let upload = query_until(
+            run.web_port,
+            "netget_upload_seconds_bucket{route=\"/upload\",le=\"0.5\"}",
+            30,
+        )
+        .await;
+        assert_eq!(upload[0]["value"][1], "40", "[{protocol}] {upload:?}");
 
         let quantile = query_until(run.web_port, "netget_rpc_seconds{quantile=\"0.99\"}", 30).await;
         assert_eq!(quantile[0]["value"][1], "0.25", "[{protocol}] {quantile:?}");
