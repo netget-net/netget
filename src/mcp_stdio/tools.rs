@@ -6,7 +6,8 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
+use crate::mcp_stdio::params::Parameters;
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{
     CallToolResult, Content, Implementation, InitializeRequestParams, InitializeResult,
     ServerCapabilities,

@@ -244,6 +244,20 @@ An agent acts on the tool result alone, so the result carries what the next step
 
 `tests/mcp_first_try_test.rs` drives each of these with `--ollama-url` at a closed port.
 
+**A malformed argument names itself.** Every tool takes its arguments through
+`mcp_stdio::params::Parameters`, a drop-in for rmcp's extractor (the `#[tool]` macro finds the
+parameter type by its last path segment, `Parameters`, so `tools.rs` imports this one and no
+signature changes). rmcp's extractor answered `start_server {"port": "abc"}` with `failed to
+deserialize parameters: invalid digit found in string`; this one deserializes through
+`serde_path_to_error`, reads the failing argument's type out of the tool's own input schema
+(the one `tools/list` advertises) and answers ``start_server: argument `port` must be an
+integer from 0 to 65535; got the string "abc"``. A missing required argument reads
+``missing required argument `protocol` (a string)``, and when something failed, keys the
+tool does not take are named too (``Not arguments of start_server: `protocl` ``), since one
+of them is usually the intended field. It stays an `invalid_params` (-32602) JSON-RPC error. Numeric ids and
+ports still accept a numeric string. `tests/mcp_argument_errors_test.rs` drives the binary
+over stdio.
+
 ## Client control surface
 
 `start_client` / `list_clients` / `client_status` / `stop_client` mirror the
