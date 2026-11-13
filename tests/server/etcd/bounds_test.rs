@@ -142,7 +142,7 @@ fn put_body(total: usize) -> Bytes {
     }
     let mut msg = vec![0x0a, 0x02, b'/', b'k', 0x12];
     msg.extend_from_slice(&varint(value_len as u64));
-    msg.extend(std::iter::repeat(b'v').take(value_len));
+    msg.extend(std::iter::repeat_n(b'v', value_len));
     let mut body = vec![0u8];
     body.extend_from_slice(&(msg.len() as u32).to_be_bytes());
     body.extend_from_slice(&msg);

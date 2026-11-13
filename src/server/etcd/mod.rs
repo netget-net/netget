@@ -750,10 +750,7 @@ fn txn_op_response(
             let answer = answer
                 .filter(|a| a.get("kvs").map(|k| k.is_array()).unwrap_or(false))
                 .ok_or("a range operation needs an entry with a kvs array")?;
-            (
-                Resp::ResponseRange(shape_range(r, answer, header.clone())),
-                false,
-            )
+            (Resp::ResponseRange(shape_range(r, answer, *header)), false)
         }
         Some(Op::RequestPut(p)) => {
             let prev_kv = if p.prev_kv {
@@ -766,7 +763,7 @@ fn txn_op_response(
             };
             (
                 Resp::ResponsePut(PutResponse {
-                    header: Some(header.clone()),
+                    header: Some(*header),
                     prev_kv,
                 }),
                 true,
@@ -784,7 +781,7 @@ fn txn_op_response(
             };
             (
                 Resp::ResponseDeleteRange(DeleteRangeResponse {
-                    header: Some(header.clone()),
+                    header: Some(*header),
                     deleted,
                     prev_kvs,
                 }),
@@ -973,7 +970,7 @@ impl EtcdServer {
     async fn handle_connection(
         stream: tokio::net::TcpStream,
         peer_addr: SocketAddr,
-        local_addr: SocketAddr,
+        _local_addr: SocketAddr,
         connection_id: crate::server::connection::ConnectionId,
         llm_client: OllamaClient,
         app_state: Arc<AppState>,

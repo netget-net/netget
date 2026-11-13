@@ -92,7 +92,7 @@ fn startup_with_padding(pad: usize) -> Vec<u8> {
     }
     if pad > 0 {
         body.extend_from_slice(b"application_name\0");
-        body.extend(std::iter::repeat(b'a').take(pad));
+        body.extend(std::iter::repeat_n(b'a', pad));
         body.push(0);
     }
     body.push(0);
