@@ -1,16 +1,11 @@
 # Kafka Protocol Implementation
 
-## Status: EXPERIMENTAL
+## Status: Beta
 
-`DevelopmentState::Experimental` (`src/server/kafka/actions.rs`). It was `Incomplete` until
-this pass, for three disqualifying reasons that are all fixed: ApiVersions advertised an
-empty API list so no client could negotiate, every decode and encode was hardcoded to
-version 0 so every request body after `client_id` was garbage, and the LLM was never called
-so all nine actions and all four event types were dead.
-
-It is now Beta, and three independent clients complete against it: librdkafka (kcat), Apache
-Kafka's own Java client 3.9.1 and franz-go 1.18.1 — see [Testing](#testing) and "Flexible
-versions and topic ids" below.
+`DevelopmentState::Beta` (`src/server/kafka/actions.rs`). Three independent clients complete
+against it: librdkafka (kcat), Apache Kafka's own Java client 3.9.1 and franz-go 1.18.1 — see
+[Testing](#testing) and "Flexible versions and topic ids" below. "Maturity: the six conditions"
+at the foot of this file says which of the Stable conditions hold and which do not.
 
 ## Supported surface — this is the whole of it
 
@@ -259,8 +254,16 @@ Produce request carrying the 61-byte batch to a running broker and decodes each 
 beside a well-formed control. The reproduction is one `sed` away: removing the array bound
 makes the ratchet's decode test die with `memory allocation of 154618822584 bytes failed`.
 
-**Still open in the decoder:** legacy (magic 0/1)
-nested compressed messages recurse with no depth bound. See `README.netget.md`.
+**Legacy (magic 0/1) compressed messages are refused before the decoder.** `kafka-protocol`
+decodes a compressed legacy wrapper by recursing into its value once per nested wrapper with no
+depth counter — and without inflating anything: it reads the compressed bytes as if they were a
+message set. A Produce v0–2 request of nested "compressed" wrappers, 34 bytes and a correct
+CRC-32 a level, is therefore a stack overflow that kills the process (a `SIGSEGV`, not a
+panic). `declared_records` refuses any compressed legacy wrapper while it walks the batches, so
+the recursion is never reached, and the partition is answered UNSUPPORTED_COMPRESSION_TYPE (76),
+logged `decision=protocol_error`. Uncompressed legacy messages decode as before.
+`tests/server/kafka/legacy_nesting_test.rs` sends the fuzz corpus's 20 000-level bomb to a
+running broker; without the refusal the test binary dies of a stack overflow.
 
 ## Compression and `MAX_INFLATED_PRODUCE_BYTES`
 

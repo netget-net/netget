@@ -208,13 +208,22 @@ The tshark oracle in `e2e_test.rs` allows expert info containing ` version. Supp
 Wireshark 4.2's Kafka dissector says that on any ApiVersions response advertising beyond
 its own table, which is a statement about the dissector, not these bytes.
 
-## Stable condition 3: the fuzz target, and the bomb it carries
+## `legacy_nesting_test.rs` — the depth bomb, at a running broker
+
+A Produce v2 request carrying `fuzz/corpus/kafka_request/produce_v2_legacy_nesting_bomb`
+(20 000 legacy messages nested inside each other, each flagged gzip, each with a correct
+CRC-32) is answered UNSUPPORTED_COMPRESSION_TYPE (76) and the connection keeps working; a single
+compressed legacy wrapper is answered the same; an uncompressed legacy message before and after
+is decoded and reaches the handler. Without the refusal in `declared_records` the test binary
+dies with a stack overflow on the bomb.
+
+## Stable condition 3: the fuzz target, and the bombs it carries
 
 Condition 2 is `e2e_test.rs`'s oracle (above). `fuzz/fuzz_targets/kafka_request.rs` drives
 the broker's decode path — `kafka-protocol`'s header and body decoders for the five APIs at the
 version the request names, decode → encode → decode asserted equal, and for Produce
 `kafka::decode_record_batches`, each batch a second time with its CRC-32C fixed so the search
-reaches the decompressors. Its corpus carries `produce_gzip_inflation_bomb`, a 64 KiB gzip batch
+reaches the decompressors (a legacy message gets its CRC-32 fixed the same way). Its corpus carries `produce_v2_legacy_nesting_bomb` (above) and `produce_gzip_inflation_bomb`, a 64 KiB gzip batch
 of 64 MiB of zeros. Writing it is what showed that `kafka-protocol`'s gzip, zstd and lz4
 decompressors have no output bound, so the broker inflated that batch in full;
 `MAX_INFLATED_PRODUCE_BYTES` (16 MiB per request, MESSAGE_TOO_LARGE past it; the reasoning for

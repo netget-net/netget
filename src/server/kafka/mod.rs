@@ -195,9 +195,17 @@ pub enum BatchError {
     /// The batches hold more records than the request has left of [`MAX_PRODUCE_RECORDS`]:
     /// MESSAGE_TOO_LARGE.
     TooManyRecords,
+    /// A compressed legacy (magic 0/1) message: UNSUPPORTED_COMPRESSION_TYPE. `kafka-protocol`
+    /// cannot inflate one (it reads the compressed bytes as if they were a message set) and
+    /// recurses once per nested wrapper with no depth bound, so one is refused before the
+    /// decoder sees it.
+    LegacyCompressed,
     /// Anything else the decoder refused: CORRUPT_MESSAGE.
     Corrupt(anyhow::Error),
 }
+
+/// Kafka's UNSUPPORTED_COMPRESSION_TYPE.
+const ERR_UNSUPPORTED_COMPRESSION_TYPE: i16 = 76;
 
 /// Marker error the bounded decompressor raises, so [`decode_record_batches`] can tell an
 /// inflation past the budget from a corrupt batch.
@@ -258,15 +266,15 @@ fn inflate_bounded(
 const MIN_RECORD_BYTES: usize = 7;
 
 /// The records the batches in `raw` declare, read from each batch's header without decoding
-/// it: a v2 batch's `recordsCount` (offset 57), and one per legacy (magic 0/1) message, whose
-/// compressed wrappers say nothing about what they hold. Stops at the first batch whose header
-/// is cut short; the decoder refuses that batch itself.
+/// it: a v2 batch's `recordsCount` (offset 57), and one per uncompressed legacy (magic 0/1)
+/// message. A compressed legacy wrapper is refused ([`BatchError::LegacyCompressed`]). Stops
+/// at the first batch whose header is cut short; the decoder refuses that batch itself.
 ///
 /// A v2 batch declaring more records than it could possibly hold is corrupt, and is refused
 /// here rather than handed to the decoder, which would reserve for the count: an uncompressed
 /// batch holds at most its record bytes over [`MIN_RECORD_BYTES`], a compressed one at most
 /// what is left of the inflation budget over the same.
-fn declared_records(raw: &[u8], inflated_left: usize) -> std::result::Result<u64, String> {
+fn declared_records(raw: &[u8], inflated_left: usize) -> std::result::Result<u64, BatchError> {
     // baseOffset (8) + batchLength (4) precede every batch; the magic byte is at offset 16 in
     // both formats. A v2 header is 61 bytes: attributes at 21..23 (codec in the low three
     // bits) and recordsCount in its last four.
@@ -274,6 +282,8 @@ fn declared_records(raw: &[u8], inflated_left: usize) -> std::result::Result<u64
     const MAGIC: usize = 16;
     const ATTRIBUTES: usize = 21;
     const COUNT: std::ops::Range<usize> = 57..61;
+    // A legacy message: baseOffset (8), size (4), crc (4), magic (1), attributes (1).
+    const LEGACY_ATTRIBUTES: usize = 17;
     let mut declared = 0u64;
     let mut at = 0usize;
     while let Some(batch) = raw.get(at..) {
@@ -293,16 +303,23 @@ fn declared_records(raw: &[u8], inflated_left: usize) -> std::result::Result<u64
                         inflated_left
                     };
                     if count > room / MIN_RECORD_BYTES {
-                        return Err(format!(
+                        return Err(BatchError::Corrupt(anyhow::anyhow!(
                             "a record batch declares {count} records, more than its {room} \
                              bytes of records can hold"
-                        ));
+                        )));
                     }
                     declared += count as u64;
                 }
                 None => break,
             },
-            _ => declared += 1,
+            _ => {
+                // A compressed legacy wrapper is the one shape the decoder recurses on, and
+                // it cannot inflate one anyway: refused here, so nesting never reaches it.
+                if batch.get(LEGACY_ATTRIBUTES).is_some_and(|a| a & 0x07 != 0) {
+                    return Err(BatchError::LegacyCompressed);
+                }
+                declared += 1
+            }
         }
         if length < 0 {
             break;
@@ -323,8 +340,7 @@ pub fn decode_record_batches(
 ) -> std::result::Result<Vec<Record>, BatchError> {
     // Refused before anything is copied, inflated or reserved: a v2 batch decodes to exactly
     // the records its header declares, or fails.
-    let declared = declared_records(raw, budget.inflated_bytes)
-        .map_err(|why| BatchError::Corrupt(anyhow::anyhow!(why)))?;
+    let declared = declared_records(raw, budget.inflated_bytes)?;
     if declared > budget.records as u64 {
         return Err(BatchError::TooManyRecords);
     }
@@ -342,7 +358,6 @@ pub fn decode_record_batches(
             BatchError::Corrupt(e)
         }
     })?;
-    // A legacy compressed wrapper, counted as one above, can hold many: count what came out.
     if records.len() > budget.records {
         return Err(BatchError::TooManyRecords);
     }
@@ -1554,6 +1569,21 @@ impl KafkaServer {
                                 PartitionProduceResponse::default()
                                     .with_index(partition_idx)
                                     .with_error_code(ERR_MESSAGE_TOO_LARGE)
+                                    .with_base_offset(-1),
+                            );
+                            continue;
+                        }
+                        Err(BatchError::LegacyCompressed) => {
+                            Log::new(Some(status_tx)).warn(format!(
+                                "Kafka produce to '{}' partition {}: a compressed legacy (magic \
+                                 0/1) message set, which this broker cannot decode \
+                                 decision=protocol_error; replying UNSUPPORTED_COMPRESSION_TYPE",
+                                topic_name, partition_idx
+                            ));
+                            partition_responses.push(
+                                PartitionProduceResponse::default()
+                                    .with_index(partition_idx)
+                                    .with_error_code(ERR_UNSUPPORTED_COMPRESSION_TYPE)
                                     .with_base_offset(-1),
                             );
                             continue;
