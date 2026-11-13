@@ -189,9 +189,7 @@ impl Modal {
         match self {
             Modal::Help { .. } => "↑/↓ scroll · Esc close",
             Modal::RequestDetail { .. } | Modal::BandDetail { .. } => "↑/↓ scroll · Esc close",
-            Modal::Wireshark { .. } => {
-                "Ctrl-T frees the mouse to select text · ↑/↓ scroll · Esc close"
-            }
+            Modal::Wireshark { .. } => "Ctrl-T frees the mouse to copy · ↑/↓ scroll · Esc close",
             Modal::Confirm { .. } => "y confirm · n/Esc cancel",
             Modal::WebApproval { .. } => "y allow once · a always · n/Esc deny",
             Modal::ProtocolPicker { .. } => {
@@ -219,7 +217,7 @@ impl Modal {
                 } else if composer.editing.is_some() {
                     "type to edit · Enter accept · Esc cancel field"
                 } else if composer.chosen.is_some() {
-                    "↑/↓ field · Enter edit (Space flips a checkbox) · Tab → buttons · Esc back"
+                    "↑/↓ field · Enter edit · Tab → buttons · Esc back"
                 } else {
                     "↑/↓ action · Enter choose · Esc cancel"
                 }
@@ -228,14 +226,12 @@ impl Modal {
                 if model.busy() {
                     "applying…"
                 } else if model.draft.is_some() {
-                    "Tab moves through everything · ←/→ change a choice · Enter act · Esc back"
+                    "Tab next · ←/→ change a choice · Enter act · Esc back"
                 } else {
                     "Tab moves through everything · Enter act · Esc close"
                 }
             }
-            Modal::Intercept(_) => {
-                "Tab moves between the buttons · Enter act · Esc keeps it waiting"
-            }
+            Modal::Intercept(_) => "↑/↓ scroll · Tab buttons · Enter act · Esc keeps it waiting",
         }
     }
 
@@ -297,14 +293,13 @@ impl Modal {
                         serde_json::to_string_pretty(data)
                             .map(|text| text.lines().count() as u16)
                             .unwrap_or(1)
-                            .min(20)
                             + 1
                     })
                     .unwrap_or(0);
                 // 90% wide: at 80 columns 72% was 57 cells, and the three
                 // buttons need 59, so `[ Fail closed ]` was never drawn while
                 // Tab still moved the focus onto it. The deadline and error
-                // rows add two.
+                // rows add two. A payload taller than the screen scrolls.
                 let extra =
                     u16::from(model.deadline_unix_ms.is_some()) + u16::from(model.error.is_some());
                 ModalSize::new(90, 85, 120, payload + 7 + extra + CHROME)
@@ -320,18 +315,49 @@ impl Modal {
         }
     }
 
-    pub fn scroll_by(&mut self, delta: i16) {
-        let slot = match self {
+    /// The scroll of a modal read by scrolling, `None` for one whose body
+    /// follows its focus instead.
+    fn scroll_slot(&mut self) -> Option<&mut u16> {
+        match self {
             Modal::Help { scroll }
             | Modal::RequestDetail { scroll, .. }
             | Modal::BandDetail { scroll, .. }
-            | Modal::Wireshark { scroll, .. } => scroll,
-            _ => return,
+            | Modal::Wireshark { scroll, .. } => Some(scroll),
+            Modal::Intercept(model) => Some(&mut model.scroll),
+            _ => None,
+        }
+    }
+
+    pub fn scroll_by(&mut self, delta: i16) {
+        let Some(slot) = self.scroll_slot() else {
+            return;
         };
         *slot = if delta < 0 {
             slot.saturating_sub(delta.unsigned_abs())
         } else {
             slot.saturating_add(delta as u16)
         };
+    }
+
+    /// Store the scroll the renderer actually used, which is clamped to the
+    /// body: scrolling past the last row and back up then moves at once
+    /// instead of first unwinding rows that were never shown.
+    pub fn settle_scroll(&mut self, used: u16) {
+        if let Some(slot) = self.scroll_slot() {
+            *slot = used;
+        }
+    }
+
+    /// The row a scrolled modal's view starts on; 0 for a modal whose body
+    /// follows its focus.
+    pub fn scroll(&self) -> u16 {
+        match self {
+            Modal::Help { scroll }
+            | Modal::RequestDetail { scroll, .. }
+            | Modal::BandDetail { scroll, .. }
+            | Modal::Wireshark { scroll, .. } => *scroll,
+            Modal::Intercept(model) => model.scroll,
+            _ => 0,
+        }
     }
 }
