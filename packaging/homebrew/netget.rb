@@ -8,14 +8,14 @@
 # building from source: a source build compiles ~540 protocol implementations and needs cmake,
 # libclang and samba. The release archives hold the bare `netget` binary at their root
 # (.github/workflows/release.yml, "Package"), and each has a `.sha256` beside it plus a
-# `SHA256SUMS` manifest; the checksums below are v0.3.9's, from that manifest.
+# `SHA256SUMS` manifest; the checksums below are v0.3.11's, from that manifest.
 #
 # Updating for a release: bump `version`, and replace each sha256 with the matching line of
 #   gh release download v<version> --repo netget-net/netget -p SHA256SUMS -O - | grep -v windows
 class Netget < Formula
   desc "Network protocol stubbing driven by an LLM, a script, a static rule or a person"
   homepage "https://netget.net"
-  version "0.3.9"
+  version "0.3.11"
   license "AGPL-3.0-or-later"
 
   livecheck do
@@ -26,11 +26,11 @@ class Netget < Formula
   on_macos do
     on_arm do
       url "https://github.com/netget-net/netget/releases/download/v#{version}/netget-aarch64-apple-darwin.tar.gz"
-      sha256 "01bfdeafa94c7bd6ec28686cca1115997f88b9052f4f6a1c896862f5ddea6645"
+      sha256 "b7bf364b29cd69212ee7f4b7f03f56a4fa20c275394989a0ef0ebe279664e8a1"
     end
     on_intel do
       url "https://github.com/netget-net/netget/releases/download/v#{version}/netget-x86_64-apple-darwin.tar.gz"
-      sha256 "49f95ea8d10ec9d2814e67f7de5f8617cc2d6f639ca4a15977cfe4e88f7ca1f9"
+      sha256 "62d87de1b17560f44accc0697c590b3a912bac7ede576b9facdf4ab082d5d4e9"
     end
   end
 
@@ -41,11 +41,11 @@ class Netget < Formula
     # switching to them would need `depends_on "dbus"`, `"libpcap"` and `"pcsc-lite"`.
     on_arm do
       url "https://github.com/netget-net/netget/releases/download/v#{version}/netget-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "996faa133c16f1653d85e45486ca83e6d06c850930f7485db8cded27b1d68f01"
+      sha256 "2556b6828c8d23428586885d31eff65e3a5713d6a5034f9320e5e2f593756382"
     end
     on_intel do
       url "https://github.com/netget-net/netget/releases/download/v#{version}/netget-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "5325e246d4b7c885aeaec0c7c1cf3d8bbb79d56a8406f81fb6ee0bc81621dcdd"
+      sha256 "7b00fd951c93c8d42847708644cb42ab7ead1bf23a51a3e712d647178f8fe621"
     end
   end
 
