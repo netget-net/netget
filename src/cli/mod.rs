@@ -412,6 +412,27 @@ fn prepare_ready_file(args: &Args) -> Result<()> {
 /// without an LLM backend being reachable at all. A model is still configured
 /// when one was requested, for clients that fall back to the `instruction`.
 #[cfg(not(target_arch = "wasm32"))]
+/// The canonical name of the server protocol `--server <name>` names, resolved exactly as
+/// MCP's `start_server` resolves its `protocol` (`ServerRegistry::resolve_name`): the canonical
+/// name in any case or `-`/`_` spelling, or a stack name or declared keyword that belongs to one
+/// protocol alone. A keyword several protocols share is refused with their names; anything else
+/// with did-you-mean suggestions.
+pub fn resolve_server_name(protocol: &str) -> Result<String> {
+    crate::protocol::server_registry::registry()
+        .resolve_name(protocol)
+        .map(|(p, _)| p.protocol_name().to_string())
+        .map_err(|e| anyhow::anyhow!("{e}\n   (netget --docs lists every protocol and its aliases)"))
+}
+
+/// The client counterpart of [`resolve_server_name`], for `--client <name>`: exactly what MCP's
+/// `start_client` accepts (`ClientRegistry::resolve_name`).
+pub fn resolve_client_name(protocol: &str) -> Result<String> {
+    crate::protocol::CLIENT_REGISTRY
+        .resolve_name(protocol)
+        .map(|(p, _)| p.protocol_name().to_string())
+        .map_err(|e| anyhow::anyhow!("{e}\n   (see --client-list)"))
+}
+
 async fn run_client(protocol: &str, args: &Args) -> Result<()> {
     use std::sync::Arc;
     use std::time::Duration;
@@ -429,20 +450,9 @@ async fn run_client(protocol: &str, args: &Args) -> Result<()> {
     })?;
 
     // Resolve the protocol before doing any setup work, so an unknown name
-    // fails immediately with the registry's own diagnostic.
-    let canonical = client_startup::resolve_client_protocol(protocol).ok_or_else(|| {
-        let mut available = crate::protocol::CLIENT_REGISTRY.list_protocols();
-        available.sort();
-        anyhow::anyhow!(
-            "Unknown client protocol: {}\n   Available in this build: {}\n   (see --client-list)",
-            protocol,
-            if available.is_empty() {
-                "none".to_string()
-            } else {
-                available.join(", ")
-            }
-        )
-    })?;
+    // fails immediately with the registry's own diagnostic. Exactly as MCP's
+    // start_client resolves it (see `resolve_client_name`).
+    let canonical = resolve_client_name(protocol)?;
 
     let startup_params = args.parse_client_params()?;
     let event_handlers = args.parse_client_handlers()?;
@@ -585,10 +595,11 @@ async fn run_server_direct(protocol: &str, args: &Args) -> Result<()> {
 
     // Resolve the protocol up front so an unknown/compiled-out name fails
     // immediately with the registry's own diagnostic (before any setup work).
-    let canonical = crate::protocol::server_registry::registry()
-        .resolve(protocol)
-        .map(|p| p.protocol_name().to_string())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // `--server` takes a protocol *name*, resolved exactly as MCP's start_server
+    // resolves one: the canonical name, or a stack name or keyword only one
+    // protocol declares. Free text ("web server") and a word several protocols
+    // share are refused with suggestions, never started as a guess.
+    let canonical = resolve_server_name(protocol)?;
 
     // The stdio pipe-filter owns the process's real stdout for the model's
     // payload, so ALL of this function's own diagnostics (including the model

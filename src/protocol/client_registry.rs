@@ -5,7 +5,7 @@
 //! and keyword-based parsing for client connections.
 
 use crate::llm::actions::Client;
-use crate::protocol::name_match::{contains_words, normalize, NameMatch};
+use crate::protocol::name_match::{contains_words, normalize, NameLookup, NameMatch};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1104,35 +1104,21 @@ impl ClientRegistry {
     /// of its declared keywords equal to the whole input (case-insensitive, `-`/`_`/space
     /// folded). The counterpart of `ServerRegistry::lookup_name`; see
     /// [`crate::protocol::name_match`].
-    pub fn lookup_name(&self, input: &str) -> Option<(String, NameMatch)> {
-        let wanted = normalize(input);
-        if wanted.is_empty() {
-            return None;
-        }
+    pub fn lookup_name(&self, input: &str) -> NameLookup {
         let mut names: Vec<&String> = self.protocols.keys().collect();
         names.sort();
-        for name in &names {
-            if normalize(self.protocols[*name].protocol_name()) == wanted
-                || normalize(name) == wanted
-            {
-                return Some(((*name).clone(), NameMatch::Canonical));
-            }
-        }
-        for name in &names {
-            if normalize(self.protocols[*name].stack_name()) == wanted {
-                return Some(((*name).clone(), NameMatch::StackName));
-            }
-        }
-        for name in &names {
-            if let Some(keyword) = self.protocols[*name]
-                .keywords()
-                .into_iter()
-                .find(|k| normalize(k) == wanted)
-            {
-                return Some(((*name).clone(), NameMatch::Alias(keyword.to_string())));
-            }
-        }
-        None
+        crate::protocol::name_match::lookup_among(
+            &normalize(input),
+            names.into_iter().map(|key| {
+                let p = &self.protocols[key];
+                (
+                    key.as_str(),
+                    p.protocol_name(),
+                    p.stack_name(),
+                    p.keywords(),
+                )
+            }),
+        )
     }
 
     /// Resolve a client protocol **name** (MCP `start_client` / `get_protocol_docs`, the
@@ -1142,10 +1128,19 @@ impl ClientRegistry {
         &self,
         input: &str,
     ) -> Result<(Arc<dyn Client>, NameMatch), ClientProtocolLookupError> {
-        if let Some((name, how)) = self.lookup_name(input) {
-            if let Some(p) = self.get(&name) {
-                return Ok((p, how));
+        match self.lookup_name(input) {
+            NameLookup::Found(name, how) => {
+                if let Some(p) = self.get(&name) {
+                    return Ok((p, how));
+                }
             }
+            NameLookup::Ambiguous(candidates) => {
+                return Err(ClientProtocolLookupError::Ambiguous {
+                    input: input.to_string(),
+                    candidates,
+                })
+            }
+            NameLookup::NotFound => {}
         }
         let input_norm = normalize(input);
         for (name, requires) in ALL_KNOWN_CLIENT_PROTOCOLS {
@@ -1583,6 +1578,13 @@ pub enum ClientProtocolLookupError {
         /// Did-you-mean candidates, best first; empty when nothing is close.
         suggestions: Vec<String>,
     },
+    /// The input is a stack name or keyword more than one protocol declares, so it names
+    /// none of them; `candidates` are their canonical names. Only an exact-name lookup
+    /// (`resolve_name`) reports this.
+    Ambiguous {
+        input: String,
+        candidates: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for ClientProtocolLookupError {
@@ -1599,6 +1601,12 @@ impl std::fmt::Display for ClientProtocolLookupError {
                 f,
                 "Unknown client protocol: '{input}'. Did you mean {}?",
                 crate::protocol::name_match::or_list(suggestions)
+            ),
+            ClientProtocolLookupError::Ambiguous { input, candidates } => write!(
+                f,
+                "'{input}' names more than one client protocol ({}); give the one you mean by its \
+                 name",
+                crate::protocol::name_match::or_list(candidates)
             ),
         }
     }

@@ -169,17 +169,22 @@ MCP caller actually has:
 
 **The `protocol` argument is a name, resolved exactly.** `get_protocol_docs`, `start_server`
 and `start_client` use `ServerRegistry::resolve_name` / `ClientRegistry::resolve_name`
-(`src/protocol/name_match.rs`): the canonical name, the stack name, or a declared keyword equal to
-the whole input, case- and `-`/`_`/space-insensitive. Anything else is an error with
-did-you-mean suggestions — the free-text parser's pick among them — never the closest
-substring hit. `mptcp` used to return TCP's page headed "`mptcp` — MCP reference" because the
+(`src/protocol/name_match.rs`): the canonical name, or a stack name or declared keyword equal
+to the whole input, case- and `-`/`_`/space-insensitive. A canonical name always wins (`ftp`
+is FTP although TCP declares `ftp` as a keyword); a stack name or keyword more than one
+protocol declares (`rpc`: JSON-RPC, MessagePack-RPC, Thrift and WAMP) names none of them and is
+refused with their names. Anything else is an error with did-you-mean suggestions — the
+free-text parser's pick among them — never the closest substring hit. The CLI's `--server` and
+`--client` resolve their protocol the same way (`cli::resolve_server_name` /
+`resolve_client_name`), so `netget --server "a tcp server"` is refused with "did you mean
+'tcp'" as `start_server` is (`tests/cli_protocol_names_test.rs`). `mptcp` used to return TCP's page headed "`mptcp` — MCP reference" because the
 client registry matched keywords as raw substrings and the server registry ended with
 "anything containing `tcp` is TCP". The page is now headed with the **canonical** name, the
 `protocol` value in the argument lists is the canonical name, and an alias is announced
 ("`mptcp` is an alias of `tcp`", plus the protocol's `alias_note`). The model's
-`read_documentation` resolves the same way. Free-text paths (`open_server`'s protocol, CLI,
-prompts) still go through `resolve` / `parse_from_str`, which now match keywords as whole
-words only.
+`read_documentation` resolves the same way. Free-text paths (`open_server`'s protocol, a
+prompt) still go through `resolve` / `parse_from_str`, which match keywords as whole words
+only.
 
 An event's example answer is derived per role when it declares only a placeholder
 (`protocol::docs::example_fallback_actions`): a server event from its own actions (or the sync
