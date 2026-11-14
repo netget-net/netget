@@ -15,7 +15,8 @@
 //! 1. Nothing panics or allocates past libFuzzer's `-rss_limit_mb`, whatever the bytes. Every
 //!    array, string and byte-field length in a Kafka request is a peer-chosen `i32` or varint;
 //!    a decoder that reserves what it is told is the size-lie class this target exists for.
-//! 2. A request body that decodes re-encodes, and the re-encoding decodes to the same value.
+//! 2. A request body that decodes re-encodes, and the re-encoding decodes to the same value —
+//!    except for one `kafka-protocol` defect, below, that the broker cannot reach.
 //! 3. Produce record batches never inflate past `MAX_INFLATED_PRODUCE_BYTES` per request —
 //!    `kafka-protocol`'s own gzip/zstd/lz4 decompressors have no output bound at all — and
 //!    never decode to more than `MAX_PRODUCE_RECORDS` records.
@@ -25,8 +26,21 @@
 //! recomputed. That is what lets the search reach the decompressors and the record walker
 //! behind the checksum, which is where the inflation bound lives.
 //!
-//! Kafka requests do not nest, so there is no depth bomb; the corpus carries a decompression
-//! bomb (a gzip batch of 64 MiB of zeros) and size lies instead.
+//! The exception. `kafka-protocol` 0.14.1 (and NetGet's `netget-kafka-protocol` fork of it)
+//! reads a tagged field's tag as a `u32` varint and keys the unknown ones by `tag as i32`, so a
+//! tag of 2^31 or more becomes a negative key. Encoding counts every key but writes only those
+//! in `0..`, so the re-encoding announces more tagged fields than it carries and does not decode
+//! (`compute_size` counts them all, and disagrees with `encode`). The broker never encodes a
+//! request, and builds every response itself without unknown tagged fields, so the defect is the
+//! crate's alone: a body whose unknown tagged fields include a negative key is exempt from the
+//! round trip, and `apiversions_v3_tag_past_i32_max` keeps that path in the corpus. Found by this
+//! target on 13 November 2026, as an ApiVersions v3 request with a 5-byte tag of `0xffffffff`.
+//!
+//! One shape nests: a legacy (magic 0/1) message flagged compressed holds a message set, and
+//! `kafka-protocol` decodes it by recursing once per level with no depth bound. The corpus
+//! carries that depth bomb (`produce_v2_legacy_nesting_bomb`, 20 000 levels, each with a
+//! correct CRC; the broker refuses a compressed legacy wrapper before the decoder sees it), a
+//! decompression bomb (a gzip batch of 64 MiB of zeros) and size lies.
 
 #![no_main]
 
@@ -57,8 +71,36 @@ fn crc32c(data: &[u8]) -> u32 {
     !crc
 }
 
-/// The same bytes with the first v2 batch's CRC made correct, if there is one to fix.
+/// CRC-32 (IEEE), bitwise — what a legacy (magic 0/1) message carries.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// The same bytes with the first batch's CRC made correct (CRC-32C over a v2 batch, CRC-32
+/// over a legacy message), if there is one to fix.
 fn with_fixed_crc(raw: &[u8]) -> Option<Vec<u8>> {
+    if raw.len() >= 17 && raw[16] <= 1 {
+        let size = i32::from_be_bytes([raw[8], raw[9], raw[10], raw[11]]);
+        let end = 12usize.checked_add(usize::try_from(size).ok()?)?;
+        if end > raw.len() || end < 16 {
+            return None;
+        }
+        let mut fixed = raw.to_vec();
+        let crc = crc32_ieee(&fixed[16..end]);
+        fixed[12..16].copy_from_slice(&crc.to_be_bytes());
+        return Some(fixed);
+    }
     if raw.len() < 21 || raw[16] != 2 {
         return None;
     }
@@ -92,6 +134,14 @@ fn batches(raw: &[u8]) {
     }
 }
 
+/// Whether any unknown tagged field in `value`, at any depth, is keyed by a tag of 2^31 or more
+/// (a negative `i32`): the `kafka-protocol` defect in the header. A `BTreeMap` lists its keys in
+/// order, so a map holding a negative key prints `unknown_tagged_fields: {-`. Only called once a
+/// round trip has already failed.
+fn has_tag_past_i32_max<T: std::fmt::Debug>(value: &T) -> bool {
+    format!("{value:?}").contains("unknown_tagged_fields: {-")
+}
+
 /// Decode `T` from where the header ended; if it decodes, re-encode and decode again.
 fn body<T: Decodable + Encodable + PartialEq + std::fmt::Debug>(
     rest: &[u8],
@@ -102,12 +152,15 @@ fn body<T: Decodable + Encodable + PartialEq + std::fmt::Debug>(
     let mut out = Vec::new();
     if decoded.encode(&mut out, version).is_ok() {
         let mut again = std::io::Cursor::new(&out[..]);
-        let redecoded = T::decode(&mut again, version)
-            .expect("a request body this decoder produced did not decode back");
-        assert_eq!(
-            decoded, redecoded,
-            "encode/decode round trip changed the request"
-        );
+        match T::decode(&mut again, version) {
+            Ok(redecoded) if redecoded == decoded => {}
+            _ if has_tag_past_i32_max(&decoded) => {}
+            Ok(redecoded) => assert_eq!(
+                decoded, redecoded,
+                "encode/decode round trip changed the request"
+            ),
+            Err(e) => panic!("a request body this decoder produced did not decode back: {e}"),
+        }
     }
     Some(decoded)
 }
