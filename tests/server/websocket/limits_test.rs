@@ -12,6 +12,8 @@
 //! | `max_message_size`, compressed bytes | — | compressed frames past it are refused before inflating |
 //! | `max_message_size`, joined by `wait_for_websocket_data` | two held parts joined under it | a join past it: Close 1009 |
 //! | the 125-byte floor on both limits | a 125-byte message under `max_message_size: 1` | 126 bytes: Close 1009 |
+//! | `MAX_QUEUED_INBOUND_BYTES` | — | a peer sending while its handler is busy is held back by TCP |
+//! | `MAX_QUEUED_INBOUND_MESSAGES` | — | the same, with empty messages |
 //!
 //! And the walk to a size bound is timed: a compressed message of a mebibyte sent as one-byte
 //! continuation frames is answered in seconds, not in the frame count squared.
@@ -476,6 +478,61 @@ print(json.dumps({'actions':a}))"#;
         .await
         .unwrap();
     expect_close(&mut c, 1009).await;
+}
+
+/// The handler is parked by a `manual` rule on the first message, so everything after it is
+/// backlog. Returns how many bytes the peer managed to write before the server stopped reading.
+///
+/// The opened event has a rule of its own, answering with nothing. Without it the `*` rule
+/// parks `websocket_connection_opened`, which is answered before the frame loop starts, and the
+/// server reads nothing at all — so the bound is never reached and these tests pass without it.
+async fn bytes_written_while_the_handler_is_busy(message: &[u8], ceiling: usize) -> usize {
+    let s = Server::start(
+        json!({"permessage_deflate": false, "max_message_size": 1048576}),
+        vec![
+            json!({"event_pattern":"websocket_handshake","handler":{"type":"static","actions":[{"type":"accept_websocket"}]}}),
+            json!({"event_pattern":"websocket_connection_opened","handler":{"type":"static","actions":[]}}),
+            json!({"event_pattern":"*","handler":{"type":"manual","timeout_secs":600}}),
+        ],
+    )
+    .await;
+    let mut c = connect(s.port, None).await;
+    let one = frame(true, false, 2, message);
+    let mut written = 0usize;
+    while written < ceiling {
+        // Several frames per write, so the walk to the ceiling is quick when nothing pushes back.
+        // Ten seconds without progress is a server that stopped reading, not a slow one.
+        let batch: Vec<u8> = one.repeat((64 * 1024 / one.len()).max(1));
+        match tokio::time::timeout(Duration::from_secs(10), c.write_all(&batch)).await {
+            Ok(Ok(())) => written += batch.len(),
+            Ok(Err(e)) => panic!("the server closed the connection instead of pushing back: {e}"),
+            Err(_) => return written,
+        }
+    }
+    drop(s);
+    written
+}
+
+#[tokio::test]
+async fn a_peer_outrunning_its_handler_is_held_back_by_the_byte_bound() {
+    // 8 MiB of backlog, plus whatever the two sockets' buffers and tungstenite's read buffer hold.
+    let ceiling = 64 * 1024 * 1024;
+    let written = bytes_written_while_the_handler_is_busy(&[0x5a; 64 * 1024], ceiling).await;
+    assert!(
+        written < 32 * 1024 * 1024,
+        "the server kept reading while its handler was busy: the peer wrote {written} bytes"
+    );
+}
+
+#[tokio::test]
+async fn a_peer_outrunning_its_handler_is_held_back_by_the_message_bound() {
+    // Empty binary messages: 1024 of them are 6 KiB, so only the count can stop the reading.
+    let ceiling = 32 * 1024 * 1024;
+    let written = bytes_written_while_the_handler_is_busy(&[], ceiling).await;
+    assert!(
+        written < 16 * 1024 * 1024,
+        "the server kept reading while its handler was busy: the peer wrote {written} bytes"
+    );
 }
 
 #[tokio::test]

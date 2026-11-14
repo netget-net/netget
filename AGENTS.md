@@ -289,13 +289,16 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     the third-party clients covered a greeting, one echo and deflate's data messages, and Ping,
     both directions of the closing handshake, subprotocols and refusal were asserted only by a
     hand-written client; Python websockets, Node ws and websocat now drive every verb
-    (`tests/server/websocket/real_client_test.rs`). Condition 4 found four defects:
-    `wait_for_websocket_data` joining without limit (and losing a held message), a compressed
-    frame not held to `max_frame_size`, no close frame for a frame or message tungstenite
-    refused (now 1009/1002/1007), and a request head checked only when a read did not complete
-    it. A backpressure bound on the inbound queue was written and dropped: its tests passed
-    with it removed, because the server already stops reading a few MB in while a handler is
-    busy — for a reason not yet identified.
+    (`tests/server/websocket/real_client_test.rs`). Condition 4 found five defects: an
+    **inbound queue with no bound** (a peer outrunning the model was read into memory without
+    limit; the read loop now stops at 1024 messages / 8 MiB), `wait_for_websocket_data`
+    joining without limit (and losing a held message), a compressed frame not held to
+    `max_frame_size`, no close frame for a frame or message tungstenite refused (now
+    1009/1002/1007), and a request head checked only when a read did not complete it. **A
+    removal check is only as good as the test's reach**: the queue bound's first tests passed
+    with the bound removed, because their `*` → `manual` rule also parked
+    `websocket_connection_opened`, which is answered before the frame loop reads anything — the
+    handler they meant to keep busy was never reached.
   - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
     DNS inside the TLS was dissected, so a TLS oracle cannot pass on the record layer alone.
