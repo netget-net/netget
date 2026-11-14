@@ -4,11 +4,14 @@
 //!
 //! The handler answers every command on the control connection and supplies every listing and
 //! file. The server owns the mechanics: the data-connection setup verbs (`PASV`, `EPSV`,
-//! `PORT`, `EPRT`) and `TYPE`/`MODE`/`STRU` are answered here (`data.rs`), and a transfer's
-//! `150` ... `226` sequence is written around the handler's payload.
+//! `PORT`, `EPRT`), `TYPE`/`MODE`/`STRU` and `REST` are answered here (`data.rs`), as are
+//! `ABOR` and FTPS's `AUTH TLS`/`PBSZ`/`PROT` (`tls.rs`), and a transfer's `150` ... `226`
+//! sequence is written around the handler's payload.
 
 pub mod actions;
+pub mod control;
 pub mod data;
+pub mod tls;
 
 use anyhow::Result;
 use std::net::SocketAddr;
@@ -25,6 +28,8 @@ use crate::protocol::Event;
 use crate::server::ftp::actions::FtpProtocol;
 use crate::state::app_state::AppState;
 use actions::FTP_COMMAND_EVENT;
+use control::{CommandLine, ControlReader};
+use tls::{ControlWriter, MaybeTls};
 
 /// FTP server that provides LLM-controlled file transfer operations
 pub struct FtpServer;
@@ -41,6 +46,8 @@ impl FtpServer {
         first_byte_timeout_secs: Option<u64>,
         idle_timeout_secs: Option<u64>,
         data_limits: data::DataLimits,
+        tls_config: Arc<rustls::ServerConfig>,
+        require_tls: bool,
     ) -> Result<SocketAddr> {
         // Both bounds are tunable because their right value is a property of who is on the
         // other end, which only the operator knows. The defaults serve NetGet's own FTP client
@@ -51,6 +58,8 @@ impl FtpServer {
             data: data_limits,
             // Passive listeners bind the host the server was configured with, never wider.
             bind_ip: listen_addr.ip(),
+            tls: tokio_rustls::TlsAcceptor::from(tls_config),
+            require_tls,
         };
         let listener =
             crate::server::socket_helpers::create_reusable_tcp_listener(listen_addr).await?;
@@ -87,6 +96,8 @@ impl FtpServer {
                         let status_clone = status_tx.clone();
                         let protocol_clone = protocol.clone();
                         let local_addr_conn = stream.local_addr().unwrap_or(local_addr);
+                        let config = config.clone();
+                        receive_urgent_inline(&stream);
 
                         // Tracked, not detached: stop_server must abort this task too.
                         let task_owner = app_state.clone();
@@ -198,13 +209,49 @@ impl FtpServer {
 const FIRST_COMMAND_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Everything one session needs from the server's configuration.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SessionConfig {
     deadlines: ReadDeadlines,
     data: data::DataLimits,
     /// The configured bind host, where passive listeners are opened.
     bind_ip: std::net::IpAddr,
+    /// FTPS: the control connection after `AUTH TLS`, data connections after `PROT P`.
+    tls: tokio_rustls::TlsAcceptor,
+    /// `require_tls`: nothing but [`ALLOWED_BEFORE_TLS`] before `AUTH TLS`, and no transfer
+    /// without `PROT P`.
+    require_tls: bool,
 }
+
+/// `require_tls` when the server is started without it: FTPS is offered, not demanded.
+pub const REQUIRE_TLS_DEFAULT: bool = false;
+
+/// What a client may send before `AUTH TLS` when the server requires TLS: the upgrade itself,
+/// and the commands a client uses to find out that it should (RFC 4217 §11.1 has the server
+/// refuse the rest with `530`).
+const ALLOWED_BEFORE_TLS: [&str; 6] = ["AUTH", "FEAT", "SYST", "QUIT", "HELP", "NOOP"];
+
+/// The refusal for a command sent in the clear to a server that requires TLS.
+const TLS_REQUIRED: &[u8] = b"530 This server requires TLS: send AUTH TLS first\r\n";
+
+/// The refusal for a transfer whose data connection would be clear text (RFC 4217 §9: 521).
+const PROT_REQUIRED: &[u8] = b"521 Data connections must be protected: send PBSZ 0 and PROT P\r\n";
+
+/// Read TCP urgent data in line with the rest of the control connection.
+///
+/// A client may send `ABOR` as urgent data (RFC 959 §4.1.3's Synch; python's `ftplib` marks the
+/// whole line `MSG_OOB`, which makes its last byte, the `\n`, the urgent one). Without
+/// `SO_OOBINLINE` the kernel takes that byte out of the stream, the server reads `ABOR\r` with
+/// no end of line, and the abort is never seen. vsftpd sets the same option for the same reason.
+#[cfg(not(target_arch = "wasm32"))]
+fn receive_urgent_inline(stream: &tokio::net::TcpStream) {
+    if let Err(e) = socket2::SockRef::from(stream).set_out_of_band_inline(true) {
+        tracing::warn!("FTP control connection: SO_OOBINLINE could not be set: {e}");
+    }
+}
+
+/// The browser build's virtual loopback has no urgent data to receive.
+#[cfg(target_arch = "wasm32")]
+fn receive_urgent_inline(_stream: &tokio::net::TcpStream) {}
 
 /// The two read deadlines for one connection, resolved from the server's startup parameters.
 ///
@@ -287,75 +334,6 @@ const COMMAND_UNANSWERED: &[u8] = b"451 Requested action aborted: local error in
 /// peer that opens a connection and streams bytes with no `\n` makes the server allocate
 /// without bound, which is a one-connection out-of-memory.
 pub const MAX_COMMAND_LINE: usize = 8192;
-
-/// The result of trying to read one control line.
-enum CommandLine {
-    /// A complete line. The trailing CRLF is still attached; the caller trims it.
-    Line(String),
-    /// The peer closed the control connection.
-    Eof,
-    /// The peer sent `MAX_COMMAND_LINE` bytes with no newline in them.
-    TooLong,
-}
-
-/// Read a single CRLF-terminated FTP command, refusing to buffer more than `max_len` bytes.
-///
-/// Returns the line and the number of bytes consumed from the socket, so the caller can
-/// account for them in the connection stats exactly as `read_line` allowed.
-async fn read_command_line<R>(
-    reader: &mut tokio::io::BufReader<R>,
-    max_len: usize,
-) -> std::io::Result<(CommandLine, usize)>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
-        // `fill_buf` borrows the reader, so decide what to take and drop the borrow before
-        // calling `consume`.
-        let (newline_at, available_len) = {
-            let available = reader.fill_buf().await?;
-            (available.iter().position(|&b| b == b'\n'), available.len())
-        };
-
-        if available_len == 0 {
-            // EOF. A trailing fragment with no newline is not a command; the peer hung up
-            // mid-line, which is the same as hanging up.
-            return Ok((CommandLine::Eof, buf.len()));
-        }
-
-        let take = match newline_at {
-            Some(idx) => idx + 1,
-            None => available_len,
-        };
-
-        if buf.len() + take > max_len {
-            // Consume what we looked at so the reader is not left mid-buffer, then give up:
-            // the caller closes the connection, so there is nothing to resynchronise with.
-            reader.consume(take);
-            return Ok((CommandLine::TooLong, buf.len() + take));
-        }
-
-        {
-            let available = reader.fill_buf().await?;
-            buf.extend_from_slice(&available[..take]);
-        }
-        reader.consume(take);
-
-        if newline_at.is_some() {
-            let consumed = buf.len();
-            // `from_utf8_lossy` rather than a hard error: a stray non-UTF-8 byte in a
-            // command is the peer's problem to be answered with 500, not a reason to drop
-            // the connection without a reply.
-            return Ok((
-                CommandLine::Line(String::from_utf8_lossy(&buf).into_owned()),
-                consumed,
-            ));
-        }
-    }
-}
 
 /// The RFC 959 reply code at the head of a control-connection write, when there is one.
 ///
@@ -493,55 +471,16 @@ fn classify_ftp_outcome(result: &crate::llm::ExecutionResult) -> (&'static str, 
     )
 }
 
-/// The `ftp_command` event for one command line.
-fn command_event(command: &str) -> Event {
+/// The `ftp_command` event for one command line. `tls` says whether the control connection is
+/// TLS (`AUTH TLS` succeeded), so a handler can decide on it.
+fn command_event(command: &str, tls: bool) -> Event {
     Event::new(&FTP_COMMAND_EVENT, {
-        let mut data = serde_json::json!({ "command": command });
+        let mut data = serde_json::json!({ "command": command, "tls": tls });
         if let Some(hint) = actions::answer_with_for_command(command) {
             data["answer_with"] = serde_json::json!(hint);
         }
         data
     })
-}
-
-/// Complete command lines already here - buffered, or readable without waiting - up to `max`,
-/// each with the bytes it consumed.
-///
-/// What a batch collects after the first command: everything a pipelining client sent while
-/// the model was answering. `fill_buf` returns what is buffered without reading, polls the
-/// socket only when the buffer is empty, and is cancel-safe, so the zero deadline never waits
-/// and never loses a byte. It stops at a partial line or one over [`MAX_COMMAND_LINE`], leaving
-/// either for [`read_command_line`] to read and report.
-async fn lines_already_here<R>(
-    reader: &mut tokio::io::BufReader<R>,
-    max: usize,
-) -> Vec<(String, usize)>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    use tokio::io::AsyncBufReadExt;
-    let mut lines = Vec::new();
-    while lines.len() < max {
-        let line = match tokio::time::timeout(Duration::ZERO, reader.fill_buf()).await {
-            Ok(Ok(buf)) => match buf.iter().position(|&b| b == b'\n') {
-                Some(idx) if idx < MAX_COMMAND_LINE => {
-                    let line = String::from_utf8_lossy(&buf[..=idx]).into_owned();
-                    // A setup or transfer command is answered on its own path, so a batch
-                    // ends before it and leaves it to be read next.
-                    if data::Verb::of(&line) != data::Verb::Other {
-                        break;
-                    }
-                    line
-                }
-                _ => break,
-            },
-            _ => break,
-        };
-        let consumed = line.len();
-        reader.consume(consumed);
-        lines.push((line, consumed));
-    }
-    lines
 }
 
 struct FtpSession;
@@ -570,8 +509,8 @@ impl FtpSession {
             local: stream.local_addr()?,
             peer: stream.peer_addr()?,
         };
-        let (read_half, write_half) = tokio::io::split(stream);
-        let write_half = Arc::new(Mutex::new(write_half));
+        let (read_half, write_half) = tokio::io::split(MaybeTls::Plain(stream));
+        let write_half = Arc::new(Mutex::new(ControlWriter(Some(write_half))));
 
         let peer_rx = crate::server::peer_support::register_peer_channel(
             &app_state,
@@ -602,7 +541,7 @@ impl FtpSession {
             .await?;
 
             Self::handle_session_commands(
-                read_half,
+                ControlReader::new(read_half),
                 &write_half,
                 connection_id,
                 server_id,
@@ -674,6 +613,7 @@ impl FtpSession {
             &FTP_COMMAND_EVENT,
             serde_json::json!({
                 "command": "CONNECTION_ESTABLISHED",
+                "tls": false,
                 "answer_with": actions::answer_with_for_command("CONNECTION_ESTABLISHED"),
             }),
         );
@@ -893,9 +833,9 @@ impl FtpSession {
 
     /// Handle FTP session commands
     #[allow(clippy::too_many_arguments)]
-    async fn handle_session_commands<R, W>(
-        read_half: R,
-        write_half: &Arc<Mutex<W>>,
+    async fn handle_session_commands(
+        mut reader: ControlReader,
+        write_half: &Arc<Mutex<ControlWriter>>,
         connection_id: crate::server::connection::ConnectionId,
         server_id: crate::state::ServerId,
         llm_client: OllamaClient,
@@ -904,15 +844,8 @@ impl FtpSession {
         protocol: Arc<FtpProtocol>,
         config: SessionConfig,
         ends: data::ControlEnds,
-    ) -> Result<()>
-    where
-        R: tokio::io::AsyncRead + Unpin,
-        W: tokio::io::AsyncWrite + Unpin,
-    {
-        use tokio::io::BufReader;
-
+    ) -> Result<()> {
         let deadlines = config.deadlines;
-        let mut reader = BufReader::new(read_half);
         let log = Log::new(Some(status_tx));
         let mut data_state = data::DataState::default();
 
@@ -928,7 +861,7 @@ impl FtpSession {
             };
             let (outcome, n) = match tokio::time::timeout(
                 read_timeout,
-                read_command_line(&mut reader, MAX_COMMAND_LINE),
+                reader.read_line(MAX_COMMAND_LINE),
             )
             .await
             {
@@ -982,6 +915,44 @@ impl FtpSession {
             log.debug(format!("FTP received: {}", command));
 
             let verb = data::Verb::of(command);
+            let gated = config.require_tls && !data_state.control_tls;
+            if gated {
+                let word = command
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                if !ALLOWED_BEFORE_TLS.contains(&word.as_str()) {
+                    log.info(format!(
+                        "FTP {command:?} on connection {connection_id} \
+                         decision=refused_tls_required (530, sent before AUTH TLS)"
+                    ));
+                    Self::write_out(
+                        write_half,
+                        TLS_REQUIRED,
+                        app_state,
+                        server_id,
+                        connection_id,
+                    )
+                    .await?;
+                    continue;
+                }
+            }
+            if config.require_tls && verb.is_transfer() && !data_state.protect {
+                log.info(format!(
+                    "FTP {command:?} on connection {connection_id} \
+                     decision=refused_prot_required (521, no PROT P)"
+                ));
+                Self::write_out(
+                    write_half,
+                    PROT_REQUIRED,
+                    app_state,
+                    server_id,
+                    connection_id,
+                )
+                .await?;
+                continue;
+            }
             if verb.is_setup() {
                 // Data-connection setup and representation type: answered here, because each
                 // reply names a socket only the server can open or changes how it frames bytes.
@@ -1001,6 +972,44 @@ impl FtpSession {
                 .await?;
                 continue;
             }
+            if verb == data::Verb::Abor {
+                // An ABOR read here has no transfer to abort: one in progress is watched for
+                // ABOR by `watch`, which answers it there. RFC 959 §4.1.3: close any data
+                // connection, and reply that there was nothing to abort.
+                data_state.channel = None;
+                data_state.restart = None;
+                log.info(format!(
+                    "FTP {command:?} on connection {connection_id} decision=server_answer \
+                     (225, no transfer in progress)"
+                ));
+                Self::write_out(
+                    write_half,
+                    b"225 No transfer to abort\r\n",
+                    app_state,
+                    server_id,
+                    connection_id,
+                )
+                .await?;
+                continue;
+            }
+            if verb == data::Verb::Auth {
+                let keep_going = Self::answer_auth(
+                    command,
+                    &mut reader,
+                    write_half,
+                    &mut data_state,
+                    &config,
+                    app_state,
+                    server_id,
+                    connection_id,
+                    &log,
+                )
+                .await?;
+                if !keep_going {
+                    return Ok(());
+                }
+                continue;
+            }
             if verb.is_transfer() {
                 let keep_going = Transfer {
                     verb,
@@ -1014,8 +1023,10 @@ impl FtpSession {
                     log: &log,
                     ends: &ends,
                     limits: &config.data,
+                    tls: &config.tls,
+                    control_tls: data_state.control_tls,
                 }
-                .run(&mut data_state)
+                .run(&mut data_state, &mut reader)
                 .await?;
                 if !keep_going {
                     return Ok(());
@@ -1030,10 +1041,18 @@ impl FtpSession {
                 .await
                 .is_some_and(|(_, batching)| batching);
             let mut commands = vec![command.to_string()];
-            if batching {
-                for (more, consumed) in
-                    lines_already_here(&mut reader, crate::protocol::metadata::MAX_BATCH_EVENTS - 1)
-                        .await
+            // Before AUTH TLS on a server that requires it, every line has to pass the check
+            // above on its own, so none is gathered into a batch.
+            if batching && !gated {
+                for (more, consumed) in reader
+                    .lines_already_here(
+                        crate::protocol::metadata::MAX_BATCH_EVENTS - 1,
+                        MAX_COMMAND_LINE,
+                        // A setup or transfer command is answered on its own path, so a batch
+                        // ends before it and leaves it to be read next.
+                        |line| data::Verb::of(line) == data::Verb::Other,
+                    )
+                    .await
                 {
                     app_state
                         .update_connection_stats(
@@ -1049,7 +1068,10 @@ impl FtpSession {
                     commands.push(more.trim().to_string());
                 }
             }
-            let events: Vec<Event> = commands.iter().map(|c| command_event(c)).collect();
+            let events: Vec<Event> = commands
+                .iter()
+                .map(|c| command_event(c, data_state.control_tls))
+                .collect();
 
             // Get handler/LLM response
             match call_llm_batch(
@@ -1161,6 +1183,116 @@ impl FtpSession {
         Ok(())
     }
 
+    /// `AUTH TLS` (RFC 4217 §4): answer `234`, then turn the control connection into TLS in
+    /// place. `Ok(false)` when the connection is to close: the handshake failed or the client
+    /// did not start one within `idle_timeout_secs`, and there is no clear text left to reply in.
+    #[allow(clippy::too_many_arguments)]
+    async fn answer_auth(
+        command: &str,
+        reader: &mut ControlReader,
+        write_half: &Arc<Mutex<ControlWriter>>,
+        data_state: &mut data::DataState,
+        config: &SessionConfig,
+        app_state: &AppState,
+        server_id: crate::state::ServerId,
+        connection_id: crate::server::connection::ConnectionId,
+        log: &Log<'_>,
+    ) -> Result<bool> {
+        let refuse = |decision: &str, reply: &'static [u8]| {
+            log.info(format!(
+                "FTP {command:?} on connection {connection_id} decision={decision} ({})",
+                String::from_utf8_lossy(reply).trim_end()
+            ));
+            reply
+        };
+        // RFC 2228's mechanism names: AUTH TLS (RFC 4217), and AUTH SSL / TLS-C, which
+        // clients still send and every FTPS server treats as the same thing. curl tries SSL
+        // first.
+        let mechanism = argument_of(command).to_ascii_uppercase();
+        let reply = if !matches!(mechanism.as_str(), "TLS" | "SSL" | "TLS-C") {
+            Some(refuse(
+                "refused_unsupported",
+                b"504 AUTH mechanism not supported; use AUTH TLS\r\n",
+            ))
+        } else if data_state.control_tls {
+            Some(refuse(
+                "refused_sequence",
+                b"503 The control connection is already TLS\r\n",
+            ))
+        } else if reader.has_pending() {
+            // The client must wait for the 234 before its ClientHello; bytes already here
+            // would be read as clear text inside what it thinks is a TLS session.
+            Some(refuse(
+                "refused_sequence",
+                b"503 Nothing may follow AUTH before its reply\r\n",
+            ))
+        } else {
+            None
+        };
+        if let Some(reply) = reply {
+            Self::write_out(write_half, reply, app_state, server_id, connection_id).await?;
+            return Ok(true);
+        }
+
+        Self::write_out(
+            write_half,
+            b"234 AUTH TLS successful; start the TLS handshake\r\n",
+            app_state,
+            server_id,
+            connection_id,
+        )
+        .await?;
+
+        // The writer stays locked for the handshake, so the dashboard's peer task cannot write
+        // clear text into the middle of it.
+        let mut writer = write_half.lock().await;
+        let (Some(write), Some(read)) = (writer.0.take(), reader.take_half()) else {
+            return Err(anyhow::anyhow!(
+                "FTP connection {connection_id}: control halves missing at AUTH TLS"
+            ));
+        };
+        let MaybeTls::Plain(tcp) = read.unsplit(write) else {
+            return Err(anyhow::anyhow!(
+                "FTP connection {connection_id}: AUTH TLS on a connection that is already TLS"
+            ));
+        };
+        // The handshake is the client's next move after a reply, so the between-commands
+        // bound is the one that applies to a client that never makes it.
+        let idle = config.deadlines.idle;
+        match tokio::time::timeout(idle, config.tls.accept(tcp)).await {
+            Ok(Ok(stream)) => {
+                let (read, write) = tokio::io::split(MaybeTls::Tls(Box::new(stream)));
+                writer.0 = Some(write);
+                reader.put_half(read);
+                // RFC 4217 §9: protection is negotiated afresh on the protected connection.
+                data_state.control_tls = true;
+                data_state.pbsz = false;
+                data_state.protect = false;
+                log.info(format!(
+                    "FTP {command:?} on connection {connection_id} decision=tls_established \
+                     (234, the control connection is TLS)"
+                ));
+                Ok(true)
+            }
+            Ok(Err(e)) => {
+                log.warn(format!(
+                    "FTP {command:?} on connection {connection_id} \
+                     decision=refused_tls_handshake ({e}); closing"
+                ));
+                Ok(false)
+            }
+            Err(_) => {
+                log.warn(format!(
+                    "FTP {command:?} on connection {connection_id} \
+                     decision=refused_tls_handshake (no handshake within {}s of the 234); \
+                     closing",
+                    idle.as_secs()
+                ));
+                Ok(false)
+            }
+        }
+    }
+
     /// Answer a command whose handler call failed: `421`, and the caller closes.
     ///
     /// RFC 959's 421 tells the client the service is unavailable and the control connection is
@@ -1203,14 +1335,15 @@ impl FtpSession {
     }
 }
 
-/// One transfer command (`LIST`, `NLST`, `MLSD`, `RETR`, `STOR`, `APPE`) and everything it
-/// needs from the session.
+/// One transfer command (`LIST`, `NLST`, `MLSD`, `RETR`, `STOR`, `APPE`, `STOU`) and everything
+/// it needs from the session.
 ///
 /// RFC 959 §5.4 fixes the reply sequences: a download is refused with `450`/`550` *before* any
 /// `150`, and once `150` is written its completion is `226`, `425` (no data connection), `426`
-/// (the data connection broke) or `451`. So the handler is asked first, and only an answer that
-/// carries a payload opens the data connection. An upload has to be read before there is
-/// anything to ask about, so its `150` comes first and the handler's reply is the completion.
+/// (the data connection broke, or `ABOR`) or `451`. So the handler is asked first, and only an
+/// answer that carries a payload opens the data connection. An upload has to be read before
+/// there is anything to ask about, so its `150` comes first and the handler's reply is the
+/// completion.
 struct Transfer<'a, W> {
     verb: data::Verb,
     command: &'a str,
@@ -1223,6 +1356,58 @@ struct Transfer<'a, W> {
     log: &'a Log<'a>,
     ends: &'a data::ControlEnds,
     limits: &'a data::DataLimits,
+    tls: &'a tokio_rustls::TlsAcceptor,
+    /// For the event's `tls` field.
+    control_tls: bool,
+}
+
+/// Why the data phase of a transfer did not complete.
+enum DataFailure {
+    /// The data connection did not open (or its TLS handshake did not complete): `425`.
+    Open(String),
+    /// It opened and then stalled or broke: `426`.
+    Broken(String),
+    /// More than `max_upload_bytes` arrived: `552`.
+    TooLarge,
+}
+
+/// How a data phase raced against the control connection ended.
+enum Watched<T> {
+    Done(T),
+    /// The client sent `ABOR`; the value is the bytes its line took.
+    Aborted(usize),
+    /// The control connection closed or failed mid-transfer.
+    ControlLost,
+}
+
+/// Run `work` (the data phase of a transfer) while reading the control connection for `ABOR`.
+///
+/// RFC 959 §4.1.3: `ABOR` during a transfer stops it, and the server answers the transfer
+/// command `426` and then `ABOR` itself `226`. Dropping `work` closes the data connection, which
+/// is the abort. Any other command that arrives meanwhile is put back to be answered once the
+/// transfer ends, and the control connection is not read again until then: commands are
+/// answered in order, and a client that pipelines one behind a transfer can wait for it.
+async fn watch<T>(
+    control: &mut ControlReader,
+    work: impl std::future::Future<Output = T>,
+) -> Watched<T> {
+    tokio::pin!(work);
+    let mut watching = true;
+    loop {
+        tokio::select! {
+            out = &mut work => return Watched::Done(out),
+            line = control.read_line(MAX_COMMAND_LINE), if watching => match line {
+                Ok((CommandLine::Line(line), n)) => {
+                    if data::Verb::of(&line) == data::Verb::Abor {
+                        return Watched::Aborted(n);
+                    }
+                    control.unread(&line);
+                    watching = false;
+                }
+                _ => return Watched::ControlLost,
+            },
+        }
+    }
 }
 
 impl<W> Transfer<'_, W>
@@ -1263,7 +1448,9 @@ where
     }
 
     /// Run the transfer. `Ok(false)` when the control connection is to close.
-    async fn run(self, state: &mut data::DataState) -> Result<bool> {
+    async fn run(self, state: &mut data::DataState, control: &mut ControlReader) -> Result<bool> {
+        // The marker belongs to the transfer command right after REST, whichever it is.
+        let restart = state.restart.take();
         // One prepared channel, one transfer, whatever the outcome.
         let Some(channel) = state.channel.take() else {
             self.log.info(self.line(
@@ -1274,39 +1461,90 @@ where
                 .await?;
             return Ok(true);
         };
-        let transfer_type = state.transfer_type;
+        let restart = match restart {
+            Some(offset) if self.verb.restarts() => Some(offset),
+            Some(offset) => {
+                self.log.debug(self.line(
+                    "restart_ignored",
+                    format!("REST {offset} applies to RETR and STOR only"),
+                ));
+                None
+            }
+            None => None,
+        };
+        let job = Job {
+            channel,
+            transfer_type: state.transfer_type,
+            tls: state.protect.then_some(self.tls),
+            restart,
+        };
         if self.verb.is_upload() {
-            self.upload(channel, transfer_type).await
+            self.upload(job, control).await
         } else {
-            self.download(channel, transfer_type).await
+            self.download(job, control).await
         }
     }
 
-    fn event(&self, transfer_type: data::TransferType) -> Event {
-        let mut event = command_event(self.command);
+    fn event(&self, transfer_type: data::TransferType, restart: Option<u64>) -> Event {
+        let mut event = command_event(self.command, self.control_tls);
         event.data["transfer_type"] = serde_json::json!(transfer_type.event_name());
+        if let Some(offset) = restart {
+            event.data["restart_offset"] = serde_json::json!(offset);
+        }
         event
     }
 
-    /// Open the data connection, answering `425` when it cannot be.
-    async fn open(&self, channel: data::DataChannel) -> Result<Option<tokio::net::TcpStream>> {
-        match data::open(channel, self.ends, self.limits).await {
-            Ok(stream) => Ok(Some(stream)),
-            Err(why) => {
+    /// `ABOR` arrived mid-transfer: the data connection is already closed (its future was
+    /// dropped), so answer the transfer `426` and the `ABOR` `226`, in that order.
+    async fn aborted(&self, abor_bytes: usize) -> std::io::Result<()> {
+        self.app_state
+            .update_connection_stats(
+                self.server_id,
+                self.connection_id,
+                Some(abor_bytes as u64),
+                None,
+                Some(1),
+                None,
+            )
+            .await;
+        self.log.info(self.line(
+            "transfer_aborted_by_client",
+            "ABOR during the transfer; data connection closed, answered 426 then 226",
+        ));
+        self.reply(b"426 Connection closed; transfer aborted\r\n")
+            .await?;
+        self.reply(b"226 Abort successful\r\n").await
+    }
+
+    async fn data_failed(&self, failure: DataFailure) -> std::io::Result<()> {
+        match failure {
+            DataFailure::Open(why) => {
                 self.log
                     .warn(self.line("refused_data_connection", format!("{why}; answered 425")));
-                self.reply(b"425 Can't open data connection\r\n").await?;
-                Ok(None)
+                self.reply(b"425 Can't open data connection\r\n").await
+            }
+            DataFailure::Broken(why) => {
+                self.log
+                    .warn(self.line("transfer_aborted", format!("{why}; answered 426")));
+                self.reply(b"426 Connection closed; transfer aborted\r\n")
+                    .await
+            }
+            DataFailure::TooLarge => {
+                self.log.warn(self.line(
+                    "refused_upload_too_large",
+                    format!(
+                        "more than {} bytes; answered 552 without asking the handler",
+                        self.limits.max_upload
+                    ),
+                ));
+                self.reply(b"552 Requested file action aborted: exceeded storage allocation\r\n")
+                    .await
             }
         }
     }
 
-    async fn download(
-        self,
-        channel: data::DataChannel,
-        transfer_type: data::TransferType,
-    ) -> Result<bool> {
-        let event = self.event(transfer_type);
+    async fn download(self, job: Job<'_>, control: &mut ControlReader) -> Result<bool> {
+        let event = self.event(job.transfer_type, job.restart);
         let result = match call_llm(
             self.llm_client,
             self.app_state,
@@ -1379,6 +1617,28 @@ where
             return Ok(!closes);
         };
 
+        // REST: the handler gave the whole file and the transfer starts `offset` bytes in. An
+        // offset past the end names no byte to start from, so it is refused before any 150.
+        let payload = match job.restart {
+            Some(offset) if offset > payload.len() as u64 => {
+                self.log.info(self.line(
+                    "refused_restart_offset",
+                    format!(
+                        "REST {offset} is past the end of the {}-byte file; answered 554",
+                        payload.len()
+                    ),
+                ));
+                let reply = format!(
+                    "554 Restart offset {offset} is past the end of the file ({} bytes)\r\n",
+                    payload.len()
+                );
+                self.reply(reply.as_bytes()).await?;
+                return Ok(!closes);
+            }
+            Some(offset) => payload[offset as usize..].to_vec(),
+            None => payload,
+        };
+
         // The handler may name its own completion text; anything else it wrote around the
         // payload would break the sequence the server is writing, and is dropped.
         let completion = replies
@@ -1392,7 +1652,7 @@ where
                 format!("{dropped} reply(ies) beside the payload were not sent"),
             ));
         }
-        let wire = if transfer_type == data::TransferType::Ascii && !self.verb.is_listing() {
+        let wire = if job.transfer_type == data::TransferType::Ascii && !self.verb.is_listing() {
             data::to_network_ascii(&payload)
         } else {
             payload
@@ -1403,14 +1663,20 @@ where
         } else {
             format!("{} ({} bytes)", argument_of(self.command), wire.len())
         };
-        self.reply(data::opening_reply(transfer_type, &what).as_bytes())
+        self.reply(data::opening_reply(job.transfer_type, &what).as_bytes())
             .await?;
-        let Some(mut stream) = self.open(channel).await? else {
-            return Ok(!closes);
+
+        let (ends, limits) = (self.ends, self.limits);
+        let work = async {
+            let mut stream = data::open(job.channel, ends, limits, job.tls)
+                .await
+                .map_err(DataFailure::Open)?;
+            data::send_all(&mut stream, &wire, limits.idle)
+                .await
+                .map_err(DataFailure::Broken)
         };
-        match data::send_all(&mut stream, &wire, self.limits.idle).await {
-            Ok(()) => {
-                drop(stream);
+        match watch(control, work).await {
+            Watched::Done(Ok(())) => {
                 self.count_data(0, wire.len() as u64).await;
                 self.log.info(self.line(
                     "model_answer",
@@ -1420,79 +1686,97 @@ where
                     completion.unwrap_or_else(|| b"226 Transfer complete\r\n".to_vec());
                 self.reply(&completion).await?;
             }
-            Err(why) => {
-                self.log
-                    .warn(self.line("transfer_aborted", format!("{why}; answered 426")));
-                self.reply(b"426 Connection closed; transfer aborted\r\n")
-                    .await?;
-            }
+            Watched::Done(Err(failure)) => self.data_failed(failure).await?,
+            Watched::Aborted(n) => self.aborted(n).await?,
+            Watched::ControlLost => return Ok(false),
         }
         Ok(!closes)
     }
 
-    async fn upload(
-        self,
-        channel: data::DataChannel,
-        transfer_type: data::TransferType,
-    ) -> Result<bool> {
-        self.reply(data::opening_reply(transfer_type, &argument_of(self.command)).as_bytes())
-            .await?;
-        let Some(mut stream) = self.open(channel).await? else {
-            return Ok(true);
+    async fn upload(self, job: Job<'_>, control: &mut ControlReader) -> Result<bool> {
+        // STOU (RFC 959 §4.1.3): the server names the file, and RFC 1123 §4.1.2.9 has the name
+        // in the 150 as "FILE: <name>". There is no directory to check it against, so it is
+        // random enough never to repeat.
+        let unique_name =
+            (self.verb == data::Verb::Stou).then(|| format!("ftp-{:016x}", rand::random::<u64>()));
+        let opening = match &unique_name {
+            Some(name) => format!("150 FILE: {name}\r\n"),
+            None => data::opening_reply(job.transfer_type, &argument_of(self.command)),
         };
-        let raw = match data::receive_all(&mut stream, self.limits).await {
-            data::Upload::Complete(raw) => raw,
-            data::Upload::TooLarge => {
-                drop(stream);
-                self.log.warn(self.line(
-                    "refused_upload_too_large",
-                    format!(
-                        "more than {} bytes; answered 552 without asking the handler",
-                        self.limits.max_upload
-                    ),
-                ));
-                self.reply(b"552 Requested file action aborted: exceeded storage allocation\r\n")
-                    .await?;
-                return Ok(true);
-            }
-            data::Upload::Idle => {
-                drop(stream);
-                self.log.warn(self.line(
-                    "transfer_aborted",
-                    format!(
-                        "the peer sent nothing for {}s; answered 426",
-                        self.limits.idle.as_secs()
-                    ),
-                ));
-                self.reply(b"426 Connection closed; transfer aborted\r\n")
-                    .await?;
-                return Ok(true);
-            }
-            data::Upload::Failed(why) => {
-                drop(stream);
-                self.log
-                    .warn(self.line("transfer_aborted", format!("{why}; answered 426")));
-                self.reply(b"426 Connection closed; transfer aborted\r\n")
-                    .await?;
-                return Ok(true);
-            }
+        self.reply(opening.as_bytes()).await?;
+
+        let limits = self.limits;
+        let ends = self.ends;
+        let (channel, tls) = (job.channel, job.tls);
+        let work = async {
+            let mut stream = data::open(channel, ends, limits, tls)
+                .await
+                .map_err(DataFailure::Open)?;
+            let raw = match data::receive_all(&mut stream, limits).await {
+                data::Upload::Complete(raw) => raw,
+                data::Upload::TooLarge => return Err(DataFailure::TooLarge),
+                data::Upload::Idle => {
+                    return Err(DataFailure::Broken(format!(
+                        "the peer sent nothing for {}s",
+                        limits.idle.as_secs()
+                    )))
+                }
+                data::Upload::Failed(why) => return Err(DataFailure::Broken(why)),
+            };
+            // Answer the client's close in kind: on a TLS data connection this is the
+            // close_notify a client that shuts TLS down properly (python's `unwrap()`) waits for.
+            let _ =
+                tokio::time::timeout(limits.idle, tokio::io::AsyncWriteExt::shutdown(&mut stream))
+                    .await;
+            Ok(raw)
         };
-        drop(stream);
+        let raw = match watch(control, work).await {
+            Watched::Done(Ok(raw)) => raw,
+            Watched::Done(Err(failure)) => {
+                self.data_failed(failure).await?;
+                return Ok(true);
+            }
+            Watched::Aborted(n) => {
+                self.aborted(n).await?;
+                return Ok(true);
+            }
+            Watched::ControlLost => return Ok(false),
+        };
         self.count_data(raw.len() as u64, 0).await;
 
-        let content = if transfer_type == data::TransferType::Ascii {
+        let content = if job.transfer_type == data::TransferType::Ascii {
             data::from_network_ascii(&raw)
         } else {
             raw
         };
-        let mut event = self.event(transfer_type);
+        let mut event = self.event(job.transfer_type, job.restart);
         event.data["upload_bytes"] = serde_json::json!(content.len());
+        if let Some(name) = &unique_name {
+            event.data["unique_name"] = serde_json::json!(name);
+        }
         match String::from_utf8(content) {
             Ok(text) => {
                 event.data["upload_is_text"] = serde_json::json!(true);
                 event.data["upload_text"] = serde_json::json!(text);
             }
-            Err(_) => event.data["upload_is_text"] = serde_json::json!(false),
+            Err(not_text) => {
+                event.data["upload_is_text"] = serde_json::json!(false);
+                let bytes = not_text.into_bytes();
+                // A model can read binary only as hex; past the bound the size alone has to do.
+                if bytes.len() <= self.limits.max_hex_upload {
+                    event.data["upload_hex"] = serde_json::json!(hex::encode(&bytes));
+                } else {
+                    self.log.info(self.line(
+                        "upload_hex_omitted",
+                        format!(
+                            "{} binary bytes is over max_hex_upload_bytes ({}); the handler \
+                             gets the size alone",
+                            bytes.len(),
+                            self.limits.max_hex_upload
+                        ),
+                    ));
+                }
+            }
         }
 
         let result = match call_llm(
@@ -1557,6 +1841,16 @@ where
         }
         Ok(!closes)
     }
+}
+
+/// What one transfer was set up with before it started.
+struct Job<'a> {
+    channel: data::DataChannel,
+    transfer_type: data::TransferType,
+    /// `Some` after `PROT P`: the data connection is TLS.
+    tls: Option<&'a tokio_rustls::TlsAcceptor>,
+    /// The `REST` offset, for `RETR` and `STOR`.
+    restart: Option<u64>,
 }
 
 /// The argument of a command line, for a `150` reply's text, with any control character

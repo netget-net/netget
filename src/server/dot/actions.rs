@@ -137,14 +137,16 @@ impl Protocol for DotProtocol {
                  (4) BOUNDS: tests/server/dot/bounds_test.rs and connection_bounds_test.rs, one \
                  test per bound at its boundary, each verified by removal. (6) No #[ignore] and \
                  no skip gate. UNPROVEN: certificate validation of any kind (self-signed, and \
-                 neither client authenticates it), client auth, EDNS padding.",
+                 neither client authenticates it), client auth.",
             )
             .notes(
                 "Self-signed certs only, no client auth. Answers through dns::StreamQuery, the DNS \
                  server's own answer rules: one message per query, SERVFAIL for a backend failure, \
                  an unparseable or oversize answer and an answer with nothing sendable, FORMERR \
                  for no question; a message that does not decode closes the connection. \
-                 idle_timeout_secs (default 300) bounds the wait for the next query.",
+                 A query carrying an EDNS(0) Padding option gets its reply padded to 468-octet \
+                 blocks (RFC 7830/8467) within 65535 octets. idle_timeout_secs (default 300) \
+                 bounds the wait for the next query.",
             )
             .history(crate::protocol::metadata::HistoryMode::Off)
             .batching(crate::protocol::metadata::BatchingMode::Unsupported)

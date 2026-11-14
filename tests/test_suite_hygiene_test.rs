@@ -160,6 +160,7 @@ const SLEEP_BASELINE: &[(&str, usize)] = &[
     ("tests/server/doq/bounds_test.rs", 2), // a body held 1s inside the exchange bound; queries 2s apart inside the idle bound
     ("tests/server/dot/bounds_test.rs", 1), // queries 2s apart inside the idle bound, which each one resets
     ("tests/server/ftp/data_connection_test.rs", 2), // a data connection 1s into its connect bound; an upload paused 1s inside its idle bound
+    ("tests/server/ftp/ftps_test.rs", 2), // a TLS handshake started 1s into the control and the data handshake bounds
     ("tests/server/icmp/e2e_test.rs", 1),
     ("tests/server/igmp/e2e_test.rs", 1),
     ("tests/server/isis/e2e_test.rs", 3),

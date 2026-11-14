@@ -20,7 +20,12 @@ process started on port 0; a run that fails to start never writes it, and MCP an
 refuse the flag. `tests/non_interactive_run_limits_test.rs` drives the binary. `--server <p>`
 takes `--port`, `--host`, `--server-params` and `--server-handlers` (MCP's `event_handlers`
 shape, as `--client-handlers` is for `--client`); when a `*` rule answers every event the run
-asks no model and needs none (`tests/cli_server_direct_test.rs`). The test
+asks no model and needs none (`tests/cli_server_direct_test.rs`). `--server` and `--client`
+take a protocol *name*, resolved exactly as MCP's `start_server` / `start_client` resolve one
+(`resolve_name`: the canonical name, or a stack name or alias only one protocol declares; an
+alias several share is refused with their names, free text with suggestions —
+`tests/cli_protocol_names_test.rs`). `-h` is a one-line-per-flag screenful; `--help` has each
+flag's detail and the examples (`tests/cli_help_test.rs`). The test
 fixture helpers built on it are `crates/netget-fixture` (Rust, depends only on `serde_json`) and
 `sdk/python/netget_fixture` (stdlib, plus a pytest plugin); `tests/fixture_helpers_test.rs`
 runs both against this tree's binary and needs `python3` with pytest. Neither is published.
@@ -146,11 +151,11 @@ netget --mcp   # then call list_protocols / get_protocol_docs
 
 Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/protocol/metadata.rs`):
 
-- **Stable** — **nine as of 13 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot`,
-  `doh`, `websocket` and `mqtt`.** Before
+- **Stable** — **eleven as of 13 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot`,
+  `doh`, `etcd`, `postgresql`, `websocket` and `mqtt`.** Before
   16 September 2026 there were none, and three protocols had held the rating and lost it, each
   for the same reason: nobody had said what it required, so "Stable" meant whoever set it felt
-  good about the code. The bar below is what replaced that, and these nine are the ones
+  good about the code. The bar below is what replaced that, and these eleven are the ones
   measured against it rather than against a feeling. Each carries its own justification in
   `metadata()` — read `e2e_testing` and `notes` there, and the "Maturity: the six conditions"
   section at the foot of each `src/server/<p>/CLAUDE.md`, before quoting any of the ratings:
@@ -252,17 +257,34 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   1 November 2026): it has a fuzz target (`fuzz_targets/bson_document.rs`) and no pcap-oracle
   test. Seven that were in this list held conditions 1, 2, 3 and 6 that day, which left each
   of them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
-  re-verified — from Stable; `dot`, `doh`, `websocket`, `mqtt` and `kafka` have since been
-  measured (below), `etcd` and `postgresql` have not:
+  re-verified — from Stable; `dot`, `doh`, `etcd`, `postgresql`, `websocket`, `mqtt` and
+  `kafka` have since been measured (below):
 
   - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
-    `tests/helpers/recording_relay.rs` and the oracle reads what crossed (etcdctl's six
-    connections; psql's two sessions and tokio-postgres's extended-protocol session; Python
-    websockets' permessage-deflate session). The targets are `etcd_request` (prost behind
-    `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level bomb),
-    `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
+    `tests/helpers/recording_relay.rs` and the oracle reads what crossed. The targets are
+    `etcd_request` (prost behind `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level
+    bomb), `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
     too — without it the fuzz workspace would build crates.io's panicking pgwire) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
+    **`etcd` and `postgresql` went Stable on 13 November 2026**, and condition 1 was again true
+    of a sample. Each "second client" shared the server's own codec: `etcd-client` is tonic
+    over prost — the server's h2 and prost at both ends — and tokio-postgres decodes binary
+    cells with `postgres-types`, the crate pgwire encodes them with; and neither etcd client
+    issued Txn or Compact, and no PostgreSQL client bound a parameter. Python grpcio (C-core,
+    upb) and psycopg 3 over libpq are the second clients now
+    (`tests/server/etcd/grpcio_client_test.rs`, `tests/server/postgresql/psycopg_client_test.rs`).
+    They found what the shared codecs had agreed on: the PostgreSQL model **never saw a bound
+    parameter** (the statement declared none, so tokio-postgres would not bind, and psycopg's
+    values were dropped), a binary `date` went out as text, and a cell that did not fit its
+    column was sent as `0` or `false`; the etcd handler decided a Txn seeing only the *counts*
+    of its compares and operations, the reply carried no per-operation results, and Range's
+    `limit`/`keys_only`/`count_only` were ignored. Condition 4 found two bounds that bounded
+    nothing in total: etcd's 1.5 MiB per request with 200 streams per connection (now a 48 MiB
+    server-wide budget) and pgwire's 1 GB per unauthenticated message (now 1 MiB, screened by
+    `src/server/postgresql/guard.rs` in front of pgwire, which has no seam of its own) — and
+    an etcd request whose body stopped arriving held its connection busy, so the idle bound
+    never fired. **A second client that shares the server's codec is a sample of one**: count
+    the libraries at both ends, not the binaries.
     **`websocket` went Stable on 13 November 2026.** Condition 1 had been true of a sample:
     the third-party clients covered a greeting, one echo and deflate's data messages, and Ping,
     both directions of the closing handshake, subprotocols and refusal were asserted only by a
@@ -349,8 +371,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (66 servers as of 13 November 2026, after
-  `websocket` and `mqtt` went to Stable; 68 on 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (64 servers as of 13 November 2026, after
+  `etcd`, `postgresql`, `websocket` and `mqtt` went to Stable; 68 on 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),
@@ -411,6 +433,23 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   would have read as run while CI ran only TFTP's. Filters are matched whole now, and FTP's is
   `server::ftp::real_client_test`, because the bare form is a substring of TFTP's in
   `cargo test`'s filter too.
+
+  **`ftp` gained binary files, `REST`, `STOU`, `ABOR` and explicit FTPS on 13 November 2026**,
+  each driven by both clients where the client has the verb. `send_ftp_data` takes
+  `encoding: "utf8"|"hex"` and a binary upload reaches the handler as `upload_hex`, bounded by
+  `max_hex_upload_bytes`; `REST` restarts `RETR` and `STOR` in stream mode (`554` past the end);
+  `STOU` names the file in `150 FILE: <name>`; `AUTH TLS`, `PBSZ` and `PROT P` put the control
+  and every data connection on rustls, with `cert_path`/`key_path` or a generated certificate,
+  and ftplib's `FTP_TLS` and curl `--ssl-reqd` each verify it. **`ABOR` needed the control
+  connection to be readable during a transfer, and two things stood in the way.** The line
+  reader was not cancel-safe (a `BufReader` plus a local accumulator), so racing it against the
+  transfer could lose half a line; it now keeps unreturned bytes in its own buffer
+  (`src/server/ftp/control.rs`). And python's `ftplib.abort()` sends `ABOR\r\n` as TCP urgent
+  data, which makes the `\n` the urgent byte: without `SO_OOBINLINE` on the control socket the
+  kernel removes it and the line never ends, and even with it a read stops at the urgent mark
+  and tokio reads the short read as "drained", so the `\n` sits in the kernel until the client's
+  next command. The reader takes `ABOR\r` alone as a complete line. The same is true of any relay in between, which is
+  why ftplib's `ABOR` test connects directly rather than through the recording relay.
 
   **Do not read the rest of this section as the list. Generate it:**
 
@@ -1174,6 +1213,15 @@ accepted everywhere an action is read (model answers, handlers, `.netget` files)
 to the current name; a server event that offers protocol actions leaves it out of the list
 (`common::network_event_common_actions_for`), though a model that names it anyway is executed,
 not retried (`tests/notify_operator_test.rs`).
+
+**A decision event is offered its own answers and nothing else.** An event declared
+`EventType::decision_only` (Bolt's login) gets no memory, connection-memory or log action from
+`call_llm`, and its prompt has no memory section. Over 40 replayed seeds for each of the three
+Bolt eval instructions, llama3.1:8b refused "accepts any login" on 14 of 120 draws with those
+actions beside accept and refuse (quoting the instruction's login sentence in the event still
+left 3 of 80), and on none of 120 without them, while an instruction refusing the user was
+still refused 40 of 40 (`eval-results/2026-11-13-structural-cases/`). Use it where the event is
+one yes/no question, not where the model should be able to remember something about the peer.
 
 **Actions**: protocols implement `ProtocolActions` (`src/llm/actions/protocol_trait.rs`) with
 async actions (user-triggered) and sync actions (network-event-triggered), in

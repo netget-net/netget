@@ -348,11 +348,24 @@ impl MetricFamilies {
                 ));
             }
 
-            let raw_samples = match raw.get("samples") {
+            let mut raw_samples = match raw.get("samples") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(Value::Array(a)) => a.clone(),
                 Some(_) => return Err(format!("metric '{name}' samples must be an array")),
             };
+            // A `bucket_counts` series may sit at family level or as an entry of `samples`
+            // (with that entry's labels, count and sum); either way it becomes the cumulative
+            // samples it stands for.
+            let mut expanded = Vec::with_capacity(raw_samples.len());
+            for s in raw_samples.drain(..) {
+                if s.get("bucket_counts").is_some_and(|b| !b.is_null()) {
+                    expanded.extend(histogram_series_samples(name, mtype, &s)?);
+                } else {
+                    expanded.push(s);
+                }
+            }
+            raw_samples = expanded;
+            raw_samples.extend(histogram_series_samples(name, mtype, raw)?);
             total_samples = total_samples.saturating_add(raw_samples.len());
             if total_samples > MAX_SAMPLES {
                 return Err(format!(
@@ -490,6 +503,174 @@ fn series_names(f: &Family) -> Vec<String> {
         .iter()
         .map(|s| format!("{}{}", f.base, s))
         .collect()
+}
+
+/// Expand a histogram family's `bucket_counts` (with its `count`, `sum` and `labels`) into the
+/// cumulative `_bucket`, `_sum` and `_count` samples the exposition format defines.
+///
+/// `bucket_counts` maps each upper bound to the number of observations that fell into that
+/// bucket alone — above the previous bound, at most this one. Those are the numbers a person
+/// (or a model) states: "40 requests, 30 of them under 0.1s" is 30 in the first bucket and 10
+/// further up. The exposition wants running totals instead, where every bucket counts
+/// everything at or below its bound; llama3.1:8b wrote per-bucket counts into the cumulative
+/// `_bucket` samples on most draws, and those were refused as non-cumulative. Here NetGet does
+/// the addition. A `"+Inf"` key counts observations above the largest finite bound.
+///
+/// `count` is the total number of observations. Without it the total is the sum of
+/// `bucket_counts`; with it, anything beyond that sum lies above the largest bound and lands
+/// only in the `+Inf` bucket, and a `count` below the sum is refused. `sum` is the total of
+/// the observed values and is passed through as `_sum`; NetGet cannot know it and does not
+/// make one up. The generated samples go through the same validation as samples given
+/// directly, so a label or bound refused there is refused here.
+///
+/// `raw` is the family, or one entry of its `samples` carrying `bucket_counts` — the shape
+/// llama3.1:8b also writes, and the way to give several labelled series.
+///
+/// Without `bucket_counts` this returns nothing and the family-level `count`, `sum` and
+/// `labels` are ignored, as they always were: they mean something only beside it.
+fn histogram_series_samples(
+    name: &str,
+    mtype: MetricType,
+    raw: &Value,
+) -> Result<Vec<Value>, String> {
+    if raw.get("bucket_counts").is_none_or(Value::is_null) {
+        return Ok(Vec::new());
+    }
+    if mtype != MetricType::Histogram {
+        return Err(format!(
+            "metric '{name}' has 'bucket_counts', which only a histogram family has; give a \
+             {}'s values as samples",
+            mtype.type_word(Format::Text)
+        ));
+    }
+
+    let labels = match raw.get("labels") {
+        None | Some(Value::Null) => serde_json::Map::new(),
+        Some(Value::Object(map)) => map.clone(),
+        Some(_) => return Err(format!("metric '{name}' 'labels' must be an object")),
+    };
+    if labels.contains_key("le") {
+        return Err(format!(
+            "metric '{name}' 'labels' may not carry 'le'; bucket bounds are the keys of \
+             'bucket_counts'"
+        ));
+    }
+
+    // (bound, observations in that bucket alone)
+    let mut per_bucket: Vec<(f64, f64)> = Vec::new();
+    let mut push = |bound_raw: &Value, count_raw: Option<&Value>| -> Result<(), String> {
+        let bound = parse_value(bound_raw)
+            .filter(|b| !b.is_nan() && *b != f64::NEG_INFINITY)
+            .ok_or_else(|| {
+                format!(
+                    "metric '{name}' bucket_counts bound {bound_raw} is not a number or \"+Inf\""
+                )
+            })?;
+        let n = count_raw
+            .and_then(parse_value)
+            .filter(|n| n.is_finite() && *n >= 0.0)
+            .ok_or_else(|| {
+                format!(
+                    "metric '{name}' bucket_counts for le={} must be a non-negative number of \
+                     observations",
+                    format_bound(bound)
+                )
+            })?;
+        if per_bucket.iter().any(|(b, _)| *b == bound) {
+            return Err(format!(
+                "metric '{name}' bucket_counts names the bound {} twice",
+                format_bound(bound)
+            ));
+        }
+        per_bucket.push((bound, n));
+        Ok(())
+    };
+    match raw.get("bucket_counts") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(map)) => {
+            for (k, v) in map {
+                push(&Value::String(k.clone()), Some(v))?;
+            }
+        }
+        // Also accepted: [{"le": 0.1, "count": 30}, ...].
+        Some(Value::Array(list)) => {
+            for entry in list {
+                let bound = entry.get("le").ok_or_else(|| {
+                    format!("metric '{name}' bucket_counts entries need an 'le' and a 'count'")
+                })?;
+                push(bound, entry.get("count").or_else(|| entry.get("value")))?;
+            }
+        }
+        Some(_) => {
+            return Err(format!(
+                "metric '{name}' bucket_counts must be an object of upper bound -> observations \
+                 in that bucket, e.g. {{\"0.1\": 30, \"0.5\": 10}}"
+            ))
+        }
+    }
+    if per_bucket.len() > MAX_SAMPLES {
+        return Err(format!(
+            "more than {MAX_SAMPLES} samples in one answer; send fewer series"
+        ));
+    }
+    per_bucket.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let observed: f64 = per_bucket.iter().map(|(_, n)| n).sum();
+    let count = match raw.get("count") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            parse_value(v)
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .ok_or_else(|| {
+                    format!("metric '{name}' count must be a non-negative number of observations")
+                })?,
+        ),
+    };
+    if let Some(c) = count {
+        if c < observed {
+            return Err(format!(
+                "metric '{name}' count is {} but bucket_counts add up to {}; count is every \
+                 observation, so it is at least their sum",
+                format_value(c),
+                format_value(observed)
+            ));
+        }
+    }
+
+    let with_le = |le: f64| {
+        let mut l = labels.clone();
+        l.insert("le".to_string(), Value::String(format_bound(le)));
+        Value::Object(l)
+    };
+    let mut out = Vec::with_capacity(per_bucket.len() + 3);
+    let mut running = 0.0f64;
+    for (bound, n) in &per_bucket {
+        running += n;
+        if *bound != f64::INFINITY {
+            out.push(serde_json::json!({
+                "suffix": "_bucket", "labels": with_le(*bound), "value": running
+            }));
+        }
+    }
+    let total = count.unwrap_or(observed);
+    out.push(serde_json::json!({
+        "suffix": "_bucket", "labels": with_le(f64::INFINITY), "value": total
+    }));
+    match raw.get("sum") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            let s = parse_value(v)
+                .filter(|s| s.is_finite())
+                .ok_or_else(|| format!("metric '{name}' sum must be a finite number"))?;
+            out.push(serde_json::json!({
+                "suffix": "_sum", "labels": Value::Object(labels.clone()), "value": s
+            }));
+        }
+    }
+    out.push(serde_json::json!({
+        "suffix": "_count", "labels": Value::Object(labels), "value": total
+    }));
+    Ok(out)
 }
 
 fn parse_sample(name: &str, mtype: MetricType, j: usize, s: &Value) -> Result<Sample, String> {

@@ -479,6 +479,14 @@ fn new_response(
 /// `AA` is deliberately *not* set: we are not answering authoritatively, we are
 /// failing.
 pub fn build_servfail(query: &DnsMessage) -> Result<Vec<u8>> {
+    servfail_message(query)
+        .to_vec()
+        .context("Failed to serialize DNS SERVFAIL response")
+}
+
+/// The SERVFAIL [`build_servfail`] encodes, as a message, for a caller that adds an OPT record
+/// (and padding) before encoding it.
+pub fn servfail_message(query: &DnsMessage) -> DnsMessage {
     let mut message = DnsMessage::new(query.id, MessageType::Response, query.op_code);
     message.metadata.recursion_desired = query.recursion_desired;
     message.metadata.response_code = ResponseCode::ServFail;
@@ -486,10 +494,7 @@ pub fn build_servfail(query: &DnsMessage) -> Result<Vec<u8>> {
     for question in &query.queries {
         message.add_query(question.clone());
     }
-
     message
-        .to_vec()
-        .context("Failed to serialize DNS SERVFAIL response")
 }
 
 /// Serialize a response message to DNS wire format.

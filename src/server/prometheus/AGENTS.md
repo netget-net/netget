@@ -34,7 +34,10 @@ tested directly (`tests/server/prometheus/exposition_test.rs`) and through `prom
   `.with_actions(...)`, raised in `mod.rs::handle_request`.
 - `send_metrics {metrics: [{name, type, help?, samples: [{labels?, value, suffix?,
   timestamp_ms?}]}]}` — validated in `execute_action` by `MetricFamilies::parse`, rendered by
-  `MetricFamilies::render`.
+  `MetricFamilies::render`. A histogram family may instead (or as well, for another label set)
+  carry `bucket_counts` — each upper bound mapped to the observations in that bucket alone —
+  with optional `count`, `sum` and `labels`; NetGet adds them up (below). The action's example
+  and parameter text show this form; cumulative `_bucket` samples still parse.
 - `send_scrape_error {status: 4xx|5xx, message}` — the model refusing on purpose; the message is
   written as one line of `text/plain` (control characters become spaces).
 
@@ -53,6 +56,26 @@ no `suffix` is a bucket, since only a bucket carries `le` (llama3.1:8b leaves th
 about one answer in five); histogram buckets are sorted by `le`; a
 missing `+Inf` bucket is synthesised from `_count` (or from the largest bucket when there is no
 `_count`), and a missing `_count` from the `+Inf` bucket. Integral bounds render as `1.0`.
+
+**Histograms are given as per-bucket counts, and NetGet does the cumulative arithmetic.**
+`bucket_counts` (`{"0.1": 30, "0.5": 10, "1": 0}`, or `[{"le": 0.1, "count": 30}, …]`) is how
+many observations fell in each bucket alone; `histogram_series_samples` turns it into the
+running totals the format defines, a `+Inf` bucket and `_count` equal to `count` (default: the
+sum; a `count` above the sum is observations above the largest bound, one below it is
+refused), `_sum` from `sum` when given (never invented), and the family `labels` on every
+series. A `"+Inf"` key counts observations above the largest finite bound. An entry of
+`samples` carrying `bucket_counts` is one such series with that entry's `labels`, `count` and
+`sum` — the way to give several labelled histograms, and a shape the model writes. The generated
+samples go through the same per-sample validation as given ones. Without `bucket_counts` the
+family-level `count`, `sum` and `labels` are ignored, as they always were. Why: told "40
+requests so far, 30 of them under 0.1s" with buckets at 0.1, 0.5 and 1, llama3.1:8b wrote the
+per-bucket counts (30, 10, 0) into the cumulative `_bucket` samples or copied the example's
+numbers on every one of 20 replayed seeds, and two variants spelling out "cumulative" changed
+nothing (`eval-results/2026-11-08-weak-cases-replay/`). Replaying the captured scrape prompt
+over seeds 1–40, a histogram with 30 at `le=0.1` and a total of 40 came back on 0 of 40 draws
+with the cumulative example and on 35 of 40 with this form; two of the five misses copied the
+example's counts under a `count` of 40, which is refused
+(`eval-results/2026-11-13-structural-cases/`).
 
 Escaping: label values escape `\`, `"` and LF; help escapes `\` and LF, plus `"` in
 OpenMetrics.

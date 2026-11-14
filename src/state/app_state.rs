@@ -564,8 +564,9 @@ struct AppStateInner {
     llm_client: Option<crate::llm::OllamaClient>,
     /// Rate limiter for LLM calls (concurrency + token throttling)
     rate_limiter: crate::llm::RateLimiter,
-    /// Available scripting environments (Python, Node.js)
-    scripting_env: crate::scripting::ScriptingEnvironment,
+    /// Scripting environments set with `set_scripting_env` (tests); `None` means the
+    /// machine's, probed on first use (`ScriptingEnvironment::detect_async`).
+    scripting_env: Option<crate::scripting::ScriptingEnvironment>,
     /// Currently selected scripting mode (LLM, Python, or JavaScript)
     selected_scripting_mode: ScriptingMode,
     /// Event handler mode (controls how LLM configures event handlers)
@@ -874,8 +875,8 @@ impl AppState {
 
     /// Create a new application state with options
     pub fn new_with_options(include_disabled_protocols: bool, ollama_url: String) -> Self {
-        // Detect scripting environments at startup
-        let scripting_env = crate::scripting::ScriptingEnvironment::detect();
+        // Scripting runtimes are probed on first use, not here: see `get_scripting_env`.
+        let scripting_env = None;
 
         // Detect system capabilities at startup
         let system_capabilities = crate::privilege::SystemCapabilities::detect();
@@ -1888,17 +1889,39 @@ impl AppState {
         }
     }
 
-    /// Get the scripting environment information
+    /// The scripting runtimes available: the one `set_scripting_env` injected, else the
+    /// machine's, probed by the first call in the process and cached for every later one.
+    ///
+    /// Nothing at startup calls this, so `netget --mcp` and the dashboard start without four
+    /// `--version` subprocesses ahead of them; the first prompt that lists the runtimes, the
+    /// first script handler or an `--env <runtime>` check pays the probe once.
     pub async fn get_scripting_env(&self) -> crate::scripting::ScriptingEnvironment {
-        self.inner.read().await.scripting_env.clone()
+        if let Some(env) = self.inner.read().await.scripting_env.clone() {
+            return env;
+        }
+        crate::scripting::ScriptingEnvironment::detect_async().await
+    }
+
+    /// Whether `mode` can be used here. `on` and `off` need no runtime, so they are answered
+    /// without probing — the saved setting is usually `on`, and asking for the environment to
+    /// check it would put the probes back at every start. A named runtime is probed (once).
+    pub async fn scripting_mode_available(&self, mode: ScriptingMode) -> bool {
+        let language = match mode {
+            ScriptingMode::On | ScriptingMode::Off => return true,
+            ScriptingMode::Python => crate::scripting::ScriptLanguage::Python,
+            ScriptingMode::JavaScript => crate::scripting::ScriptLanguage::JavaScript,
+            ScriptingMode::Go => crate::scripting::ScriptLanguage::Go,
+            ScriptingMode::Perl => crate::scripting::ScriptLanguage::Perl,
+        };
+        self.get_scripting_env().await.is_available(language)
     }
 
     /// Set scripting environment
     ///
     /// This is primarily used for testing to inject a mock environment.
-    /// In production, the environment is auto-detected at startup.
+    /// In production, the machine's runtimes are probed on first use.
     pub async fn set_scripting_env(&self, env: crate::scripting::ScriptingEnvironment) {
-        self.inner.write().await.scripting_env = env;
+        self.inner.write().await.scripting_env = Some(env);
     }
 
     /// Get the currently selected scripting mode
