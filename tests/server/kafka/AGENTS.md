@@ -14,7 +14,8 @@ in malloc, and adding a dev-dependency would mean editing `Cargo.toml`.
 So the "client" in these tests is built from `kafka-protocol`'s **client-side** codecs —
 `Encodable` on the request types and `Decodable` on the response types, both generated from
 Apache Kafka's own message schemas. The broker does the opposite: decodes requests, encodes
-responses. Nothing in these tests calls a function `src/server/kafka/` wrote.
+responses. Nothing in `e2e_test.rs` calls a function `src/server/kafka/` wrote; the bound
+tests call a few directly (`decode_record_batches`, `TopicIds`, `topic_id`).
 
 `kafka-protocol` is not a dev-dependency, so it is reached through the re-export at the top
 of `src/server/kafka/mod.rs`:
@@ -134,8 +135,7 @@ surviving task.
 ## Running
 
 ```bash
-./cargo-isolated.sh test --no-default-features --features kafka \
-    --test server -- --test-threads=100 kafka
+./cargo-isolated.sh test --test server -- server::kafka:: --test-threads=100
 ```
 
 ## References
@@ -151,8 +151,8 @@ the same crate `src/server/kafka/mod.rs` frames with. That proves the crate roun
 itself, which is the circular case CLAUDE.md names for `websocket`/tokio-tungstenite. It is why
 Kafka sat at Experimental with a full e2e suite.
 
-`real_client_test.rs::test_kafka_produce_and_fetch_against_kcat` closes that. `kcat` 1.7 on
-librdkafka 2.15 is C, and NetGet links none of it. It is **not** `#[ignore]`d and it **fails**
+`real_client_test.rs::test_kafka_produce_and_fetch_against_kcat` closes that. `kcat` (librdkafka; 2.16 on
+this machine, 2.3 on Ubuntu's runners) is C, and NetGet links none of it. It is **not** `#[ignore]`d and it **fails**
 rather than skipping when kcat is absent. Kafka is Beta on the strength of it.
 
 Two runs against one broker:
@@ -182,8 +182,10 @@ Four things about the invocation are load-bearing, and three of them cost a debu
 - **`expect_at_least`, never `expect_calls`.** librdkafka refreshes metadata on its own schedule
   and each `kcat` run is a fresh client, so the metadata and fetch counts are not predictable.
 
-Still unproven here: consumer groups (the APIs do not exist), the Java client, compression,
-transactions, TLS/SASL, and multi-broker metadata.
+Still unproven here: consumer groups (the APIs do not exist), OffsetCommit from any
+third-party client (each looks up a coordinator first), compressed batches from a real
+producer, transactions, TLS/SASL, and multi-broker metadata. The Java client and franz-go are
+in `flexible_versions_test.rs`, below.
 
 ## Flexible versions (`flexible_versions_test.rs`)
 
@@ -217,11 +219,28 @@ compressed legacy wrapper is answered the same; an uncompressed legacy message b
 is decoded and reaches the handler. Without the refusal in `declared_records` the test binary
 dies with a stack overflow on the bomb.
 
+## `request_bounds_test.rs` — the per-request bounds, both sides of each
+
+`MAX_PARTITIONS` (partition 1024 is produced, 1025 and -1 are answered 3 and never reach the
+handler), `MAX_UNITS_PER_REQUEST` (64 partitions in one Produce all reach the handler; of 65,
+the 65th is answered -1 unasked), `MAX_RECORDS_PER_FETCH` (an answer of 1000 records is sent
+whole, of 1001 the first 1000) and `MIN_REQUEST_BYTES` (an 8-byte ApiVersions at an unsupported version is answered, a 7-byte
+request closes the connection). What the handler was asked is read from the access log. Not
+tested anywhere: the 30 s first-request and 600 s idle deadlines and the 256-connection cap
+(only `tests/tcp_server_bounds_ratchet_test.rs` checks they are in the source), and the
+event-description bounds `MAX_EVENT_RECORDS` / `MAX_EVENT_VALUE_BYTES`, and
+`MAX_FETCH_PAYLOAD_BYTES` (8 MiB), which no script or static rule can reach — each is bounded
+at 8 MiB of JSON first.
+
 ## Stable condition 3: the fuzz target, and the bombs it carries
 
 Condition 2 is `e2e_test.rs`'s oracle (above). `fuzz/fuzz_targets/kafka_request.rs` drives
 the broker's decode path — `kafka-protocol`'s header and body decoders for the five APIs at the
-version the request names, decode → encode → decode asserted equal, and for Produce
+version the request names, decode → encode → decode asserted equal (except a body carrying
+an unknown tagged field whose tag is 2^31 or more: `kafka-protocol` keys it by a negative `i32`,
+counts it when encoding and does not write it, so the re-encoding does not decode — the crate's
+defect, which the broker cannot reach because it never encodes a request; found by this target
+on 13 November 2026, kept in the corpus as `apiversions_v3_tag_past_i32_max`), and for Produce
 `kafka::decode_record_batches`, each batch a second time with its CRC-32C fixed so the search
 reaches the decompressors (a legacy message gets its CRC-32 fixed the same way). Its corpus carries `produce_v2_legacy_nesting_bomb` (above) and `produce_gzip_inflation_bomb`, a 64 KiB gzip batch
 of 64 MiB of zeros. Writing it is what showed that `kafka-protocol`'s gzip, zstd and lz4
@@ -234,5 +253,5 @@ request's batches. The same file pins `MAX_PRODUCE_RECORDS` (100 000 records per
 MESSAGE_TOO_LARGE past it) uncompressed and gzip: exactly the bound taken, one record more
 refused at no cost to the budget, the bound shared across batches, and a header declaring
 `i32::MAX` records — more than its bytes can hold — refused as corrupt before the batch is
-decoded (its CRC is deliberately wrong, so only the screen's own error can pass). run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 5 510 executions, no crash, peak
+decoded (its CRC is deliberately wrong, so only the screen's own error can pass). Rebuilt and run 300 s on 13 November 2026 (`-s none`, macOS, from the 14 seeds): 78 434 executions, clean, peak RSS 1.1 GB. The run before it, on 1 November 2026: 5 510 executions, no crash, peak
 RSS 841 MB.

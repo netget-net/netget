@@ -8,4 +8,5 @@ pub mod inflation_bound_test;
 pub mod legacy_nesting_test;
 pub mod peer_inject_test;
 pub mod real_client_test;
+pub mod request_bounds_test;
 pub mod topic_id_cache_test;
