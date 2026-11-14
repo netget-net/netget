@@ -203,4 +203,4 @@ was dissected. The other peers' sessions (node `ws`, websocat) are not captured.
 `parse_request_head`, `validate_upgrade`, `deflate::negotiate`, then `DeflateStream` under
 tungstenite's server-role decoder on an in-memory socket. WebSocket does not nest; the corpus
 carries a 64 MiB decompression bomb in one frame, a frame declaring 2^63 - 1 bytes and a
-20 000-fragment message. run 120 s clean on 1 November 2026 (unoptimised, `-s none`, macOS): 3 986 executions, no crash.
+20 000-fragment message. Rebuilt and run 300 s clean on 13 November 2026 (`-s none`, macOS, from the 11 seeds): 150 963 executions, no crash, peak RSS 215 MB.

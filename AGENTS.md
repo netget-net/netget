@@ -146,11 +146,11 @@ netget --mcp   # then call list_protocols / get_protocol_docs
 
 Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/protocol/metadata.rs`):
 
-- **Stable** — **seven as of 8 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot` and
-  `doh`.** Before
+- **Stable** — **nine as of 13 November 2026: `coap`, `dns`, `modbus`, `smb`, `redis`, `dot`,
+  `doh`, `websocket` and `mqtt`.** Before
   16 September 2026 there were none, and three protocols had held the rating and lost it, each
   for the same reason: nobody had said what it required, so "Stable" meant whoever set it felt
-  good about the code. The bar below is what replaced that, and these seven are the ones
+  good about the code. The bar below is what replaced that, and these nine are the ones
   measured against it rather than against a feeling. Each carries its own justification in
   `metadata()` — read `e2e_testing` and `notes` there, and the "Maturity: the six conditions"
   section at the foot of each `src/server/<p>/CLAUDE.md`, before quoting any of the ratings:
@@ -252,8 +252,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   1 November 2026): it has a fuzz target (`fuzz_targets/bson_document.rs`) and no pcap-oracle
   test. Seven that were in this list held conditions 1, 2, 3 and 6 that day, which left each
   of them at most conditions 4 and 5 — a test per declared bound, and both `AGENTS.md` files
-  re-verified — from Stable; `dot` and `doh` have since been measured (below), the other five
-  have not:
+  re-verified — from Stable; `dot`, `doh`, `websocket`, `mqtt` and `kafka` have since been
+  measured (below), `etcd` and `postgresql` have not:
 
   - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
     `tests/helpers/recording_relay.rs` and the oracle reads what crossed (etcdctl's six
@@ -263,6 +263,17 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
     too — without it the fuzz workspace would build crates.io's panicking pgwire) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
+    **`websocket` went Stable on 13 November 2026.** Condition 1 had been true of a sample:
+    the third-party clients covered a greeting, one echo and deflate's data messages, and Ping,
+    both directions of the closing handshake, subprotocols and refusal were asserted only by a
+    hand-written client; Python websockets, Node ws and websocat now drive every verb
+    (`tests/server/websocket/real_client_test.rs`). Condition 4 found four defects:
+    `wait_for_websocket_data` joining without limit (and losing a held message), a compressed
+    frame not held to `max_frame_size`, no close frame for a frame or message tungstenite
+    refused (now 1009/1002/1007), and a request head checked only when a read did not complete
+    it. A backpressure bound on the inbound queue was written and dropped: its tests passed
+    with it removed, because the server already stops reading a few MB in while a handler is
+    busy — for a reason not yet identified.
   - `doh` and `dot` gained the oracle, **decrypted**: kdig writes `SSLKEYLOGFILE`, the oracle
     hands it to tshark (`PcapOracle::tls_keylog`) and `require_named("dns")` fails unless the
     DNS inside the TLS was dissected, so a TLS oracle cannot pass on the record layer alone.
@@ -290,6 +301,21 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   - `mqtt` and `kafka` had the oracle and gained `mqtt_packet` and `kafka_request`. Writing the
     Kafka one found that `kafka-protocol`'s gzip, zstd and lz4 decompressors have no output
     bound — a 64 KiB Produce batch inflated to 64 MiB — now `MAX_INFLATED_PRODUCE_BYTES`.
+    **`mqtt` went Stable on 13 November 2026.** No 3.1.1 client had sent a QoS 1 or 2
+    PUBLISH, an UNSUBSCRIBE or a PINGREQ; driving them with Mosquitto and rumqttc found the
+    broker **ignoring the client's PUBREC** for its own QoS 2 PUBLISH, so a QoS 2 subscriber
+    never received anything sent to it at QoS 2. Conditions 4 and 5 found `max_packet_size`
+    counting a different number from the one the v5 CONNACK advertises, a second connection
+    with a connected client id **not closing the first** (and a refused CONNECT erasing the
+    first's routing entry), and the codec accepting a dozen things the specification says a
+    broker MUST refuse (`tests/server/mqtt/protocol_rules_test.rs`).
+    **`kafka` stays Beta** (13 November 2026): no third-party client sends OffsetCommit, which
+    the broker implements — kcat, the Java client and franz-go all look up a coordinator
+    first. The same pass found the `kafka-protocol` legacy-message recursion the fork's notes
+    called "still open" reachable from one unauthenticated Produce v0–2 request — a stack
+    overflow that killed the process — and the fuzz target's header claiming Kafka requests do
+    not nest; compressed legacy wrappers are refused before the decoder now, and the corpus
+    carries the 20 000-level bomb.
 
   `grpc` was in this list as a two-client Beta and is no longer one: its expanded streaming
   scope is Experimental. It gained the oracle (grpcurl's success and error calls) and
@@ -323,7 +349,8 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   is *also* the definition of Beta, so the same evidence ruled Beta out and nobody noticed for
   months. It is now Experimental. When you demote for missing evidence, check which ratings that
   evidence actually supports rather than stepping down one notch by reflex.
-- **Beta** — human-reviewed, works against real clients (68 servers as of 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
+- **Beta** — human-reviewed, works against real clients (66 servers as of 13 November 2026, after
+  `websocket` and `mqtt` went to Stable; 68 on 8 November 2026, after `smtp`, `pop3`, `tftp`, `ftp` and `doq` went to Beta and `dot` and `doh` to Stable, and 65 on 6 November after `redis` went to Stable and `profinet` and `mercurial` to Beta;
   re-derive, the count drifts every pass — `python3 scripts/beta_evidence_table.py --check`
   prints it). The 31 October review promoted six whose evidence was already there and already
   green in their protocol-pairs.yml jobs: `kerberos` (MIT and Heimdal kinit/kvno/kgetcred),

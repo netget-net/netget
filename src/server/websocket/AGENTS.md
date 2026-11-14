@@ -444,7 +444,7 @@ claimed.
 |---|---|---|
 | 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — Python `websockets` and Node `ws` each drive every verb in `real_client_test.rs`; `websocat` (rust-websocket) a subset; none is tungstenite, each fails rather than skips without its peer |
 | 2 | the pcap oracle is green over its wire traffic | **yes** — every session of all three clients, and the deflate session, crosses `recording_relay`; tshark's `websocket` dissector must read each upgraded one (`http` the refused one) |
-| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — FUZZ_WS |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes, as of this pass** — `websocket_session`, rebuilt this pass (nightly-2025-12-04, `-s none`, release with debug info, the `-undefined,dynamic_lookup` link flag, the fuzz lockfile seeded from the root) and run `-max_total_time=300 -timeout=25 -rss_limit_mb=4096` from the 11 committed seeds — the 64 MiB inflation bomb, a 2^63-1 frame and a 20 000-fragment message among them: 150 963 inputs in 301 s, clean, peak RSS 215 MB; the corpus grew to 756 (kept out of the tree). WebSocket does not nest; the bombs are the size and fragment ones |
 | 4 | every declared bound has a test | **yes, as of this pass** — the "Connection bounds" table, each bound on both sides of its number, verified by removal |
 | 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/websocket/AGENTS.md` |
 | 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/websocket/` is empty |

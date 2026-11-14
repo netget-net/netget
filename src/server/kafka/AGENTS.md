@@ -453,3 +453,23 @@ TFTP evicted live transfers because "idle" was measured wrongly.
 `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound is removed;
 `tests/accept_bounded_test.rs` drives the shared helper, including the guarantee that a busy
 connection is never reported as idle.
+
+## Maturity: the six conditions
+
+Measured on 13 November 2026 against the root `AGENTS.md`'s Stable bar. **Kafka stays Beta**:
+condition 1 fails for one of the five APIs this broker implements, and condition 4 was not
+completed in this pass.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **no** — ApiVersions, Metadata, Produce and Fetch are driven by kcat (librdkafka), the Java client and franz-go; **OffsetCommit by none**: every one of them looks up a group coordinator first, and FindCoordinator is not implemented. kafka-python with `api_version=(0, 8, 1)` sends OffsetCommit v0 to any broker and would be one client; no second is known. Also undriven by any client: compressed Produce batches (kcat `-z` would drive them) and `acks=0` |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — `e2e_test.rs`'s oracle; the third-party sessions are not recorded |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes, as of this pass** — `kafka_request`, whose corpus now carries the legacy nesting bomb this pass found; see the tests' `AGENTS.md` |
+| 4 | every declared bound has a test | **not established** — the inflation, record, topic-id and topic-name bounds have tests on both sides; `MAX_UNITS_PER_REQUEST`, `MAX_PARTITIONS`, `MAX_RECORDS_PER_FETCH` and `MAX_FETCH_PAYLOAD_BYTES` were not re-measured in this pass |
+| 5 | both `AGENTS.md` files verified against source in this pass | **partly** — the status line and the legacy-decoder section were corrected; the rest was not re-read line by line |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `NETGET_KAFKA_PEERS` and kcat are mandatory |
+
+What this pass found is the reason the measurement is worth repeating before a promotion: the
+decoder's "still open" legacy recursion was not open in theory but reachable from one
+unauthenticated Produce request, and the fuzz target's own header said Kafka requests do not
+nest.
