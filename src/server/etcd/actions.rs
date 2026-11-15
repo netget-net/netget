@@ -119,7 +119,7 @@ pub static ETCD_PUT_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             required: false,
         },
         Parameter {
-            name: "prev_kv".to_string(),
+            name: "wants_prev_kv".to_string(),
             type_hint: "boolean".to_string(),
             description: "The client asked for the key's previous value: answer with prev_kv \
                           (omit it when the key did not exist)"
@@ -165,7 +165,7 @@ pub static ETCD_DELETE_REQUEST_EVENT: LazyLock<EventType> = LazyLock::new(|| {
             required: false,
         },
         Parameter {
-            name: "prev_kv".to_string(),
+            name: "wants_prev_kv".to_string(),
             type_hint: "boolean".to_string(),
             description: "The client asked for the deleted pairs: answer with prev_kvs".to_string(),
             required: false,
@@ -295,7 +295,7 @@ fn etcd_put_response_action() -> ActionDefinition {
             Parameter {
                 name: "prev_kv".to_string(),
                 type_hint: "object".to_string(),
-                description: "Only when the request had prev_kv: the key's previous pair \
+                description: "Only when the request had wants_prev_kv: the key's previous pair \
                               ('key', 'value', 'create_revision', 'mod_revision', 'version', \
                               'lease'). Omit it when the key did not exist."
                     .to_string(),
@@ -328,7 +328,8 @@ fn etcd_delete_range_response_action() -> ActionDefinition {
             Parameter {
                 name: "prev_kvs".to_string(),
                 type_hint: "array".to_string(),
-                description: "Only when the request had prev_kv: the deleted pairs".to_string(),
+                description: "Only when the request had wants_prev_kv: the deleted pairs"
+                    .to_string(),
                 required: false,
             },
         ],

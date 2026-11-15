@@ -709,13 +709,13 @@ fn txn_op_json(
             "key": String::from_utf8_lossy(&p.key),
             "value": String::from_utf8_lossy(&p.value),
             "lease": p.lease,
-            "prev_kv": p.prev_kv,
+            "wants_prev_kv": p.prev_kv,
         })),
         Some(Op::RequestDeleteRange(d)) => Ok(serde_json::json!({
             "op": "delete_range",
             "key": String::from_utf8_lossy(&d.key),
             "range_end": range_end_json(&d.range_end),
-            "prev_kv": d.prev_kv,
+            "wants_prev_kv": d.prev_kv,
         })),
         // A nested Txn's reply is itself a TxnResponse with its own branch and responses; the
         // action vocabulary has no way to say one, so it is refused rather than half-answered.
@@ -1339,7 +1339,7 @@ impl EtcdServer {
                 "key": key_str,
                 "value": value_str,
                 "lease": request.lease,
-                "prev_kv": request.prev_kv,
+                "wants_prev_kv": request.prev_kv,
                 "ignore_value": request.ignore_value,
                 "ignore_lease": request.ignore_lease,
             }),
@@ -1462,7 +1462,7 @@ impl EtcdServer {
             serde_json::json!({
                 "key": key_str,
                 "range_end": range_end_json(&request.range_end),
-                "prev_kv": request.prev_kv,
+                "wants_prev_kv": request.prev_kv,
             }),
         );
 

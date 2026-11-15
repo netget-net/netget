@@ -47,10 +47,12 @@ Routed methods, all of `etcdserverpb.KV`:
 | gRPC method | Event | Handler decides |
 |---|---|---|
 | `Range` | `etcd_range_request` | the key-value pairs returned (and the previous pair, sorting and point-in-time reads are described to it when asked for) |
-| `Put` | `etcd_put_request` | the revision (optional), and the previous pair when `prev_kv` is asked for |
-| `DeleteRange` | `etcd_delete_request` | how many keys were deleted, and the deleted pairs when `prev_kv` is asked for |
+| `Put` | `etcd_put_request` | the revision (optional), and the previous pair (`prev_kv`) when the event's `wants_prev_kv` is true |
+| `DeleteRange` | `etcd_delete_request` | how many keys were deleted, and the deleted pairs (`prev_kvs`) when the event's `wants_prev_kv` is true |
 | `Txn` | `etcd_txn_request` | which branch ran, and the result of each operation in it |
 | `Compact` | — | nothing: the revisions are the server's own, so it answers from them |
+
+The request's `prev_kv` flag reaches the model as `wants_prev_kv` (on `etcd_put_request`, `etcd_delete_request` and each Txn operation), because the answer's `prev_kv` is the pair itself: one name with two types told the model to copy the boolean into the reply (`tests/parameter_type_agreement_test.rs`).
 
 ### What the server applies itself
 

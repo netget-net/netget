@@ -328,7 +328,7 @@ fn etcdctl_rest_of_the_surface() -> NetGetConfig {
                 // put --prev-kv: the previous pair comes from the handler.
                 .on_event("etcd_put_request")
                 .respond_with_actions_from_event(|e| {
-                    if e["prev_kv"] == json!(true) {
+                    if e["wants_prev_kv"] == json!(true) {
                         json!([{"type": "etcd_put_response",
                                 "prev_kv": kv("/config/database", "localhost:5432", 1)}])
                     } else {
@@ -354,7 +354,7 @@ fn etcdctl_rest_of_the_surface() -> NetGetConfig {
                 .and()
                 .on_event("etcd_delete_request")
                 .respond_with_actions_from_event(|e| {
-                    let prev_kvs = if e["prev_kv"] == json!(true) {
+                    let prev_kvs = if e["wants_prev_kv"] == json!(true) {
                         json!([kv("/config/a", "1", 2)])
                     } else {
                         json!([])
