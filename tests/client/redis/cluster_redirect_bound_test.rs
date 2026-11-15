@@ -75,30 +75,48 @@ async fn redirections_stop_at_the_bound() {
         .set_llm_client(netget::llm::OllamaClient::new(mock.base_url()))
         .await;
 
-    // Two free ports, then two servers that each say the slot is the other's.
+    // Two free ports, then two servers that each say the slot is the other's. Each topology
+    // names the other's port, so both are chosen before either server binds; a port taken in
+    // between by another test is retried with a fresh pair rather than failing the run.
     let slot = key_hash_slot(b"loop");
     let mut ports = Vec::new();
-    {
-        let a = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let b = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        ports.push(a.local_addr().unwrap().port());
-        ports.push(b.local_addr().unwrap().port());
-    }
-    for (me, other) in [(ports[0], ports[1]), (ports[1], ports[0])] {
-        let (tx, _) = mpsc::unbounded_channel();
-        let id = ServerForm {
-            protocol: "redis".into(),
-            port: Some(me),
-            host: Some("127.0.0.1".into()),
-            instruction: Some(String::new()),
-            startup_params: Some(json!({"cluster_nodes": split_topology(me, other, slot)})),
-            event_handlers: Some(vec![json!({"event_pattern":"*","handler":{"type":"static","actions":[{"type":"redis_simple_string","value":"OK"}]}})]),
-            ..Default::default()
+    'pair: for attempt in 0..10 {
+        ports.clear();
+        {
+            let a = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let b = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            ports.push(a.local_addr().unwrap().port());
+            ports.push(b.local_addr().unwrap().port());
         }
-        .create(&state, tx)
-        .await
-        .unwrap();
-        assert_eq!(port_of(&state, id).await, me);
+        let mut started = Vec::new();
+        for (me, other) in [(ports[0], ports[1]), (ports[1], ports[0])] {
+            let (tx, _) = mpsc::unbounded_channel();
+            let created = ServerForm {
+                protocol: "redis".into(),
+                port: Some(me),
+                host: Some("127.0.0.1".into()),
+                instruction: Some(String::new()),
+                startup_params: Some(json!({"cluster_nodes": split_topology(me, other, slot)})),
+                event_handlers: Some(vec![json!({"event_pattern":"*","handler":{"type":"static","actions":[{"type":"redis_simple_string","value":"OK"}]}})]),
+                ..Default::default()
+            }
+            .create(&state, tx)
+            .await;
+            match created {
+                Ok(id) => {
+                    assert_eq!(port_of(&state, id).await, me);
+                    started.push(id);
+                }
+                Err(e) if attempt < 9 && e.to_string().contains("already in use") => {
+                    for id in started {
+                        let _ = state.remove_server(id).await;
+                    }
+                    continue 'pair;
+                }
+                Err(e) => panic!("start redis server on {me}: {e}"),
+            }
+        }
+        break;
     }
 
     let (tx, _rx) = mpsc::unbounded_channel();
