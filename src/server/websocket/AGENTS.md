@@ -109,7 +109,9 @@ greeting ahead of every reply, and it means a `*` rule covers the opened event t
 `*` → `manual` (the dashboard's default) or a slow script, the connection reads nothing — not a
 Ping, not a Close — until the opened event is answered or its rule times out. A rule of its own
 for `websocket_connection_opened` (a zero-action `static` one, if there is nothing to say) keeps
-it out of the way.
+it out of the way. The event is declared `.raised_on_every_connection()`, so the dashboard puts
+exactly that rule ahead of its manual wildcard: a person accepts the handshake and is not asked
+about the same connection again (`tests/server/websocket/dashboard_routing_test.rs`).
 
 The reason is measured. Asked on a separate `websocket_connection_opened`, the model greeted every
 connection whatever the instructions said — an echo server sent "Hello, Client!" five runs in

@@ -1525,6 +1525,7 @@ pub static WEBSOCKET_CONNECTION_OPENED_EVENT: LazyLock<EventType> = LazyLock::ne
          which.",
         json!({"type": "send_websocket_text", "text": "<the greeting your instructions give>"}),
     )
+    .raised_on_every_connection()
     .with_parameters(vec![
         Parameter {
             name: "path".to_string(),

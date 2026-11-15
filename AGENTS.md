@@ -1245,7 +1245,7 @@ async actions (user-triggered) and sync actions (network-event-triggered), in
    in `connect()`, so parking it would stall creation itself. Everything after the connect
    handshake still falls through to `*` → manual. **Servers get the same treatment for the events
    they raise on every connection** — `EventType::raised_on_every_connection()`, today
-   `telnet_connection_opened` — one zero-action static rule each, then `*` → manual. Without the
+   `telnet_connection_opened` and `websocket_connection_opened` — one zero-action static rule each, then `*` → manual. Without the
    rule a person would be asked about every connection before its first message. `tcp` and
    `tls` raise their connect event only with `send_first`: raising it everywhere was measured to
    cost a model call per connection and to make a small model greet clients nobody asked it to.

@@ -105,6 +105,7 @@ the 16 385-byte head is upgraded.
 | `connection_bounds_test::an_upgraded_peer_that_never_answers_the_keepalive_is_closed_with_1001` | a raw peer that never writes after the upgrade is sent the `netget-keepalive` Ping, then Close 1001, then EOF, at `idle_timeout_secs` (2s here) | 0 |
 | `connection_bounds_test::a_client_that_only_answers_pings_is_not_closed` | a tokio-tungstenite client that sends nothing but its automatic Pongs is kept for five idle bounds and pinged at least twice | 0 |
 | `connection_bounds_test::a_message_parked_for_a_human_keeps_its_connection` | a text message routed to `manual` keeps its connection for four idle bounds, and the busy connection is sent nothing — no Ping, no Close | 0 |
+| `dashboard_routing_test::a_dashboard_websocket_reads_frames_once_the_handshake_is_accepted` | under the dashboard's own routing (`default_event_handlers`), a person accepts the parked handshake and a Ping is then answered with a Pong: `websocket_connection_opened` has the zero-action rule `raised_on_every_connection()` earns it, so it does not park | 0 |
 
 The three idle tests were verified by removal: with the watchdog arm disabled the first two
 fail; with the keepalive Ping removed a live client is closed; with the `busy()` guards removed
