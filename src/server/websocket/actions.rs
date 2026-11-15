@@ -676,7 +676,8 @@ impl Protocol for WebSocketProtocol {
                 type_hint: "integer".to_string(),
                 description:
                     "Largest reassembled message accepted from a client, in bytes (default \
-                     1048576, maximum 67108864). A larger message fails the connection."
+                     1048576, minimum 125, maximum 67108864), after permessage-deflate \
+                     inflation. A larger message closes the connection with 1009."
                         .to_string(),
                 required: false,
                 example: json!(1048576),
@@ -686,13 +687,25 @@ impl Protocol for WebSocketProtocol {
                 name: "max_frame_size".to_string(),
                 type_hint: "integer".to_string(),
                 description:
-                    "Largest single frame accepted from a client, in bytes (default 1048576, \
-                     maximum 67108864). Fragmented messages are reassembled up to \
+                    "Largest single frame accepted from a client, in bytes, compressed or not \
+                     (default 1048576, minimum 125, maximum 67108864). A larger frame closes the \
+                     connection with 1009. Fragmented messages are reassembled up to \
                      max_message_size."
                         .to_string(),
                 required: false,
                 example: json!(1048576),
                 default: Some(serde_json::json!(super::DEFAULT_MAX_FRAME_SIZE)),
+            },
+            ParameterDefinition {
+                name: "handshake_timeout_secs".to_string(),
+                type_hint: "integer".to_string(),
+                description:
+                    "Seconds a client has, from connecting, to send its whole HTTP upgrade \
+                     request (default 15). Past it the server answers 408 and closes."
+                        .to_string(),
+                required: false,
+                example: json!(15),
+                default: Some(serde_json::json!(super::HANDSHAKE_TIMEOUT.as_secs())),
             },
             ParameterDefinition {
                 name: "idle_timeout_secs".to_string(),
@@ -779,13 +792,14 @@ impl Protocol for WebSocketProtocol {
         };
 
         ProtocolMetadataV2::builder()
-            .state(DevelopmentState::Beta)
+            .state(DevelopmentState::Stable)
             .privilege_requirement(PrivilegeRequirement::None)
             .implementation(
                 "Hand-written RFC 6455 HTTP Upgrade handshake (Sec-WebSocket-Accept via \
                  tungstenite's derive_accept_key) handed to tokio-tungstenite 0.21 \
                  WebSocketStream::from_partially_read for framing, masking, fragmentation \
-                 reassembly, automatic pong and the close handshake",
+                 reassembly, automatic pong and the close handshake; RFC 7692 \
+                 permessage-deflate beneath it in websocket/deflate.rs",
             )
             .llm_control(
                 "Whether an upgrade is accepted and with which Sec-WebSocket-Protocol \
@@ -793,40 +807,39 @@ impl Protocol for WebSocketProtocol {
                  reason, plus unprompted pushes to any named open connection or a broadcast",
             )
             .e2e_testing(
-                "Two peers, neither of them this repository. (1) websocat 1.14.1, in \
-                 tests/server/websocket/e2e_test.rs::test_websocket_with_websocat, completes a \
-                 handshake, receives an unprompted server greeting and gets its own message \
-                 echoed back. websocat links websocket-0.27.1 / websocket-base-0.26.5 \
-                 (rust-websocket), NOT tungstenite — read out of the installed binary's \
-                 embedded crate paths — so it is a genuinely independent RFC 6455 \
-                 implementation and not the circular case of the peer being the same crate \
-                 this server frames with. That test is not #[ignore]d and FAILS rather than \
-                 skips when websocat is absent; until September 2026 it printed \
-                 \"skipping: websocat is not installed\" and returned Ok(()), a silent pass, \
-                 which is what held this at Experimental. (2) A raw RFC 6455 client \
-                 hand-written in the same file recomputes Sec-WebSocket-Accept from §4.2.2, \
-                 masks its own frames per §5.3 and parses ours byte by byte, asserting that \
-                 the server never masks (§5.1) and that close frames carry a big-endian \
-                 status code (§5.5). (3) RFC 7692 permessage-deflate against Python \
-                 websockets 15 and Node ws 8 (tests/server/websocket/\
-                 deflate_real_client_test.rs): a relay shows every frame NetGet sent had RSV1 \
-                 set and shrank, ws negotiates a 10-bit window with no context takeover, and a \
-                 compressed frame that inflates past max_message_size is refused while \
-                 inflating (1009). Untested: wss:// and any browser. PCAP ORACLE: deflate_real_client_test.rs runs Python websockets through a recording relay and tshark's http/websocket dissectors read the upgrade and every compressed frame. FUZZ: fuzz/fuzz_targets/websocket_session.rs (head parser, deflate::negotiate, DeflateStream under tungstenite; a 64 MiB inflation bomb).",
+                "STABLE, November 2026, on the six conditions; see 'Maturity: the six \
+                 conditions' in src/server/websocket/AGENTS.md. (1) THREE independent clients, \
+                 none of them tungstenite and none able to skip: \
+                 tests/server/websocket/real_client_test.rs drives Python websockets 15 and Node \
+                 ws 8 through every verb (subprotocol agreement, the handshake's greeting, \
+                 multi-byte UTF-8 text, non-UTF-8 binary byte for byte, a two-frame message, a \
+                 client Ping and its Pong, the server's keepalive Ping across an idle bound, a \
+                 server close with the handler's code, a client close echoed, a 403 refusal) and \
+                 websocat 1.14.1 (rust-websocket) through subprotocol, text, binary, Pings and a \
+                 coded close; deflate_real_client_test.rs drives permessage-deflate with Python \
+                 websockets and Node ws (10-bit window, no context takeover). (2) PCAP ORACLE: \
+                 every one of those sessions crosses recording_relay and tshark's http and \
+                 websocket dissectors must read it (and inflate the compressed frames). (3) \
+                 FUZZ: fuzz/fuzz_targets/websocket_session.rs (head parser, deflate::negotiate, \
+                 DeflateStream under tungstenite), corpus with a 64 MiB inflation bomb, a 2^63-1 \
+                 frame and a 20 000-fragment message. (4) BOUNDS: limits_test.rs (head size and \
+                 time, frame and message limits compressed and not, the joined-message limit, \
+                 the 125-byte floor, the inbound backlog), connection_bounds_test.rs (cap, \
+                 idle), slow_reader_test.rs (outbox), each verified by removal. (6) No #[ignore] \
+                 and no skip gate. UNPROVEN: wss:// (not implemented), browsers, Autobahn.",
             )
             .notes(
-                "Validated against websocat 1.14.1 and curl 8.20.0 as real independent \
-                 clients: handshake, subprotocol negotiation, text frames, a binary frame \
-                 round-tripped byte-for-byte through base64, ping/pong and a close handshake \
-                 with a status code. RFC 7692 permessage-deflate is negotiated (on by default, \
-                 permessage_deflate: false turns it off) beneath tungstenite by \
-                 websocket/deflate.rs, honouring window sizes 9-15 and no-context-takeover; \
-                 handlers see plain text either way. Not implemented: TLS (wss:// — put a TLS \
-                 terminator in front) and every other extension. Pong frames from \
-                 the client are logged, not surfaced as an event, so a keepalive pong costs no \
-                 model call. Every connection costs two model calls before the first message \
-                 (websocket_handshake, then websocket_connection_opened); use script or static \
-                 handlers for deterministic endpoints.",
+                "RFC 7692 permessage-deflate is negotiated (on by default, permessage_deflate: \
+                 false turns it off), honouring window sizes 9-15 and no-context-takeover; \
+                 handlers see plain text either way. A frame or message over a limit is Close \
+                 1009, a protocol violation 1002, invalid UTF-8 1007; a request head over 16 KiB \
+                 is 431 and one unfinished at handshake_timeout_secs 408. While a handler is busy \
+                 the server stops reading once 1024 messages or 8 MiB are queued, so TCP holds a \
+                 fast peer back. Not implemented: TLS (wss:// — put a TLS terminator in front) and \
+                 every other extension. Pong frames from the client are logged, not surfaced as an \
+                 event, so a keepalive pong costs no model call. A connection costs one model call \
+                 before the first message (websocket_handshake, whose accept carries any \
+                 greeting); use script or static handlers for deterministic endpoints.",
             )
             .max_inbound_bytes(crate::server::websocket::MAX_SIZE_LIMIT)
             .history(crate::protocol::metadata::HistoryMode::Last(

@@ -7721,6 +7721,8 @@ jobs:
             mqtt::v5_real_client_test \
             mqtt::v5_wire_test \
             mqtt::real_client_test \
+            mqtt::qos_real_client_test \
+            mqtt::protocol_rules_test \
             mqtt::llm_failure_test \
             client/mqtt::v5_real_server_test \
             client/mqtt::real_server_test; do

@@ -1,16 +1,11 @@
 # Kafka Protocol Implementation
 
-## Status: EXPERIMENTAL
+## Status: Beta
 
-`DevelopmentState::Experimental` (`src/server/kafka/actions.rs`). It was `Incomplete` until
-this pass, for three disqualifying reasons that are all fixed: ApiVersions advertised an
-empty API list so no client could negotiate, every decode and encode was hardcoded to
-version 0 so every request body after `client_id` was garbage, and the LLM was never called
-so all nine actions and all four event types were dead.
-
-It is now Beta, and three independent clients complete against it: librdkafka (kcat), Apache
-Kafka's own Java client 3.9.1 and franz-go 1.18.1 — see [Testing](#testing) and "Flexible
-versions and topic ids" below.
+`DevelopmentState::Beta` (`src/server/kafka/actions.rs`). Three independent clients complete
+against it: librdkafka (kcat), Apache Kafka's own Java client 3.9.1 and franz-go 1.18.1 — see
+[Testing](#testing) and "Flexible versions and topic ids" below. "Maturity: the six conditions"
+at the foot of this file says which of the Stable conditions hold and which do not.
 
 ## Supported surface — this is the whole of it
 
@@ -43,10 +38,10 @@ a forgotten id costs a client one `UNKNOWN_TOPIC_ID` and a metadata refresh. The
 from the model, so a topic named over Kafka's own 249-byte limit (`MAX_TOPIC_NAME_LEN`) is
 left out of the Metadata answer and never remembered; if the client asked for it, it is
 answered `UNKNOWN_TOPIC_OR_PARTITION` like any topic the model did not describe. An id it
-never reported is `UNKNOWN_TOPIC_ID` (100), and the handler is not asked. The produce, fetch and offset-commit events carry `api_version`.
+never reported is `UNKNOWN_TOPIC_ID` (100), and the handler is not asked. All four events (metadata, produce, fetch, offset commit) carry `api_version`.
 
-Which client speaks what, measured: librdkafka 2.3 (kcat) negotiates Metadata v12, Produce
-v7 and Fetch v11; Apache Kafka's Java client and franz-go both take Metadata v12, Produce
+Which client speaks what, measured by hand (no test asserts the versions): librdkafka 2.3
+(Ubuntu's kcat) negotiates Metadata v12, Produce v7 and Fetch v11; Apache Kafka's Java client and franz-go both take Metadata v12, Produce
 v11 and Fetch v16. Wireshark 4.2's dissector stops at Metadata v9, Produce v8, Fetch v11
 and OffsetCommit v8 and warns on an ApiVersions response advertising more, which the
 pcap-oracle test allows by name.
@@ -88,9 +83,11 @@ eight bytes, before any decode. Then:
 - response header ← `ApiKey::response_header_version(api_version)`
 - response body ← `api_version`
 
-Because `correlation_id` sits at a fixed offset in every request header version, the error
-paths echo it without having decoded a header. `correlation_id` is echoed on every path,
-including the ones that then close the connection.
+Because `correlation_id` sits at a fixed offset in every request header version, an
+ApiVersions request at a version this broker does not implement is answered (UNSUPPORTED_VERSION
+and the table, at v0) without its header being decoded. The other refusals before a body is
+decoded — an unknown API key, an unsupported version of any other API, a header that does not
+decode — close the connection and write nothing.
 
 ## LLM integration
 
@@ -174,7 +171,8 @@ pattern TCP settled on, the encoding is stated explicitly rather than sniffed:
 
 - **Inbound** (produce events): each record carries `key`/`value` plus `key_encoding`/
   `value_encoding`, which is `"utf8"` when the bytes were printable text and `"hex"`
-  otherwise. Values are truncated to 1 KiB and at most 20 records are described.
+  otherwise. Keys and values are truncated to `MAX_EVENT_VALUE_BYTES` (1 KiB; 512 source bytes when
+  hex-encoded) and at most `MAX_EVENT_RECORDS` (20) records are described.
 - **Outbound** (`fetch_response`): each record may carry `key_encoding`/`value_encoding`
   (or a single `encoding` for both), defaulting to `"utf8"`. `"hex"` **is** decoded —
   `decode_field` is the executor, so the documented encoding and the implementation agree.
@@ -207,8 +205,17 @@ Kept from the earlier audit and still enforced:
   `MIN_REQUEST_BYTES` (8) and `MAX_REQUEST_BYTES` (100 MiB) **in i64** before any
   allocation, so neither sign extension nor `4 + len` can wrap. The read buffer only ever
   grows.
-- Partition indices outside `0..=MAX_PARTITIONS` (1024) are rejected with error 3, on both
-  the produce path and the metadata path.
+- Partition indices outside `0..=MAX_PARTITIONS` (1024, inclusive) are answered error 3
+  without asking the model on the produce and fetch paths; a partition the model names outside
+  it in a `metadata_response` is dropped with a WARN. OffsetCommit does not check the index.
+  `request_bounds_test.rs` holds 1024, 1025 and -1 on the produce path.
+- At most `MAX_UNITS_PER_REQUEST` (64) topic-partitions of one Produce, Fetch or OffsetCommit
+  reach the model; the rest are answered UNKNOWN_SERVER_ERROR (-1) unasked. A Fetch answer is
+  cut at `MAX_RECORDS_PER_FETCH` (1000) records and at `MAX_FETCH_PAYLOAD_BYTES` (8 MiB) of
+  key and value bytes — the record that would cross it and every one after are not sent.
+  `request_bounds_test.rs` holds the unit bound (on the produce path) and the record bound on
+  both sides. The payload bound has no test: a script's stdout and a static rule are each
+  bounded at 8 MiB of JSON first, so only a model's or an operator's answer can reach it.
 - TRACE hex dumps capped at `MAX_TRACE_HEX_BYTES` (4 KiB) in both directions.
 - Accept loop breaks on error instead of spinning.
 - Connections are closed through `AppState::close_connection_on_server` when their task ends,
@@ -259,8 +266,16 @@ Produce request carrying the 61-byte batch to a running broker and decodes each 
 beside a well-formed control. The reproduction is one `sed` away: removing the array bound
 makes the ratchet's decode test die with `memory allocation of 154618822584 bytes failed`.
 
-**Still open in the decoder:** legacy (magic 0/1)
-nested compressed messages recurse with no depth bound. See `README.netget.md`.
+**Legacy (magic 0/1) compressed messages are refused before the decoder.** `kafka-protocol`
+decodes a compressed legacy wrapper by recursing into its value once per nested wrapper with no
+depth counter — and without inflating anything: it reads the compressed bytes as if they were a
+message set. A Produce v0–2 request of nested "compressed" wrappers, 34 bytes and a correct
+CRC-32 a level, is therefore a stack overflow that kills the process (a `SIGSEGV`, not a
+panic). `declared_records` refuses any compressed legacy wrapper while it walks the batches, so
+the recursion is never reached, and the partition is answered UNSUPPORTED_COMPRESSION_TYPE (76),
+logged `decision=protocol_error`. Uncompressed legacy messages decode as before.
+`tests/server/kafka/legacy_nesting_test.rs` sends the fuzz corpus's 20 000-level bomb to a
+running broker; without the refusal the test binary dies of a stack overflow.
 
 ## Compression and `MAX_INFLATED_PRODUCE_BYTES`
 
@@ -332,9 +347,10 @@ it is answered `MESSAGE_TOO_LARGE`, logged `decision=refused_record_bound`.
 - **Refused before anything is allocated.** `declared_records` walks the partition's batches
   by their length fields and reads each v2 batch's `recordsCount` (header offset 57) before the
   batch is copied, inflated or decoded; a v2 batch decodes to exactly that many records or
-  fails, so the declared count is the decoded count. A legacy (magic 0/1) message counts as one
-  there, because a compressed legacy wrapper does not say what it holds, and the records that
-  come out are counted again after decoding.
+  fails, so the declared count is the decoded count. An uncompressed legacy (magic 0/1) message
+  counts as one; a compressed legacy wrapper is refused UNSUPPORTED_COMPRESSION_TYPE (76)
+  before anything decodes it (see "legacy" below), and the records that come out are counted
+  again after decoding.
 - **A count the batch cannot hold is corrupt, not too large.** A v2 record takes at least 7
   bytes, so an uncompressed batch holds at most its record bytes over 7, and a compressed one at
   most what is left of the inflation budget over 7. A batch declaring more is answered
@@ -358,16 +374,14 @@ it is answered `MESSAGE_TOO_LARGE`, logged `decision=refused_record_bound`.
 
 ## Testing
 
-`tests/server/kafka/e2e_test.rs`, 2 tests, ~1-2 s, 7 LLM calls.
-
-There is no usable pure-Rust Kafka client here (`rdkafka` was removed for malloc aborts;
-adding a dev-dependency would mean editing `Cargo.toml`), so the tests build requests and
-decode responses with `kafka-protocol`'s **client-side** codecs — the opposite direction
-from this module's encoders — reached through the `pub use kafka_protocol;` re-export in
-`mod.rs`. That validates NetGet's framing, version negotiation, dispatch, event emission
-and action handling against schemas generated from Apache Kafka's own message definitions.
-It does **not** validate those schemas, and it is not a substitute for driving a real
-client. See `tests/server/kafka/AGENTS.md`.
+`tests/server/kafka/AGENTS.md` has every file. The third-party clients are kcat
+(librdkafka, `real_client_test.rs`) and Apache Kafka's Java client and franz-go
+(`flexible_versions_test.rs`), each failing rather than skipping without its peer. The rest
+build requests and decode responses with `kafka-protocol`'s **client-side** codecs, reached
+through the `pub use kafka_protocol;` re-export in `mod.rs`: `e2e_test.rs` (the mocked
+round trip and the pcap oracle) and the bound and hardening tests (`request_bounds_test.rs`,
+`inflation_bound_test.rs`, `legacy_nesting_test.rs`, `declared_array_length_test.rs`,
+`topic_id_cache_test.rs`, `connection_task_cleanup_test.rs`, `peer_inject_test.rs`).
 
 ## Dashboard injection (peer handle)
 
@@ -404,22 +418,24 @@ the connection.
 
 `tests/server/kafka/peer_inject_test.rs` proves all of it with zero LLM calls.
 
-## Route to Beta
+## Route to Stable
 
-1. Drive it with a real client (librdkafka via a scratch binary, or the Java console
-   producer/consumer) and fix what breaks.
-2. Add `ListOffsets` so `auto.offset.reset` resolves; that alone makes a normal
+The six conditions at the foot of this file say what is missing; the work that would most
+widen what real clients can do:
+
+1. Add `ListOffsets` so `auto.offset.reset` resolves; that alone makes a normal
    assign-based consumer work out of the box.
-3. Add `FindCoordinator` + `JoinGroup` + `SyncGroup` + `Heartbeat` + `OffsetFetch` if
+2. Add `FindCoordinator` + `JoinGroup` + `SyncGroup` + `Heartbeat` + `OffsetFetch` if
    consumer groups are wanted. This is the large one, and it needs the model to hold group
-   state across requests — server memory rather than Rust storage.
-4. ~~Raise the version ceilings past the flexible boundary~~ — done: Metadata v12, Produce
+   state across requests — server memory rather than Rust storage. `FindCoordinator` alone
+   would let kcat, the Java client and franz-go send the OffsetCommit no client sends today.
+3. ~~Raise the version ceilings past the flexible boundary~~ — done: Metadata v12, Produce
    v11, Fetch v16 and OffsetCommit v9, topic ids derived from names (see above).
 
 ## References
 
 - [Apache Kafka Protocol Guide](https://kafka.apache.org/protocol)
-- [kafka-protocol Rust Crate](https://docs.rs/kafka-protocol/) — `Cargo.toml` pins 0.14
+- [kafka-protocol Rust Crate](https://docs.rs/kafka-protocol/) — `Cargo.toml` depends on NetGet's `netget-kafka-protocol` 0.14.1 fork
 - [Kafka Error Codes](https://kafka.apache.org/protocol.html#protocol_error_codes)
 - Testing notes: `tests/server/kafka/AGENTS.md`
 
@@ -439,7 +455,7 @@ more. It now declares both halves; the constants and the reasoning live beside t
 
 **NetGet's own Kafka client *speaks inside `connect()`*, so it is never the silent peer this
 bound closes:** `src/client/kafka/mod.rs` sends an `ApiVersions` frame and then a `Metadata`
-frame unconditionally before any model turn — `PROTOCOL_QUALITY.md`'s three-state test.
+frame unconditionally before any model turn — `docs/planning/PROTOCOL_QUALITY.md`'s three-state test.
 
 **The deadline covers the read and nothing else.** The deadline wraps the `read()` call in this protocol's own loop, and everything that can legitimately take minutes happens after it returns. Both the size-prefix read and the announced-body read are bounded, so a peer that declares a request size and then stalls is closed too. The LLM round-trip, and a `manual`
 rule parking an event for a human (`src/state/intercepts.rs`, 300s by default), are outside
@@ -450,3 +466,23 @@ TFTP evicted live transfers because "idle" was measured wrongly.
 `tests/tcp_server_bounds_ratchet_test.rs` fails the build if either bound is removed;
 `tests/accept_bounded_test.rs` drives the shared helper, including the guarantee that a busy
 connection is never reported as idle.
+
+## Maturity: the six conditions
+
+Measured on 13 November 2026 against the root `AGENTS.md`'s Stable bar. **Kafka stays Beta**:
+condition 1 fails for one of the five APIs this broker implements, and condition 4 for the
+connection deadlines and cap.
+
+| # | condition | holds? |
+|---|---|---|
+| 1 | two independent third-party clients, no skip, no `#[ignore]` | **no** — ApiVersions, Metadata, Produce and Fetch are driven by kcat (librdkafka), the Java client and franz-go; **OffsetCommit by none**: every one of them looks up a group coordinator first, and FindCoordinator is not implemented. kafka-python with `api_version=(0, 8, 1)` sends OffsetCommit v0 to any broker and would be one client; no second is known. Also undriven by any client: compressed Produce batches (kcat `-z` would drive them) and `acks=0` |
+| 2 | the pcap oracle is green over its wire traffic | **yes** — `e2e_test.rs`'s oracle; the third-party sessions are not recorded |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes, as of this pass** — `kafka_request`, whose corpus carries the legacy nesting bomb this pass found. Its first run found a `kafka-protocol` tagged-field defect the broker cannot reach (the target's header); with that exempted it ran 300 s clean on 13 November 2026 from the 14 seeds: 78 434 inputs, peak RSS 1.1 GB |
+| 4 | every declared bound has a test | **no** — the request, inflation, record-count, partition, unit, fetch-record, topic-id and topic-name bounds have tests on both sides (`request_bounds_test.rs`'s four verified by removal); the 30 s first-request and 600 s idle deadlines and the 256-connection cap have none beyond a source ratchet, and `MAX_FETCH_PAYLOAD_BYTES` none, since no script or static rule can reach it |
+| 5 | both `AGENTS.md` files verified against source in this pass | **yes** — both re-read claim by claim on 13 November 2026; the correlation-id, partition-bound, legacy-count, testing, route and version claims were corrected |
+| 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `NETGET_KAFKA_PEERS` and kcat are mandatory |
+
+What this pass found is the reason the measurement is worth repeating before a promotion: the
+decoder's "still open" legacy recursion was not open in theory but reachable from one
+unauthenticated Produce request, and the fuzz target's own header said Kafka requests do not
+nest.

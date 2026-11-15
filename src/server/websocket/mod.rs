@@ -65,11 +65,24 @@ use actions::{
     WEBSOCKET_PING_EVENT, WEBSOCKET_TEXT_MESSAGE_EVENT,
 };
 
-/// Largest HTTP request head accepted before the upgrade. Real handshakes are well under 2 KiB.
+/// Largest HTTP request head accepted before the upgrade, in bytes, not counting the blank line
+/// that ends it. Real handshakes are well under 2 KiB. A longer head is answered 431.
 pub const MAX_REQUEST_HEAD: usize = 16 * 1024;
 
-/// How long a client has to finish sending its request head after connecting.
-const HANDSHAKE_TIMEOUT_SECS: u64 = 15;
+/// How long a client has to finish sending its request head after connecting. Declared as the
+/// `handshake_timeout_secs` startup parameter; past it the peer is answered 408.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Inbound messages a connection may have waiting for its handler before the read loop stops
+/// reading. Handlers answer one message (or one batch) at a time while the frame loop keeps
+/// reading, so without this a peer that sends faster than the model answers grows the queue
+/// without limit — each entry up to `max_message_size`. At either limit the server stops
+/// reading the socket until the handler catches up, and TCP flow control holds the peer back:
+/// nothing is dropped and nothing is refused. The byte limit is checked before each read, so
+/// the queue holds at most this plus one message.
+pub const MAX_QUEUED_INBOUND_MESSAGES: usize = 1024;
+/// See [`MAX_QUEUED_INBOUND_MESSAGES`]: the bytes those messages may hold between them.
+pub const MAX_QUEUED_INBOUND_BYTES: usize = 8 * 1024 * 1024;
 
 pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 pub const DEFAULT_MAX_FRAME_SIZE: usize = 1024 * 1024;
@@ -108,7 +121,7 @@ pub const DEFAULT_PERMESSAGE_DEFLATE: bool = true;
 
 /// Concurrent connections this server admits before it starts refusing.
 ///
-/// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. [`HANDSHAKE_TIMEOUT_SECS`]
+/// [`crate::server::accept_bounded::DEFAULT_MAX_CONNECTIONS`]. [`HANDSHAKE_TIMEOUT`]
 /// bounds how long a peer can hold a slot before it has sent a request head, and
 /// [`IDLE_TIMEOUT`] how long an upgraded one can hold it without showing it is alive. Neither
 /// bounds how many there are at once; this does.
@@ -411,8 +424,10 @@ pub fn build_error_response(
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         426 => "Upgrade Required",
         429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
         505 => "HTTP Version Not Supported",
@@ -450,6 +465,14 @@ enum Inbound {
 }
 
 impl Inbound {
+    /// Payload bytes, for the backlog bound and the joined-message bound.
+    fn len(&self) -> usize {
+        match self {
+            Inbound::Text(t) => t.len(),
+            Inbound::Binary(b) | Inbound::Ping(b) => b.len(),
+        }
+    }
+
     /// Join two messages of the same kind into one, for the `Accumulating` state.
     fn merge(self, next: Inbound) -> std::result::Result<Inbound, (Inbound, Inbound)> {
         match (self, next) {
@@ -502,10 +525,50 @@ fn inbound_event(message: &Inbound, sub: &str) -> Event {
 
 struct ConnData {
     state: HandlerState,
-    /// Messages that arrived while the model was thinking.
+    /// Messages that arrived while the model was thinking, oldest first.
     queued: VecDeque<Inbound>,
-    /// A message the model deferred with `wait_for_websocket_data`.
-    pending: Option<Inbound>,
+    /// Messages the model deferred with `wait_for_websocket_data`, at most one per kind: each
+    /// is joined onto the next message of its kind.
+    held: Vec<Inbound>,
+}
+
+/// Why a message could not be held: joined, it would pass `max_message_size`.
+struct JoinedTooBig;
+
+impl ConnData {
+    /// Take the held message of `next`'s kind and join `next` onto it, or `next` alone.
+    fn join_held(
+        &mut self,
+        next: Inbound,
+        max_message: usize,
+    ) -> std::result::Result<Inbound, JoinedTooBig> {
+        let kind = std::mem::discriminant(&next);
+        let Some(i) = self
+            .held
+            .iter()
+            .position(|h| std::mem::discriminant(h) == kind)
+        else {
+            return Ok(next);
+        };
+        let held = self.held.swap_remove(i);
+        if held.len().saturating_add(next.len()) > max_message {
+            return Err(JoinedTooBig);
+        }
+        Ok(match held.merge(next) {
+            Ok(joined) => joined,
+            Err((_, next)) => next,
+        })
+    }
+
+    /// Whether the read loop must wait for the handler before reading another message: a
+    /// handler is running and the backlog is at [`MAX_QUEUED_INBOUND_MESSAGES`] or
+    /// [`MAX_QUEUED_INBOUND_BYTES`]. With no handler running the next message is what starts
+    /// one, so it is always read.
+    fn backlog_full(&self) -> bool {
+        self.state == HandlerState::Processing
+            && (self.queued.len() >= MAX_QUEUED_INBOUND_MESSAGES
+                || self.queued.iter().map(Inbound::len).sum::<usize>() >= MAX_QUEUED_INBOUND_BYTES)
+    }
 }
 
 /// Everything a message handler task needs; grouped so the task spawn stays readable.
@@ -518,6 +581,11 @@ struct ConnCtx {
     out_tx: crate::utils::outbox::OutboxSender<WsOut>,
     protocol: Arc<WebSocketProtocol>,
     data: Arc<Mutex<ConnData>>,
+    /// Signalled each time the handler takes messages off `data.queued`, which is what a read
+    /// loop waiting on a full backlog wakes for.
+    drained: tokio::sync::Notify,
+    /// `max_message_size`: also the bound on a message joined by `wait_for_websocket_data`.
+    max_message: usize,
     subprotocol: Option<String>,
 }
 
@@ -546,6 +614,14 @@ impl WebSocketServer {
                 .map_err(|e| anyhow::anyhow!("WebSocket startup parameter error: {e}"))?
                 .unwrap_or(DEFAULT_PERMESSAGE_DEFLATE),
             None => DEFAULT_PERMESSAGE_DEFLATE,
+        };
+        let handshake_timeout = match startup_params.as_ref() {
+            Some(params) => params
+                .get_optional_u64("handshake_timeout_secs")
+                .map_err(|e| anyhow::anyhow!("WebSocket startup parameter error: {e}"))?
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(HANDSHAKE_TIMEOUT),
+            None => HANDSHAKE_TIMEOUT,
         };
         let (path_filter, max_message_size, max_frame_size, idle_timeout) =
             match startup_params.as_ref() {
@@ -647,6 +723,7 @@ impl WebSocketServer {
                                     ws_config,
                                     permit,
                                     idle_timeout,
+                                    handshake_timeout,
                                     permessage_deflate,
                                 )
                                 .await
@@ -688,32 +765,44 @@ impl WebSocketServer {
         ws_config: WebSocketConfig,
         permit: Arc<crate::server::accept_bounded::ConnectionPermit>,
         idle_timeout: std::time::Duration,
+        handshake_timeout: std::time::Duration,
         permessage_deflate: bool,
     ) -> Result<()> {
         // ---- 1. read the request head -------------------------------------
-        let (head_bytes, leftover) = match tokio::time::timeout(
-            std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
-            read_request_head(&mut socket),
-        )
-        .await
-        {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => {
-                debug!("WebSocket handshake read failed from {}: {}", peer_addr, e);
-                return Ok(());
-            }
-            Err(_) => {
-                debug!("WebSocket handshake timed out for {}", peer_addr);
-                let _ = socket
-                    .write_all(&build_error_response(
-                        408,
-                        "Timed out waiting for the HTTP request",
-                        &[],
-                    ))
-                    .await;
-                return Ok(());
-            }
-        };
+        let (head_bytes, leftover) =
+            match tokio::time::timeout(handshake_timeout, read_request_head(&mut socket)).await {
+                Ok(Ok(v)) => v,
+                Ok(Err(HeadError::TooLarge)) => {
+                    Log::new(Some(&status_tx)).warn(format!(
+                        "WebSocket request head from {} is over {} bytes; refused with 431 \
+                     decision=protocol_error",
+                        peer_addr, MAX_REQUEST_HEAD
+                    ));
+                    let _ = socket
+                        .write_all(&build_error_response(
+                            431,
+                            "Request header fields too large",
+                            &[],
+                        ))
+                        .await;
+                    return Ok(());
+                }
+                Ok(Err(HeadError::Io(e))) => {
+                    debug!("WebSocket handshake read failed from {}: {}", peer_addr, e);
+                    return Ok(());
+                }
+                Err(_) => {
+                    debug!("WebSocket handshake timed out for {}", peer_addr);
+                    let _ = socket
+                        .write_all(&build_error_response(
+                            408,
+                            "Timed out waiting for the HTTP request",
+                            &[],
+                        ))
+                        .await;
+                    return Ok(());
+                }
+            };
 
         let head = match parse_request_head(&head_bytes) {
             Ok(h) => h,
@@ -943,8 +1032,10 @@ impl WebSocketServer {
                 data: Arc::new(Mutex::new(ConnData {
                     state: HandlerState::Idle,
                     queued: VecDeque::new(),
-                    pending: None,
+                    held: Vec::new(),
                 })),
+                drained: tokio::sync::Notify::new(),
+                max_message,
                 subprotocol,
             },
             path,
@@ -1222,6 +1313,15 @@ impl WebSocketServer {
         let activity = Arc::new(crate::server::accept_bounded::ConnectionActivity::new());
 
         loop {
+            // Backpressure: while the handler has a full backlog, read nothing more. The
+            // socket's receive buffer fills and TCP holds the peer back, rather than this
+            // process holding every message the peer can send faster than it is answered.
+            loop {
+                if !ctx.data.lock().await.backlog_full() {
+                    break;
+                }
+                ctx.drained.notified().await;
+            }
             let keepalive_tx = ctx.out_tx.clone();
             let message = tokio::select! {
                 message = stream.next() => message,
@@ -1313,24 +1413,29 @@ impl WebSocketServer {
                 }
                 Ok(Message::Frame(_)) => {}
                 Err(e) => {
+                    // RFC 6455 §7.1.7: a connection failed for what the peer sent is told why
+                    // in a close frame before the socket goes — 1009 for a frame or message
+                    // over this server's limits (§7.4.1), 1002 for a protocol violation.
+                    // tungstenite returns these errors without writing anything itself.
                     let text = e.to_string();
-                    if text.contains("permessage-deflate") {
-                        // The deflate layer refused the peer's bytes: a message that inflates
-                        // past the limit, or compressed framing RFC 7692 forbids. 1009 is the
-                        // RFC 6455 code for the first; the peer is told before the close.
-                        Log::new(Some(&ctx.status_tx)).warn(format!(
-                            "WebSocket {} closed: {} decision=permessage_deflate_refused",
-                            ctx.connection_id, text
-                        ));
-                        let _ = ctx.out_tx.send(WsOut::Close {
-                            code: 1009,
-                            reason: "message too big".to_string(),
-                        });
-                    } else {
-                        Log::new(Some(&ctx.status_tx)).debug(format!(
-                            "WebSocket {} read error: {}",
-                            ctx.connection_id, text
-                        ));
+                    let (code, reason, tag) = read_error_close(&e);
+                    match code {
+                        Some(code) => {
+                            Log::new(Some(&ctx.status_tx)).warn(format!(
+                                "WebSocket {} closed with {}: {} decision={}",
+                                ctx.connection_id, code, text, tag
+                            ));
+                            let _ = ctx.out_tx.send(WsOut::Close {
+                                code,
+                                reason: reason.to_string(),
+                            });
+                        }
+                        None => {
+                            Log::new(Some(&ctx.status_tx)).debug(format!(
+                                "WebSocket {} read error: {}",
+                                ctx.connection_id, text
+                            ));
+                        }
                     }
                     break;
                 }
@@ -1358,26 +1463,13 @@ impl WebSocketServer {
     /// lock could queue the second message after the third.
     async fn enqueue_inbound(ctx: &ConnCtx, frame: Inbound) -> bool {
         let mut data = ctx.data.lock().await;
+        data.queued.push_back(frame);
         if data.state == HandlerState::Processing {
-            data.queued.push_back(frame);
             Log::new(Some(&ctx.status_tx))
                 .debug(format!("Queued a message for {}", ctx.connection_id));
             return false;
         }
         data.state = HandlerState::Processing;
-
-        // Join onto anything the model deferred with wait_for_websocket_data.
-        match data.pending.take() {
-            Some(pending) => match pending.merge(frame) {
-                Ok(merged) => data.queued.push_front(merged),
-                Err((held, new)) => {
-                    // Different kinds cannot be joined; process them in arrival order.
-                    data.queued.push_front(new);
-                    data.queued.push_front(held);
-                }
-            },
-            None => data.queued.push_front(frame),
-        }
         true
     }
 
@@ -1399,9 +1491,25 @@ impl WebSocketServer {
                 // which would keep the connection open until the backlog was worked through.
                 if ctx.out_tx.overflowed() {
                     data.queued.clear();
+                    data.held.clear();
                 }
                 let Some(first) = data.queued.pop_front() else {
-                    data.state = HandlerState::Idle;
+                    // A message held by `wait_for_websocket_data` waits for the next one.
+                    data.state = if !data.held.is_empty() {
+                        HandlerState::Accumulating
+                    } else {
+                        HandlerState::Idle
+                    };
+                    // A read loop waiting on a full backlog re-checks it: the queue may have
+                    // been cleared for a cut-off peer, and the loop must go on to read its EOF.
+                    ctx.drained.notify_one();
+                    return;
+                };
+                // Join onto what the model deferred with wait_for_websocket_data: the held
+                // message of this kind, if there is one. One of the other kind stays held.
+                let Ok(first) = data.join_held(first, ctx.max_message) else {
+                    drop(data);
+                    Self::close_joined_too_big(&ctx).await;
                     return;
                 };
                 let batch_data = batching && !matches!(first, Inbound::Ping(_));
@@ -1417,6 +1525,7 @@ impl WebSocketServer {
                         batch.push(more);
                     }
                 }
+                ctx.drained.notify_one();
                 batch
             };
 
@@ -1486,19 +1595,29 @@ impl WebSocketServer {
                     }
 
                     if should_wait {
+                        // Held, and joined onto the next message of its kind — one already
+                        // queued, or the next to arrive (the loop's top, either way).
                         let mut data = ctx.data.lock().await;
-                        data.pending = Some(next);
-                        data.state = HandlerState::Accumulating;
+                        match data.join_held(next, ctx.max_message) {
+                            Ok(held) => data.held.push(held),
+                            Err(JoinedTooBig) => {
+                                drop(data);
+                                Self::close_joined_too_big(&ctx).await;
+                                return;
+                            }
+                        }
                         Log::new(Some(&ctx.status_tx)).debug(format!(
                             "Holding a message from {} until more arrives",
                             ctx.connection_id
                         ));
-                        return;
+                        continue;
                     }
                     if should_close {
                         let mut data = ctx.data.lock().await;
                         data.state = HandlerState::Idle;
                         data.queued.clear();
+                        data.held.clear();
+                        ctx.drained.notify_one();
                         return;
                     }
                 }
@@ -1527,10 +1646,31 @@ impl WebSocketServer {
                     let mut data = ctx.data.lock().await;
                     data.state = HandlerState::Idle;
                     data.queued.clear();
+                    data.held.clear();
+                    ctx.drained.notify_one();
                     return;
                 }
             }
         }
+    }
+
+    /// A message joined by `wait_for_websocket_data` would pass `max_message_size`: the joined
+    /// message is a message like any other, so it is refused as a frame that size would be.
+    async fn close_joined_too_big(ctx: &ConnCtx) {
+        Log::new(Some(&ctx.status_tx)).warn(format!(
+            "WebSocket {} closed with 1009: the message joined by wait_for_websocket_data would \
+             pass {} bytes decision=message_too_big",
+            ctx.connection_id, ctx.max_message
+        ));
+        let _ = ctx.out_tx.send(WsOut::Close {
+            code: 1009,
+            reason: "message too big".to_string(),
+        });
+        let mut data = ctx.data.lock().await;
+        data.queued.clear();
+        data.held.clear();
+        data.state = HandlerState::Idle;
+        ctx.drained.notify_one();
     }
 
     /// Emit `websocket_close` for a client-initiated close.
@@ -1581,6 +1721,38 @@ impl WebSocketServer {
     }
 }
 
+/// The close frame a failed read earns, as `(code, reason, decision tag)`; no code when the
+/// socket itself failed and there is no one left to tell.
+fn read_error_close(
+    e: &tokio_tungstenite::tungstenite::Error,
+) -> (Option<u16>, &'static str, &'static str) {
+    use tokio_tungstenite::tungstenite::Error;
+    match e {
+        Error::Capacity(_) => (Some(1009), "message too big", "message_too_big"),
+        Error::Protocol(_) => (Some(1002), "protocol error", "protocol_error"),
+        Error::Utf8 => (Some(1007), "invalid UTF-8", "protocol_error"),
+        Error::Io(io) => match io
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<deflate::FrameRefusal>())
+        {
+            Some(deflate::FrameRefusal::TooBig { compressed, .. }) => (
+                Some(1009),
+                "message too big",
+                if *compressed {
+                    "permessage_deflate_refused"
+                } else {
+                    "message_too_big"
+                },
+            ),
+            Some(deflate::FrameRefusal::Protocol(_)) => {
+                (Some(1002), "protocol error", "permessage_deflate_refused")
+            }
+            None => (None, "", ""),
+        },
+        _ => (None, "", ""),
+    }
+}
+
 /// The outcome of the `websocket_handshake` event.
 enum HandshakeDecision {
     Accept {
@@ -1618,29 +1790,51 @@ fn raise_opened_event(handlers: Option<&crate::scripting::EventHandlerConfig>) -
             .is_some()
 }
 
+/// Why [`read_request_head`] gave up.
+enum HeadError {
+    /// The head is longer than [`MAX_REQUEST_HEAD`]: answered 431.
+    TooLarge,
+    /// The peer closed, or the read failed: nothing to answer.
+    Io(anyhow::Error),
+}
+
 /// Read bytes until the blank line that terminates an HTTP request head.
 ///
 /// Returns the head (without the terminating CRLFCRLF) and any bytes that followed it in the
-/// same read, which belong to the WebSocket stream.
-async fn read_request_head(socket: &mut TcpStream) -> Result<(Vec<u8>, Vec<u8>)> {
+/// same read, which belong to the WebSocket stream. A head longer than [`MAX_REQUEST_HEAD`] is
+/// refused however it arrives — in one read or a byte at a time — and each read scans only
+/// the bytes it added (plus the three before them), so a peer trickling a head costs one pass
+/// over it, not one per read.
+async fn read_request_head(
+    socket: &mut TcpStream,
+) -> std::result::Result<(Vec<u8>, Vec<u8>), HeadError> {
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
+    let mut scanned = 0usize;
 
     loop {
-        if let Some(pos) = find_head_end(&buf) {
+        if let Some(pos) = find_head_end(&buf[scanned.saturating_sub(3)..]) {
+            let pos = pos + scanned.saturating_sub(3);
+            if pos > MAX_REQUEST_HEAD {
+                return Err(HeadError::TooLarge);
+            }
             let leftover = buf.split_off(pos + 4);
             buf.truncate(pos);
             return Ok((buf, leftover));
         }
-        if buf.len() > MAX_REQUEST_HEAD {
-            anyhow::bail!("HTTP request head exceeded {MAX_REQUEST_HEAD} bytes");
+        scanned = buf.len();
+        if buf.len() > MAX_REQUEST_HEAD + 3 {
+            return Err(HeadError::TooLarge);
         }
         let n = socket
             .read(&mut chunk)
             .await
-            .context("read failed while waiting for the HTTP request head")?;
+            .context("read failed while waiting for the HTTP request head")
+            .map_err(HeadError::Io)?;
         if n == 0 {
-            anyhow::bail!("peer closed before sending a complete HTTP request head");
+            return Err(HeadError::Io(anyhow::anyhow!(
+                "peer closed before sending a complete HTTP request head"
+            )));
         }
         buf.extend_from_slice(&chunk[..n]);
     }
