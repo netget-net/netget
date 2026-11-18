@@ -58,9 +58,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 prost-reflect = "0.14"
 prost-types = "0.13"
 
-# The PostgreSQL target drives pgwire's frontend decoder directly — NetGet's fork, the decoder
-# the server runs (github.com/netget-net/pgwire); upstream 0.35.0 panics on six malformed bytes.
-pgwire = { package = "netget-pgwire", version = "0.35.0" }
+# Behind `server::postgresql::guard`: pgwire's frontend decoder, which the guard runs on every
+# message before the server's pgwire does. Same version and features as netget's.
+pgwire = { version = "0.42.3", default-features = false, features = ["server-api-ring", "pg-ext-types"] }
 bytes = "1"
 
 # The WebSocket target runs the server's DeflateStream under tokio-tungstenite, as the server

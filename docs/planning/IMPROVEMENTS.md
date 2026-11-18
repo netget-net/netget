@@ -627,7 +627,7 @@ libpcap at link time, which is the original reason for the exclusion; the option
 it, dynamically loading it, or documenting the gap in the release notes rather than leaving
 users to discover it.
 
-### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified, fixed in every NetGet build: the `netget-pgwire` fork answers FATAL 08P01; upstream issue not yet filed]**
+### 77. pgwire panics the PostgreSQL connection on a malformed simple query **[verified; fixed upstream in pgwire 0.42.3 (sunng87/pgwire#482, #484), which NetGet builds; NetGet's frontend screen answers FATAL 08P01]**
 
 `pgwire` 0.35's `decode_packet` (`codec.rs:62-83`) bounds the declared message length only
 from *above*, then hands `decode_fn` the entire remaining buffer rather than a slice limited
@@ -651,17 +651,17 @@ server stayed up and accepted a further connection. So this is not in the class 
 server-killers; it is a malformed message producing a panic instead of a clean protocol error.
 Still worth fixing, because a panicking connection is a silent one.
 
-`pgwire` owns the socket loop, so NetGet cannot bound the frame without wrapping the stream;
-the fix is in the crate. NetGet's fork `netget-pgwire` (github.com/netget-net/pgwire, on
-crates.io; NETGET.md there) is 0.35.0 with each message isolated before its body decoder runs, checked reads in every frontend decoder, PostgreSQL's
-end-of-message check, and `FATAL 08P01` on the wire instead of a panic. Upgrading was checked
-first and does not help: 0.42.1 fixes `get_cstring` alone, and `Bind`/`Close`/`Describe` still
-panic on short bodies there. `tests/vendored_pgwire_patch_test.rs` drives every shape found;
-`tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from the wire. Being
-a published crate, the fork reaches `cargo install netget-tool` as well. It should still be
-reported upstream, and the containment in `src/server/postgresql/mod.rs` stays for any other
-panic. `kafka-protocol`'s unbounded element counts are the same shape and are documented in
-the panic audit.
+The crate fix is upstream: pgwire 0.42.3 isolates each message's body before its decoder
+runs and reads with checked getters (sunng87/pgwire#482, fixed by #484), and NetGet builds it.
+What 0.42.3 does with a malformed message is still not PostgreSQL's answer — `process_socket`
+ends the session with nothing written when its decoder refuses one, and a Query with no NUL
+is served as an empty query — so NetGet's frontend screen (`src/server/postgresql/guard.rs`,
+which already wraps the stream for the size bound) runs pgwire's decoder on each message first
+and answers `FATAL 08P01`. `tests/pgwire_frontend_screen_test.rs` drives every shape found;
+`tests/server/postgresql/decoder_panic_test.rs` sends the six original frames to a running
+server and asserts one ErrorResponse each. The containment in `src/server/postgresql/mod.rs`
+stays for any other panic. `kafka-protocol`'s unbounded element counts are the same shape and
+are documented in the panic audit.
 
 `opensrv-mysql`'s `params.rs` cluster (five malformed `COM_STMT_EXECUTE` shapes, including an
 explicit `panic!("bad column type")` on a client-chosen byte) was the same shape and is

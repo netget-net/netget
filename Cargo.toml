@@ -341,10 +341,9 @@ mdns-sd = { version = "0.15" }
 opensrv-mysql = { package = "netget-opensrv-mysql", version = "0.7.0" }
 # IPP (Internet Printing Protocol)
 ipp = { version = "5.3" }
-# PostgreSQL server. NetGet fork (github.com/netget-net/pgwire, NETGET.md): a malformed
-# frontend message is refused FATAL 08P01 instead of panicking the connection task, and
-# CopyFail encodes with its own tag.
-pgwire = { package = "netget-pgwire", version = "0.35.0" }
+# PostgreSQL server. 0.42.3 is the first release that isolates each frontend message's body and
+# refuses a short one rather than panicking (sunng87/pgwire#484). `ring`, as rustls is built here.
+pgwire = { version = "0.42.3", default-features = false, features = ["server-api-ring", "pg-ext-types"] }
 # Redis server (RESP protocol)
 redis-protocol = { version = "6.0" }
 # Cassandra/CQL server

@@ -263,8 +263,9 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
   - `etcd`, `postgresql` and `websocket` gained both. Their real-client tests run through
     `tests/helpers/recording_relay.rs` and the oracle reads what crossed. The targets are
     `etcd_request` (prost behind `etcd::unary_message`; `TxnRequest` recurses, so a 20 000-level
-    bomb), `pgwire_frontend` (NetGet's `netget-pgwire` fork, which `fuzz/Cargo.toml` depends on
-    too — without it the fuzz workspace would build crates.io's panicking pgwire) and
+    bomb), `pgwire_frontend` (upstream pgwire's frontend decoder, 0.42.3 or later — the first
+    release that does not panic on a short message — at the version and features the root
+    manifest builds, with NetGet's frontend screen in front of it) and
     `websocket_session` (head parser, `deflate::negotiate`, `DeflateStream` under tungstenite).
     **`etcd` and `postgresql` went Stable on 13 November 2026**, and condition 1 was again true
     of a sample. Each "second client" shared the server's own codec: `etcd-client` is tonic
@@ -281,7 +282,9 @@ Maturity lives in each protocol's `metadata()` (`ProtocolMetadataV2`, `src/proto
     `limit`/`keys_only`/`count_only` were ignored. Condition 4 found two bounds that bounded
     nothing in total: etcd's 1.5 MiB per request with 200 streams per connection (now a 48 MiB
     server-wide budget) and pgwire's 1 GB per unauthenticated message (now 1 MiB, screened by
-    `src/server/postgresql/guard.rs` in front of pgwire, which has no seam of its own) — and
+    `src/server/postgresql/guard.rs` in front of pgwire, which has no seam of its own; the same
+    screen answers a malformed message `FATAL 08P01`, where pgwire closes in silence or serves
+    a Query with no NUL as an empty query) — and
     an etcd request whose body stopped arriving held its connection busy, so the idle bound
     never fired. **A second client that shares the server's codec is a sample of one**: count
     the libraries at both ends, not the binaries.

@@ -108,8 +108,8 @@ impl Protocol for PostgresqlProtocol {
             .state(DevelopmentState::Stable)
             .well_known_port(5432)
             .implementation(
-                "pgwire v0.35 (NetGet's netget-pgwire fork) behind NetGet's frontend-size \
-                 screen, which reads the peer's framing on a loopback relay in front of it",
+                "pgwire 0.42, served from a loopback relay whose frontend screen bounds each \
+                 message's size and checks its format with pgwire's own decoder",
             )
             .llm_control(
                 "Every statement: its rows (columns, types, values), command tag or error, \
@@ -132,7 +132,7 @@ impl Protocol for PostgresqlProtocol {
                  binary cells with postgres-types, which pgwire encodes them with. PCAP ORACLE: \
                  psql's sessions, tokio-postgres's prepared statement and psycopg's whole \
                  session cross a recording relay and tshark's pgsql dissector reads them. \
-                 FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs (the fork's frontend decoder, \
+                 FUZZ: fuzz/fuzz_targets/pgwire_frontend.rs (pgwire's frontend decoder, \
                  NetGet's frontend screen and placeholder scanner; nested-comment and \
                  parenthesis bombs). BOUNDS: tests/server/postgresql/bounds_test.rs drives \
                  every declared bound from the wire on both sides. NOT COVERED: \
@@ -142,7 +142,8 @@ impl Protocol for PostgresqlProtocol {
             .notes(
                 "No authentication, no TLS. Simple and extended query protocols; bound \
                  parameters reach the model, results honour the client's text or binary \
-                 format. A frontend message is bounded at 1 MiB, refused FATAL 08P01 past it.",
+                 format. A frontend message is bounded at 1 MiB, and one past it or malformed is \
+                 refused FATAL 08P01 before pgwire reads it.",
             )
             .max_inbound_bytes(crate::server::postgresql::guard::MAX_FRONTEND_MESSAGE_BYTES)
             .history(crate::protocol::metadata::HistoryMode::Last(
