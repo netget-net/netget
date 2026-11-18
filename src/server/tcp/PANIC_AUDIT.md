@@ -148,11 +148,12 @@ earlier `(message_length - 16) as usize` abort.
 
 ### pgwire 0.35.0 — RISKY, and NetGet's PostgreSQL server is crashable in six bytes
 
-**Status:** NetGet builds its fork `netget-pgwire` (github.com/netget-net/pgwire), which fixes
-the frontend half of this (each message isolated before its body decoder runs, checked reads,
-`FATAL 08P01` instead of a panic; the fork's NETGET.md, `tests/vendored_pgwire_patch_test.rs`).
-The backend-message sites below are pgwire's *client* path, which NetGet does not use, and are
-unchanged apart from the framing fix. The finding stands for upstream pgwire.
+**Status:** fixed upstream. pgwire 0.42.3, which NetGet builds, isolates each message's body
+before its decoder runs and reads frontend and backend bodies with checked getters
+(sunng87/pgwire#483, #484). NetGet's frontend screen (`src/server/postgresql/guard.rs`) runs
+the same decoder on each message before pgwire does and answers a malformed one `FATAL 08P01`
+(`tests/pgwire_frontend_screen_test.rs`). The analysis below is of 0.35.0, kept for the
+shape of the defect.
 
 **This is the most severe finding in the audit.** The framing layer never restricts the body
 slice to the declared message length and never *lower*-bounds it. `decode_packet`

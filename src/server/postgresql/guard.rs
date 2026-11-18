@@ -1,22 +1,31 @@
-//! The frontend-message size bound, enforced on the bytes before pgwire sees them.
+//! The frontend screen: the message size bound and the message format check, enforced on the
+//! bytes before pgwire sees them.
 //!
-//! pgwire's framer bounds a Query, Parse or Bind at its `LARGE_PACKET_SIZE_LIMIT`, 0x3ffffffe
-//! bytes — PostgreSQL's own 1 GB `MaxAllocSize` — and buffers a message whole before decoding it.
-//! Real PostgreSQL can afford that because a peer must authenticate before it may send a Query;
-//! this server authenticates nobody, so any stranger could make it hold a gigabyte per
+//! **Size.** pgwire's framer bounds a Query, Parse or Bind at its `LARGE_PACKET_SIZE_LIMIT`,
+//! 0x3ffffffe bytes — PostgreSQL's own 1 GB `MaxAllocSize` — and buffers a message whole before
+//! decoding it. The limit is a per-message-type constant (`Message::max_message_length`), not a
+//! setting. Real PostgreSQL can afford it because a peer must authenticate before it may send a
+//! Query; this server authenticates nobody, so any stranger could make it hold a gigabyte per
 //! connection, 256 connections at a time. And everything a message carries is handed to the
 //! model, so nothing near that size is ever useful: [`MAX_FRONTEND_MESSAGE_BYTES`] is the bound.
 //!
-//! There is no seam inside pgwire for it. `process_socket` takes a concrete `TcpStream` and owns
-//! every read, and its codec is a concrete type `process_message` is written against. So NetGet
-//! keeps the peer's socket and hands pgwire one end of a loopback TCP pair instead
+//! **Format.** pgwire 0.42.3 isolates each message's body and refuses a short one rather than
+//! panicking, but a message its decoder refuses ends the session with nothing written to the
+//! peer, and a decoder that stops short of the body's end is not noticed: a Query of `x` with no
+//! NUL is served as an empty query. PostgreSQL answers both `FATAL 08P01`. [`check_typed`] and
+//! [`check_startup`] make that answer here.
+//!
+//! There is no seam inside pgwire for either. `process_socket` takes a concrete `TcpStream` and
+//! owns every read, and its codec is a concrete type `process_message` is written against. So
+//! NetGet keeps the peer's socket and hands pgwire one end of a loopback TCP pair instead
 //! ([`Backend::pair`]); [`relay`] copies bytes between the two, reading the frontend framing as it
 //! goes — a type byte and a 4-byte length per message after startup, a length and a code before
-//! it — and refuses a message by its *declared* length, before a byte of its body is forwarded.
-//! The relay holds one read buffer per direction, so its own memory per connection is constant.
+//! it. A message is refused by its *declared* length before its body is read, and otherwise held
+//! until it is whole and checked, then forwarded. The relay's memory per connection is one
+//! message, at most the bound.
 //!
 //! A refused message is answered as PostgreSQL answers a frame it will not read: `FATAL 08P01`.
-//! The relay stops forwarding the peer's bytes at the refused header and half-closes pgwire's
+//! The relay stops forwarding the peer's bytes at the refused message and half-closes pgwire's
 //! side, so pgwire finishes answering everything it already has, writes it, and ends; only then
 //! is the ErrorResponse written, so it never lands in the middle of one of pgwire's messages.
 //!
@@ -45,13 +54,28 @@ pub const MAX_STARTUP_PACKET_BYTES: usize = 10_000;
 /// Protocol version 3.0, the StartupMessage's code. After it every message is typed.
 const PROTOCOL_V3: u32 = 196_608;
 
+/// The SSLRequest and GSSENCRequest codes; each packet is exactly 8 bytes.
+const SSL_REQUEST_CODE: u32 = 80_877_103;
+const GSSENC_REQUEST_CODE: u32 = 80_877_104;
+
 /// Why the relay stopped forwarding the peer's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// A message declared a length past the bound (`declared` counts the type byte too).
     TooLong { declared: usize, limit: usize },
-    /// A length field that cannot be a message (shorter than itself).
+    /// A message that is not what its type says: a length field shorter than itself, or a
+    /// message pgwire's decoder refuses or does not read to its end. The text is PostgreSQL's.
     Malformed(&'static str),
+}
+
+impl Refusal {
+    /// The `decision=` tag the connection's close is logged with.
+    pub fn decision(&self) -> &'static str {
+        match self {
+            Refusal::TooLong { .. } => "refused_oversize_message",
+            Refusal::Malformed(_) => "refused_malformed_message",
+        }
+    }
 }
 
 impl Refusal {
@@ -61,7 +85,7 @@ impl Refusal {
             Refusal::TooLong { declared, limit } => {
                 format!("message of {declared} bytes exceeds this server's limit of {limit} bytes")
             }
-            Refusal::Malformed(why) => format!("invalid message: {why}"),
+            Refusal::Malformed(why) => why.to_string(),
         }
     }
 
@@ -90,16 +114,19 @@ impl Refusal {
 /// The frontend framing, read incrementally from the bytes the peer sends.
 ///
 /// Before the StartupMessage every packet is a 4-byte length and a 4-byte code (SSLRequest and
-/// GSSENCRequest are answered and followed by another such packet); from the StartupMessage on,
-/// every message is a type byte and a 4-byte length. Only headers are kept: the body of an
-/// admitted message is counted, not buffered.
+/// GSSENCRequest, exactly 8 bytes each, are answered and followed by another such packet); from
+/// the StartupMessage on, every message is a type byte and a 4-byte length.
+///
+/// A message is held until it is whole — never more than the bound its header was admitted
+/// under — and the StartupMessage and every typed message are checked ([`check_typed`],
+/// [`check_startup`]) before any of their bytes are forwarded.
 #[derive(Debug)]
 pub struct FrontendScreen {
     typed: bool,
-    header: Vec<u8>,
+    /// The message being read: its header, then its body as it arrives.
+    message: Vec<u8>,
     body_left: usize,
-    /// The packet whose body is being skipped is the StartupMessage, after which the framing is
-    /// typed.
+    /// The message being read is the StartupMessage, after which the framing is typed.
     startup_pending: bool,
     limit: usize,
 }
@@ -108,47 +135,50 @@ impl FrontendScreen {
     pub fn new(limit: usize) -> Self {
         Self {
             typed: false,
-            header: Vec::with_capacity(8),
+            message: Vec::with_capacity(8),
             body_left: 0,
             startup_pending: false,
             limit,
         }
     }
 
-    /// Account for `data`, returning the bytes that may be forwarded to pgwire and, when a header
-    /// in `data` is refused, the refusal.
+    /// Account for `data`, returning the bytes that may be forwarded to pgwire and, when a
+    /// message in `data` is refused, the refusal.
     ///
-    /// A header is held back until it is whole and checked, so a refused message reaches pgwire
-    /// not even in part: what is forwarded is always whole messages plus, at most, the body of
-    /// the one admitted last.
+    /// Only whole, checked messages are forwarded, so a refused message reaches pgwire not even
+    /// in part. A header is refused by its declared length alone, before its body is read.
     pub fn admit(&mut self, data: &[u8]) -> (Vec<u8>, Option<Refusal>) {
         let mut out = Vec::with_capacity(data.len());
         let mut i = 0;
         while i < data.len() {
             if self.body_left > 0 {
                 let take = self.body_left.min(data.len() - i);
-                out.extend_from_slice(&data[i..i + take]);
+                self.message.extend_from_slice(&data[i..i + take]);
                 self.body_left -= take;
                 i += take;
                 if self.body_left == 0 {
-                    self.finish_message();
+                    if let Err(refusal) = self.finish_message(&mut out) {
+                        return (out, Some(refusal));
+                    }
                 }
                 continue;
             }
             let header_len = if self.typed { 5 } else { 8 };
-            let take = (header_len - self.header.len()).min(data.len() - i);
-            self.header.extend_from_slice(&data[i..i + take]);
+            let take = (header_len - self.message.len()).min(data.len() - i);
+            self.message.extend_from_slice(&data[i..i + take]);
             i += take;
-            if self.header.len() < header_len {
+            if self.message.len() < header_len {
                 break;
             }
-            let header = std::mem::take(&mut self.header);
-            match self.check_header(&header) {
+            let mut header = [0u8; 8];
+            header[..header_len].copy_from_slice(&self.message[..header_len]);
+            match self.check_header(&header[..header_len]) {
                 Ok(body) => {
-                    out.extend_from_slice(&header);
                     self.body_left = body;
                     if body == 0 {
-                        self.finish_message();
+                        if let Err(refusal) = self.finish_message(&mut out) {
+                            return (out, Some(refusal));
+                        }
                     }
                 }
                 Err(refusal) => return (out, Some(refusal)),
@@ -157,12 +187,19 @@ impl FrontendScreen {
         (out, None)
     }
 
-    /// The message whose body just ended was the StartupMessage: typed framing from here on.
-    fn finish_message(&mut self) {
-        if self.startup_pending {
+    /// The message just completed: check it, forward it, and after the StartupMessage switch to
+    /// typed framing.
+    fn finish_message(&mut self, out: &mut Vec<u8>) -> Result<(), Refusal> {
+        let message = std::mem::take(&mut self.message);
+        if self.typed {
+            check_typed(&message)?;
+        } else if self.startup_pending {
+            check_startup(&message)?;
             self.typed = true;
             self.startup_pending = false;
         }
+        out.extend_from_slice(&message);
+        Ok(())
     }
 
     /// The body length a complete header announces, or why it is refused.
@@ -171,7 +208,7 @@ impl FrontendScreen {
             let len = u32::from_be_bytes([h[1], h[2], h[3], h[4]]) as usize;
             if len < 4 {
                 return Err(Refusal::Malformed(
-                    "declared message length is shorter than the length field",
+                    "invalid message length: shorter than the length field",
                 ));
             }
             if len + 1 > self.limit {
@@ -193,10 +230,122 @@ impl FrontendScreen {
                     limit: MAX_STARTUP_PACKET_BYTES,
                 });
             }
+            // pgwire reads an SSLRequest or GSSENCRequest as 8 bytes whatever length it declares,
+            // so a longer one would have the screen and pgwire disagree on where the next packet
+            // starts: what the screen holds as the rest of this packet, pgwire would read as a
+            // StartupMessage and typed messages that were never checked.
+            if (code == SSL_REQUEST_CODE || code == GSSENC_REQUEST_CODE) && len != 8 {
+                return Err(Refusal::Malformed("invalid length of startup packet"));
+            }
             if code >> 16 == PROTOCOL_V3 >> 16 {
                 self.startup_pending = true;
             }
             Ok(len - 8)
+        }
+    }
+}
+
+/// What PostgreSQL says of a message that is not what its type says it is.
+const INVALID_FORMAT: Refusal = Refusal::Malformed("invalid message format");
+
+/// A whole typed message (type byte, length, body) is one pgwire can serve: pgwire's own decoder
+/// reads it, and reads all of it.
+///
+/// pgwire 0.42 isolates each message's body and refuses a short one, but when its decoder fails,
+/// `process_socket` ends the session without a word to the peer; and it does not check that a
+/// decoder consumed the whole body, so an unterminated string is read as an empty one (a Query
+/// of `x` with no NUL is served as an empty query) and trailing bytes are dropped. PostgreSQL
+/// answers all of these `FATAL 08P01`. So the message is decoded here first, with the decoder
+/// pgwire will run, and re-encoded: a message that does not decode, or whose re-encoding is not
+/// the bytes that arrived, is refused before pgwire sees it.
+///
+/// The one difference a re-encoding may show is UTF-8: pgwire reads a string lossily, so invalid
+/// UTF-8 re-encodes as U+FFFD. When that is the only difference
+/// ([`differs_only_by_lossy_utf8`]), the message is passed on as it arrived, and pgwire serves it
+/// with U+FFFD in place of those bytes.
+pub fn check_typed(message: &[u8]) -> Result<(), Refusal> {
+    use pgwire::messages::{DecodeContext, PgWireFrontendMessage};
+
+    let mut ctx = DecodeContext::default();
+    ctx.awaiting_frontend_ssl = false;
+    ctx.awaiting_frontend_startup = false;
+    let mut buf = bytes::BytesMut::from(message);
+    // pgwire's decoders are meant not to panic on any input (the `pgwire_frontend` fuzz target
+    // holds them to it); if one does, the peer is refused rather than the relay task lost.
+    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        PgWireFrontendMessage::decode(&mut buf, &ctx)
+    }));
+    let decoded = match decoded {
+        Ok(Ok(Some(decoded))) if buf.is_empty() => decoded,
+        _ => return Err(INVALID_FORMAT),
+    };
+    let mut again = bytes::BytesMut::with_capacity(message.len());
+    if decoded.encode(&mut again).is_err() {
+        return Err(INVALID_FORMAT);
+    }
+    if again[..] == message[..] {
+        return Ok(());
+    }
+    if message.first() == again.first()
+        && differs_only_by_lossy_utf8(&message[5..], again.get(5..).unwrap_or_default())
+    {
+        return Ok(());
+    }
+    Err(INVALID_FORMAT)
+}
+
+/// `again` is `original` with some of its invalid UTF-8 replaced by U+FFFD, as pgwire's lossy
+/// string read does, and differs from it in nothing else.
+///
+/// Walked chunk by chunk, so the replacement is only accepted where the original had invalid
+/// UTF-8: valid text must re-appear exactly, and each invalid run either verbatim (a binary field,
+/// which pgwire copies) or as one U+FFFD (a string). A comparison of the two bodies read lossily
+/// as wholes is not enough — a Bind parameter length of `ff ff ff fe`, which pgwire reads as NULL
+/// and re-encodes `ff ff ff ff`, reads the same lossily.
+fn differs_only_by_lossy_utf8(original: &[u8], again: &[u8]) -> bool {
+    const REPLACEMENT: &[u8] = "\u{FFFD}".as_bytes();
+    let mut rest = again;
+    for chunk in original.utf8_chunks() {
+        let Some(after) = rest.strip_prefix(chunk.valid().as_bytes()) else {
+            return false;
+        };
+        rest = after;
+        let invalid = chunk.invalid();
+        if invalid.is_empty() {
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix(invalid) {
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix(REPLACEMENT) {
+            rest = after;
+        } else {
+            return false;
+        }
+    }
+    rest.is_empty()
+}
+
+/// A whole StartupMessage has PostgreSQL's layout: the length, the protocol version, then
+/// `name NUL value NUL` pairs ended by one more NUL, and nothing after it.
+///
+/// pgwire reads the parameters until a name fails to read, so a name or value with no NUL ends
+/// the list and the rest of the packet is dropped. PostgreSQL refuses such a packet `FATAL
+/// 08P01`, "invalid startup packet layout: expected terminator as last byte".
+pub fn check_startup(message: &[u8]) -> Result<(), Refusal> {
+    const LAYOUT: Refusal =
+        Refusal::Malformed("invalid startup packet layout: expected terminator as last byte");
+    let mut params = message.get(8..).unwrap_or_default();
+    loop {
+        match params.iter().position(|b| *b == 0) {
+            // The terminator, and nothing after it.
+            Some(0) if params.len() == 1 => return Ok(()),
+            // A name, then its value.
+            Some(name_end) if name_end > 0 => {
+                let rest = &params[name_end + 1..];
+                let value_end = rest.iter().position(|b| *b == 0).ok_or(LAYOUT)?;
+                params = &rest[value_end + 1..];
+            }
+            _ => return Err(LAYOUT),
         }
     }
 }

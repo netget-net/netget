@@ -1904,7 +1904,7 @@ write("grpc_message", "frame_length_lie", grpc_frame(leaf, declared=0xFFFFFFFF))
 write("grpc_message", "field_length_lie", grpc_frame(b"\x0a" + pbv(0xFFFFFFFF) + b"a"))
 write("grpc_message", "packed_length_lie", grpc_frame(b"\x4a" + pbv(0x7FFFFFFF) + b"\x01"))
 
-# --- PostgreSQL: pgwire's frontend decoder (the netget-pgwire fork) --------------
+# --- PostgreSQL: pgwire's frontend decoder, behind NetGet's frontend screen ----------
 def pg_msg(tag, body, declared=None):
     n = len(body) + 4 if declared is None else declared
     return bytes([tag]) + struct.pack(">i", n) + body
@@ -1941,12 +1941,17 @@ write("pgwire_frontend", "extended_query",
 write("pgwire_frontend", "copy_data",
       PG_STARTUP + pg_msg(ord("d"), b"1\tada\n") + pg_msg(ord("c"), b"")
       + pg_msg(ord("f"), b"aborted\0"))
-# The fork's NETGET.md, first row: six bytes after the handshake that panic upstream.
+# Six bytes after the handshake that panicked pgwire before 0.42.3.
 write("pgwire_frontend", "query_without_nul", PG_STARTUP + pg_msg(ord("Q"), b"x"))
 # Size lies.
 write("pgwire_frontend", "startup_length_lie", pg_startup(declared=0x7FFFFFFF))
 write("pgwire_frontend", "query_length_lie", PG_STARTUP + pg_msg(ord("Q"), b"x\0", declared=0x7FFFFFFF))
 write("pgwire_frontend", "copydata_length_3", PG_STARTUP + pg_msg(ord("d"), b"", declared=3))
+# pgwire reads an SSLRequest as 8 bytes whatever it declares; one that declares more carries a
+# StartupMessage and a Query the screen would have held as its body (found by this target).
+_smuggled = PG_STARTUP + pg_msg(ord("Q"), b"x")
+write("pgwire_frontend", "ssl_request_length_lie",
+      struct.pack(">ii", 8 + len(_smuggled), 80877103) + _smuggled)
 write("pgwire_frontend", "bind_param_count_lie",
       PG_STARTUP + pg_msg(ord("B"), b"\0\0" + struct.pack(">hH", 0, 0xFFFF)))
 write("pgwire_frontend", "bind_param_length_lie",

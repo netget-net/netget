@@ -222,25 +222,21 @@ impl PostgresqlServer {
                                 .await
                                 {
                                     Log::to(&relay_status).warn(format!(
-                                        "PostgreSQL connection {} closed \
-                                         decision=refused_oversize_message: {}",
+                                        "PostgreSQL connection {} closed decision={}: {}",
                                         connection_id,
+                                        refusal.decision(),
                                         refusal.message()
                                     ));
                                 }
                             }));
 
                             // `process_socket` runs in a task of its own so a **panic** inside
-                            // pgwire is contained rather than lost.
+                            // pgwire or in our handler is contained rather than lost. (A
+                            // malformed frontend message never reaches pgwire: the relay above
+                            // refuses it `FATAL 08P01`; see `guard::check_typed`.)
                             //
-                            // Upstream pgwire 0.35 panics decoding a malformed frontend message
-                            // (a Query with no NUL, six bytes after the handshake; IMPROVEMENTS
-                            // #77). NetGet's fork, `netget-pgwire`, answers those FATAL 08P01
-                            // and returns `InvalidData` instead; any other panic in pgwire or in
-                            // our handler would still take this path.
-                            //
-                            // What NetGet can do is not lose the connection's bookkeeping to
-                            // it. The panic used to unwind straight past
+                            // What NetGet can do is not lose the connection's bookkeeping to a
+                            // panic. The panic used to unwind straight past
                             // `close_connection_on_server`, so the dashboard kept an Active row
                             // for a socket that was already gone — and PostgreSQL is not
                             // `connectionless`, so the idle sweep never collected it either.
@@ -286,25 +282,14 @@ impl PostgresqlServer {
                             let joined = (&mut inner.0).await;
                             match joined {
                                 Ok(Ok(())) => {}
-                                Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidData => {
-                                    // The pgwire fork refused a message that does not
-                                    // decode and has already answered it FATAL 08P01.
-                                    Log::to(&conn_status_tx).warn(format!(
-                                        "PostgreSQL connection {} closed \
-                                         decision=refused_malformed_message: the peer sent a \
-                                         malformed message ({})",
-                                        connection_id, e
-                                    ));
-                                }
                                 Ok(Err(e)) => {
                                     error!("PostgreSQL connection error: {:?}", e);
                                 }
                                 Err(join_error) if join_error.is_panic() => {
                                     Log::to(&conn_status_tx).error(format!(
                                         "PostgreSQL connection {} decision=connection_aborted_decoder_panic: \
-                                         pgwire panicked decoding a message from the peer (a \
-                                         malformed frame; IMPROVEMENTS #77). The connection is \
-                                         closed; the server is unaffected.",
+                                         pgwire or the handler panicked serving the peer. The \
+                                         connection is closed; the server is unaffected.",
                                         connection_id
                                     ));
                                 }
@@ -1211,7 +1196,7 @@ fn encode_rows(
                 let value = row.get(idx).unwrap_or(&serde_json::Value::Null);
                 encode_value(&mut encoder, field.datatype(), field.format(), value)?;
             }
-            encoder.finish()
+            Ok(encoder.take_row())
         })
         .collect()
 }
@@ -1565,29 +1550,46 @@ impl pgwire::api::stmt::QueryParser for PostgresqlQueryParser {
         &self,
         _client: &C,
         sql: &str,
-        types: &[Type],
-    ) -> PgWireResult<Self::Statement>
+        types: &[Option<Type>],
+    ) -> PgWireResult<Option<Self::Statement>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        Ok(PgStatement {
+        // pgwire stores a syntactically empty statement itself and never calls this for one, so
+        // every statement reaching here is one the model answers.
+        Ok(Some(PgStatement {
             sql: sql.to_string(),
             param_types: parameter_types(sql, types),
-        })
+        }))
+    }
+
+    // pgwire's default `do_describe_*` read these; this server overrides both, because the
+    // result schema is whatever the model answers and only resolving the statement says it.
+    fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
+        Ok(stmt.param_types.clone())
+    }
+
+    fn get_result_schema(
+        &self,
+        _stmt: &Self::Statement,
+        _column_format: Option<&pgwire::api::portal::Format>,
+    ) -> PgWireResult<Vec<FieldInfo>> {
+        Ok(Vec::new())
     }
 }
 
 /// One type per parameter the statement uses: the type the Parse message named for it, or
-/// `text` where it named none (0, unspecified) — PostgreSQL infers a type from context, which a
-/// server without a planner cannot, and an unknown-typed literal resolves to `text` there too.
+/// `text` where it named none (0, unspecified, or an OID pgwire does not know) — PostgreSQL
+/// infers a type from context, which a server without a planner cannot, and an unknown-typed
+/// literal resolves to `text` there too.
 ///
 /// The count is the larger of the types the Parse named and the highest `$n` in the text, so a
 /// client that names no types (tokio-postgres) is told how many values to bind.
-pub fn parameter_types(sql: &str, named: &[Type]) -> Vec<Type> {
+pub fn parameter_types(sql: &str, named: &[Option<Type>]) -> Vec<Type> {
     let count = named.len().max(highest_placeholder(sql));
     (0..count)
         .map(|idx| match named.get(idx) {
-            Some(t) if *t != Type::UNKNOWN => t.clone(),
+            Some(Some(t)) if *t != Type::UNKNOWN => t.clone(),
             _ => Type::TEXT,
         })
         .collect()

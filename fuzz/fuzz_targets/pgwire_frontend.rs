@@ -1,14 +1,14 @@
-//! The PostgreSQL server's frontend decoder: `pgwire::messages::PgWireFrontendMessage::decode`,
-//! from **NetGet's fork, `netget-pgwire`** (github.com/netget-net/pgwire; this crate depends on
-//! it as the root manifest does), driven through the connection states pgwire's own server codec
-//! walks: SSL/GSS negotiation, then Startup or CancelRequest, then every post-startup message.
+//! The PostgreSQL server's frontend decoder: `pgwire::messages::PgWireFrontendMessage::decode`
+//! (upstream pgwire, the version the root manifest builds), driven through the connection states
+//! pgwire's own server codec walks: SSL/GSS negotiation, then Startup or CancelRequest, then every
+//! post-startup message.
 //!
 //! NetGet has no PostgreSQL byte parser of its own — the server hands the socket to pgwire's
-//! `process_socket` — so this decoder is the whole pre-authentication surface. Upstream
-//! pgwire 0.35.0 panics on six bytes after a valid handshake (the fork's NETGET.md has the
-//! table); the fork refuses those as `FATAL 08P01`. This target is the search for the shapes
-//! that table does not list. Built against unpatched pgwire, the `query_without_nul` seed
-//! panics at once.
+//! `process_socket` behind NetGet's frontend screen (`server::postgresql::guard`), which runs this
+//! same decoder on each message first — so this decoder is the whole pre-authentication surface.
+//! pgwire before 0.42.3 panicked on six bytes after a valid handshake (a Query with no NUL, a
+//! Close or Describe with no body, two lying Binds); the `query_without_nul` and `bind_*` seeds
+//! are those shapes.
 //!
 //! Asserted:
 //!
@@ -16,15 +16,17 @@
 //! 2. A decoded message consumes bytes (the codec would otherwise spin), except the one
 //!    zero-length verdict the SSL state exists for.
 //! 3. Re-encoding is a fixed point: a message that decodes encodes, its encoding decodes, and
-//!    that re-encodes to the same bytes. This found upstream pgwire encoding CopyFail with
-//!    CopyDone's tag on its first seed; the fork carries the fix.
+//!    that re-encodes to the same bytes. This found pgwire encoding CopyFail with CopyDone's tag
+//!    on its first seed (fixed upstream, sunng87/pgwire#442).
 //!
-//! 4. NetGet's own code on the same bytes. The frontend-size screen in front of pgwire
+//! 4. NetGet's own code on the same bytes. The frontend screen in front of pgwire
 //!    (`server::postgresql::guard::FrontendScreen`) forwards only bytes it was given, in order,
 //!    whatever the chunking — the input is fed to it whole and again a byte at a time, and the
-//!    two must forward the same prefix and agree on a refusal. Every SQL text pgwire decodes
-//!    (Query, Parse) goes through the placeholder scanner and the statement classifier the
-//!    handler runs on it.
+//!    two must forward the same prefix and agree on a refusal — and every typed message it
+//!    forwards is one pgwire decodes: upstream `process_socket` ends a session silently on a
+//!    decode error, so a message the screen passes and pgwire refuses is a peer left with no
+//!    answer. Every SQL text pgwire decodes (Query, Parse) goes through the placeholder scanner
+//!    and the statement classifier the handler runs on it.
 //!
 //! The wire format is flat — a type byte, an `Int32` length, a body — so the protocol has no
 //! depth bomb; the SQL inside it does. PostgreSQL's block comments nest, and the placeholder
@@ -42,8 +44,8 @@ use netget::server::postgresql::{highest_placeholder, parameter_types};
 use pgwire::messages::{DecodeContext, PgWireFrontendMessage, SslNegotiationMetaMessage};
 
 /// The screen must forward a prefix of what it was given, and the same prefix however the bytes
-/// were chunked.
-fn screen(data: &[u8]) {
+/// were chunked. Returns what it forwarded.
+fn screen(data: &[u8]) -> Vec<u8> {
     let mut whole = FrontendScreen::new(MAX_FRONTEND_MESSAGE_BYTES);
     let (forwarded, refused) = whole.admit(data);
     assert!(
@@ -66,6 +68,25 @@ fn screen(data: &[u8]) {
         "chunking changed what was forwarded"
     );
     assert_eq!(refused, refused_bytewise, "chunking changed the refusal");
+    forwarded
+}
+
+/// Every typed message the screen forwarded decodes: pgwire never sees one it would refuse.
+fn forwarded_decodes(forwarded: &[u8]) {
+    let mut buf = BytesMut::from(forwarded);
+    let (mut awaiting_ssl, mut awaiting_startup) = (true, true);
+    for _ in 0..forwarded.len() + 4 {
+        let state = ctx(awaiting_ssl, awaiting_startup);
+        match PgWireFrontendMessage::decode(&mut buf, &state) {
+            Ok(Some(PgWireFrontendMessage::SslNegotiation(_))) => awaiting_ssl = false,
+            Ok(Some(PgWireFrontendMessage::Startup(_))) => awaiting_startup = false,
+            Ok(Some(PgWireFrontendMessage::CancelRequest(_))) | Ok(None) => break,
+            Ok(Some(_)) => {}
+            // Before the StartupMessage the screen only bounds packets; pgwire answers those.
+            Err(_) if awaiting_startup => break,
+            Err(e) => panic!("the screen forwarded a message pgwire refuses: {e}"),
+        }
+    }
 }
 
 /// What the handler runs on a statement's text, before anything else sees it.
@@ -98,17 +119,17 @@ fn fixed_point(msg: &PgWireFrontendMessage, ctx: &DecodeContext) {
     );
 }
 
-/// `DecodeContext` is neither `Clone` nor constructible outside pgwire, so the state is kept
+/// `DecodeContext` is neither `Clone` nor a struct literal outside pgwire, so the state is kept
 /// as the two flags pgwire's server codec sets and a context is built per decode.
 fn ctx(awaiting_ssl: bool, awaiting_startup: bool) -> DecodeContext {
     let mut c = DecodeContext::default();
-    c.awaiting_ssl = awaiting_ssl;
-    c.awaiting_startup = awaiting_startup;
+    c.awaiting_frontend_ssl = awaiting_ssl;
+    c.awaiting_frontend_startup = awaiting_startup;
     c
 }
 
 fuzz_target!(|data: &[u8]| {
-    screen(data);
+    forwarded_decodes(&screen(data));
     let mut buf = BytesMut::from(data);
     let (mut awaiting_ssl, mut awaiting_startup) = (true, true);
 

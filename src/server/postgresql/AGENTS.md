@@ -1,6 +1,6 @@
 # PostgreSQL Protocol Implementation
 
-PostgreSQL wire protocol server built on `pgwire` v0.35. pgwire owns startup,
+PostgreSQL wire protocol server built on upstream `pgwire` 0.42 (0.42.3 or later). pgwire owns startup,
 framing and the Parse/Bind/Describe/Execute state machine; the LLM owns the
 answer to every statement. **There is no database** — no tables, no planner, no
 storage in Rust. The only per-connection state is a Describe→Execute correlation
@@ -203,20 +203,21 @@ Two consequences worth keeping:
   without the guard a stopped server's sessions kept their sockets.
   `tests/stop_server_stops_connections_test.rs::stopping_a_postgresql_server_disconnects_a_handshaken_peer`
   asserts it from the peer's side.
-- **Malformed frontend messages are refused, not panicked on** (IMPROVEMENTS #77).
-  Upstream pgwire 0.35's `decode_packet` bounds a declared message length only
-  from above and hands the body decoder the whole remaining buffer, so a Query
+- **Malformed frontend messages are refused `FATAL 08P01`, before pgwire reads
+  them** (IMPROVEMENTS #77). pgwire 0.42.3 is the first release that isolates each
+  message's body and refuses a short one instead of panicking; before it, a Query
   with no NUL (six bytes after the handshake), a Close or Describe with no body,
-  or a Bind whose parameter runs past the message panicked the connection task.
-  NetGet builds its fork `netget-pgwire` (github.com/netget-net/pgwire, from
-  crates.io; NETGET.md there lists the changes), which isolates each message,
-  reads with checked getters, and answers `FATAL 08P01`; `process_socket` then
-  returns `InvalidData` and the connection is logged
-  `decision=refused_malformed_message`. `tests/vendored_pgwire_patch_test.rs`
-  checks Cargo builds the fork and drives every shape against the decoder;
-  `tests/server/postgresql/decoder_panic_test.rs` asserts the ErrorResponse from
-  the wire. The panic containment above stays for any other panic in pgwire or
-  the handler.
+  or a lying Bind panicked the connection task. What 0.42.3 still does with them
+  is not PostgreSQL's answer: a message its decoder refuses ends the session with
+  nothing written (`process_socket` returns `Ok`), and a Query with no NUL is
+  served as an empty query. So the frontend screen (below) runs pgwire's decoder
+  on every message first and refuses the ones it would not serve as sent; the
+  close is logged `decision=refused_malformed_message`.
+  `tests/pgwire_frontend_screen_test.rs` drives every shape found through the
+  screen and checks Cargo builds pgwire 0.42.3 or later;
+  `tests/server/postgresql/decoder_panic_test.rs` sends the six original frames to
+  a running server and asserts exactly one ErrorResponse each. The panic
+  containment above stays for any other panic in pgwire or the handler.
 - `record_stats` keeps `update_connection_stats` current. pgwire never exposes the
   raw byte streams, so the counters are application-visible payload sizes at the
   handler boundary, not exact wire bytes — before this, nothing on this protocol
@@ -262,8 +263,9 @@ Nine files, all declared in `tests/server/postgresql/mod.rs` (`tests/server/post
   `i32`, that a prepared statement's RowDescription matches its DataRows, and
   that the extended path fails closed rather than returning no rows.
 - `decoder_panic_test.rs` — a malformed Query is answered `FATAL 08P01`, the
-  connection row closes and the server keeps serving; a query moves the
-  connection counters off zero.
+  connection row closes and the server keeps serving; each of the six frames that
+  panicked pgwire 0.35 gets exactly one `FATAL 08P01` and a close; a query moves
+  the connection counters off zero.
 - `llm_failure_test.rs` — the SQLSTATE a driver sees when the backend fails.
 
 `--test` names a *target*, so it is `--test server -- postgresql`; the older
@@ -313,7 +315,7 @@ more. It now declares both halves; the constants and the reasoning live beside t
 |---|---|---|
 | `FIRST_BYTE_READ_TIMEOUT` (`first_byte_timeout_secs`) | 60s | Enforced with `TcpStream::peek` before the socket reaches pgwire, so the StartupMessage is untouched. Matches pgwire's own internal `STARTUP_TIMEOUT`, which bounds the startup *exchange*; this bounds the silence before it begins, which pgwire does not. |
 | `IDLE_SESSION_TIMEOUT` (`idle_timeout_secs`) | 600s | Real PostgreSQL's `idle_session_timeout` ships disabled, so there is no upstream default to copy. Ten minutes, for the same reason as MySQL's: no tables, no temp tables, no open transaction, so a reaped pooled connection costs `tokio-postgres`, SQLAlchemy or pgbouncer one transparent reconnect. |
-| `MAX_FRONTEND_MESSAGE_BYTES` | 1 MiB | See "The frontend-size guard" below. `MAX_STARTUP_PACKET_BYTES` (10 000, pgwire's and PostgreSQL's own) is checked by the same screen. |
+| `MAX_FRONTEND_MESSAGE_BYTES` | 1 MiB | See "The frontend screen" below. `MAX_STARTUP_PACKET_BYTES` (10 000, pgwire's and PostgreSQL's own) is checked by the same screen. |
 | `MAX_CONNECTIONS` | 256 | Refusal: **a v3 `ErrorResponse` with SQLSTATE `53300 too_many_connections`** — the state real PostgreSQL uses for "sorry, too many clients already", and the one this file already maps backend overload onto, so a driver treats it as transient. Sending it before the StartupMessage is a small liberty that libpq-family clients handle: they write startup, then read, and an ErrorResponse is a legal thing to find there. |
 
 **NetGet's own PostgreSQL client *speaks inside `connect()`*, so it is never the silent peer
@@ -330,28 +332,61 @@ TFTP evicted live transfers because "idle" was measured wrongly.
 `tests/accept_bounded_test.rs` drives the shared helper, including the guarantee that a busy
 connection is never reported as idle.
 
-## The frontend-size guard
+## The frontend screen
 
-pgwire bounds a Query, Parse or Bind at 0x3ffffffe bytes — PostgreSQL's 1 GB —
-and buffers a message whole before decoding it. PostgreSQL can afford that
-because a peer authenticates before it may send a Query; this server
-authenticates nobody, so a stranger could make it hold a gigabyte per
-connection. Everything a message carries goes to the model, so 1 MiB is the
-bound (`guard::MAX_FRONTEND_MESSAGE_BYTES`), and 256 connections hold 256 MiB at
-most rather than 256 GiB.
+`guard.rs` stands between the peer and pgwire, and it does two things pgwire does
+not.
 
-pgwire has no seam for it — `process_socket` takes a concrete `TcpStream` and
-owns every read — so NetGet keeps the peer's socket and serves pgwire one end of
-a loopback pair (`guard::Backend::pair`, which accepts only the connection it
+**Size.** pgwire bounds a Query, Parse or Bind at 0x3ffffffe bytes —
+PostgreSQL's 1 GB — and buffers a message whole before decoding it. The bound is
+a per-message-type constant in pgwire (`Message::max_message_length`), not a
+setting, so there is nothing to configure. PostgreSQL can afford it because a
+peer authenticates before it may send a Query; this server authenticates nobody,
+so a stranger could make it hold a gigabyte per connection. Everything a message
+carries goes to the model, so 1 MiB is the bound
+(`guard::MAX_FRONTEND_MESSAGE_BYTES`), and 256 connections hold 256 MiB at most
+rather than 256 GiB.
+
+**Format.** Each typed message is decoded with pgwire's own decoder and
+re-encoded (`guard::check_typed`); one that does not decode, or whose re-encoding
+is not the bytes that arrived — an unterminated string, bytes after the last
+field, a NULL written as length -2, an unknown type — is refused. The
+StartupMessage is checked for PostgreSQL's layout, `name NUL value NUL` pairs
+ended by a NUL and nothing after (`guard::check_startup`), because pgwire stops
+reading parameters at the first malformed one and drops the rest. pgwire reads a
+string lossily, so a message whose only difference on re-encoding is invalid
+UTF-8 turned into U+FFFD, where the arrived bytes were invalid UTF-8, is passed on
+as it arrived, as pgwire has always served it. An SSLRequest or GSSENCRequest
+must be exactly 8 bytes: pgwire reads one as 8 bytes whatever it declares, so a
+longer one would have the screen hold as its body a StartupMessage and typed
+messages that pgwire reads and the screen never checked (found by the fuzz
+target, seed `ssl_request_length_lie`).
+
+pgwire has no seam for either — `process_socket` takes a concrete `TcpStream`
+and owns every read — so NetGet keeps the peer's socket and serves pgwire one end
+of a loopback pair (`guard::Backend::pair`, which accepts only the connection it
 opened). `guard::relay` copies between the two, reading the frontend framing as
-it goes, and refuses a message by its **declared** length, before a byte of its
-body is forwarded: it half-closes pgwire's side so pgwire answers everything it
-already has and ends, then writes `FATAL 08P01` and closes, logged
-`decision=refused_oversize_message`. A header is held back until it is whole, so
-pgwire never sees part of a refused message; the screen counts bodies rather
-than buffering them, so its memory per connection is constant and the walk to
-the bound is linear. `fuzz/fuzz_targets/pgwire_frontend.rs` feeds the same bytes
-to the screen whole and a byte at a time and requires the same verdict.
+it goes. A message is refused by its **declared** length before its body is
+read, and otherwise held until it is whole and checked, then forwarded, so
+pgwire never sees part or all of a refused message. On a refusal the relay
+half-closes pgwire's side so pgwire answers everything it already has and ends,
+then writes `FATAL 08P01` and closes, logged `decision=refused_oversize_message`
+or `decision=refused_malformed_message`. The relay holds one message per
+connection, at most the bound; the check is one decode and one encode per
+message, so the walk to the bound is linear.
+`fuzz/fuzz_targets/pgwire_frontend.rs` feeds the same bytes to the screen whole
+and a byte at a time, requires the same verdict, and requires pgwire to decode
+every typed message the screen forwards.
+
+**What it is for, against upstream pgwire.** pgwire 0.42.3 does not panic on a
+malformed message, so the screen is not a panic guard. It is the part of
+PostgreSQL's behaviour pgwire does not have: a size a server chooses,
+`FATAL 08P01` for a message that does not decode (pgwire's `process_socket`
+closes in silence), and an end-of-message check (pgwire's decoders accept a
+message they did not read to the end). If pgwire comes to answer decode errors
+`08P01` itself and to check the end of each message, `check_typed` and
+`check_startup` can go; the size bound stays until pgwire lets a server choose
+it.
 
 ## No peer handle — `[ message this peer ]` / `[ disconnect this peer ]` stay disabled
 
@@ -403,7 +438,7 @@ implemented, and the rating claims none of them.
 |---|---|---|
 | 1 | two independent third-party clients, no skip, no `#[ignore]` | **yes, as of this pass** — simple query: psql (libpq) and tokio-postgres; extended query: psycopg 3 (libpq) and tokio-postgres. Before the pass the extended path rested on tokio-postgres alone, whose binary decoding shares `postgres-types` with pgwire's encoding, and no client bound a parameter |
 | 2 | the pcap oracle is green over its wire traffic | **yes** — psql's sessions, tokio-postgres's prepared statement and psycopg's whole session (Parse/Bind with parameters, binary DataRows, the error) cross `recording_relay` and tshark's `pgsql` dissector reads them |
-| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — `pgwire_frontend`, which now also drives NetGet's frontend screen and placeholder scanner, with 30 000-level nested-comment and parenthesis bombs in the corpus; rebuilt this pass and run (nightly-2025-12-04, `-s none`, the `-undefined,dynamic_lookup` link flag, the fuzz workspace's lockfile seeded from the root `Cargo.lock`) `-max_total_time=300 -timeout=25` from the 18 committed seeds, both bombs among them, on 13 November 2026: 60 716 executions in 301 s, clean, 564 new units (kept out of the tree) |
+| 3 | a fuzz target exists and has run clean, with a depth bomb | **yes** — `pgwire_frontend` (upstream pgwire's frontend decoder), which also drives NetGet's frontend screen and placeholder scanner, with 30 000-level nested-comment and parenthesis bombs in the corpus; rebuilt this pass and run (nightly-2025-12-04, `-s none`, the `-undefined,dynamic_lookup` link flag, the fuzz workspace's lockfile seeded from the root `Cargo.lock`) `-max_total_time=300 -timeout=25` from the 19 committed seeds, both bombs among them, against pgwire 0.42.3 on 18 November 2026: 77 916 executions in 301 s, clean, 349 new units (kept out of the tree). The run before it, without the screen's SSLRequest length check, crashed in seconds on the bypass that check closes (`ssl_request_length_lie`) |
 | 4 | every declared bound has a test | **yes, as of this pass** — `tests/server/postgresql/bounds_test.rs`: `MAX_FRONTEND_MESSAGE_BYTES` (at the bound, timed; one past, after a pipelined query is answered), `MAX_STARTUP_PACKET_BYTES`, `MAX_CONNECTIONS`, `MAX_PENDING_DESCRIBES` (64 stay cached, the 65th evicts), `first_byte_timeout_secs`, `idle_timeout_secs`, each verified by removing it |
 | 5 | both `AGENTS.md` files verified against source in this pass | **yes** — this file and `tests/server/postgresql/AGENTS.md` |
 | 6 | no `#[ignore]`, no skip-when-missing gate | **yes** — `grep -rn '#\[ignore' tests/server/postgresql/` is empty; psql and psycopg fail rather than skip |

@@ -12,7 +12,7 @@ implementations, none of them the `pgwire` crate the server frames with:
 | `psycopg_client_test.rs` | **psycopg / libpq** | the extended protocol from a second client: parameters, binary results of six types, a write, an error, a prepared statement twice; pcap oracle | 8 |
 | `real_client_test.rs` | **psql / libpq** | A real session, asserted on what psql printed | 4 |
 | `bounds_test.rs` | raw socket | every declared bound, both sides | 0 |
-| `decoder_panic_test.rs` | raw socket | A malformed Query gets FATAL 08P01, not a panic (the `netget-pgwire` fork); counters move | 0 |
+| `decoder_panic_test.rs` | raw socket | Each of the six frames that panicked pgwire 0.35 gets exactly one FATAL 08P01 and a close (NetGet's frontend screen; `tests/pgwire_frontend_screen_test.rs` has the full table); counters move | 0 |
 | `llm_failure_test.rs` | tokio-postgres | The SQLSTATE a driver sees when the backend fails | 1 |
 | `one_answer_per_query_test.rs` | tokio-postgres | a second response action is dropped and logged | 2 |
 
@@ -173,16 +173,23 @@ with SQLSTATE, and tokio-postgres's Parse/Describe/Bind/Execute/Sync with a bina
 DataRow; psycopg's Parse/Bind with parameters, binary DataRows of six types and an
 ErrorResponse.
 
-**Condition 3.** `fuzz/fuzz_targets/pgwire_frontend.rs` drives `pgwire`'s frontend decoder —
-NetGet's `netget-pgwire` fork, which the fuzz workspace depends on as the root manifest does —
-through the SSL, startup and query states, and NetGet's own code on the same bytes: the
-frontend-size screen (`guard::FrontendScreen`, fed whole and a byte at a time, which must
-agree) and the placeholder scanner and statement classifier on every SQL text. The protocol is
+**Condition 3.** `fuzz/fuzz_targets/pgwire_frontend.rs` drives upstream `pgwire`'s frontend
+decoder — the version and features the root manifest builds — through the SSL, startup and query
+states, and NetGet's own code on the same bytes: the frontend screen (`guard::FrontendScreen`, fed
+whole and a byte at a time, which must agree, and every typed message it forwards must decode in
+pgwire) and the placeholder scanner and statement classifier on every SQL text. The protocol is
 flat, but PostgreSQL comments nest and the scanner counts them, so the corpus carries 30 000-level
-nested-comment and parenthesis bombs as well as length lies and a 60 000-parameter Bind. Its first seed found an upstream defect:
-`CopyFail::message_type()` was `b'c'`, CopyDone's tag, so pgwire's *encoding* of a CopyFail did
-not decode. The server only decodes CopyFail and was unaffected; the fork carries the fix and
-`tests/vendored_pgwire_patch_test.rs` the round trip. Rebuilt and run (nightly-2025-12-04, `-s none`, the `-undefined,dynamic_lookup` link flag, the fuzz workspace's lockfile seeded from the root `Cargo.lock`) `-max_total_time=300 -timeout=25` from the 18 committed seeds, both bombs among them, on 13 November 2026: 60 716 executions in 301 s, clean, 564 new units (kept out of the tree).
+nested-comment and parenthesis bombs as well as length lies and a 60 000-parameter Bind. Its first
+seed found an upstream defect, since fixed upstream: `CopyFail::message_type()` was `b'c'`,
+CopyDone's tag, so pgwire's *encoding* of a CopyFail did not decode. The screen re-encodes every
+message it checks, so `tests/pgwire_frontend_screen_test.rs` keeps the round trip. Against
+pgwire 0.42.3 its "every forwarded message decodes" check found an SSLRequest declaring more than
+8 bytes carrying a StartupMessage and typed messages past the screen, since pgwire reads an
+SSLRequest as 8 bytes whatever it declares; the screen refuses one now, and the seed is
+`ssl_request_length_lie`. Rebuilt and run (nightly-2025-12-04, `-s none`, the
+`-undefined,dynamic_lookup` link flag, the fuzz workspace's lockfile seeded from the root
+`Cargo.lock`) `-max_total_time=300 -timeout=25` from the 19 committed seeds on 18 November
+2026: 77 916 executions in 301 s, clean, 349 new units (kept out of the tree).
 
 ## Condition 4: `bounds_test.rs`
 
