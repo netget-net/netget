@@ -42,7 +42,8 @@ actions, zero LLM integration and three events the model could not answer, and
 at `--all-features` it flagged exactly `usb-fido2` and produced no false positives across the
 other 115, and delegation is unaffected because `doh`/`dot` return a non-empty set of their own.
 The `registry-audit` CI job runs these audits at `--all-features` for that reason — every other
-job compiles 6 of 116, so a registry-walking test is only as wide as its feature set.
+job builds without the system-library features, so a registry-walking test there never sees
+the protocols behind them: such a test is only as wide as its build.
 
 ## Declared and never emitted
 

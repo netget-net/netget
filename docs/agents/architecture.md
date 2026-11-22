@@ -180,7 +180,7 @@ into a protocol's Rust implementation. The LLM supplies all data via actions, sc
 responses, or server memory. MySQL has no tables; the model answers every query.
 
 The sanctioned exception is the generic SQLite facility (`src/state/sqlite.rs`, feature
-`sqlite`, included in `all-protocols` and therefore in default builds). The LLM can call
+`sqlite`, which is in the default feature set). The LLM can call
 `create_database` / `execute_sql` / `list_databases` / `delete_database` at runtime, scoped to
 a server, a client, or globally. The point of the rule is that storage is a *generic runtime
 capability the model opts into*, never something a protocol hardcodes. Two caveats worth

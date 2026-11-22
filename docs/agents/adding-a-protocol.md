@@ -17,13 +17,13 @@ declare and why.
 2. `src/server/<protocol>/actions.rs` — implement `ProtocolActions`: `metadata()` (state +
    privilege + `well_known_port` + `history` + `batching`, see "History and batching" in `architecture.md`),
    `get_startup_parameters()`, async/sync actions, `get_event_types()`, `execute_action()`
-3. `src/server/<protocol>/CLAUDE.md` — implementation notes, library choice, limitations
+3. `src/server/<protocol>/AGENTS.md` — implementation notes, library choice, limitations
 4. `src/server/mod.rs` — `pub mod`, with a platform gate only if it cannot build everywhere
 5. `src/protocol/server_registry.rs` — `register()` (same gate) and its `ALL_KNOWN_PROTOCOLS` row
 6. `Cargo.toml` — its dependencies as plain (non-optional) dependencies, in the target table
    for the platforms that build it. **No feature.** See "Protocols are not Cargo features" in `architecture.md`.
 7. `tests/server/<protocol>/e2e_test.rs` — mocked E2E (see `testing.md`)
-8. `tests/server/<protocol>/CLAUDE.md` — strategy, mock expectations, LLM call budget
+8. `tests/server/<protocol>/AGENTS.md` — strategy, mock expectations, LLM call budget
 9. **`tests/server/mod.rs` — add `pub mod <protocol>;`** (see the mod.rs footgun in `testing.md`)
 
 ## Clients

@@ -33,7 +33,7 @@ for the same reason: nobody had said what it required, so "Stable" meant whoever
 good about the code. The bar below is what replaced that, and these eleven are the ones
 measured against it rather than against a feeling. Each carries its own justification in
 `metadata()` — read `e2e_testing` and `notes` there, and the "Maturity: the six conditions"
-section at the foot of each `src/server/<p>/CLAUDE.md`, before quoting any of the ratings:
+section at the foot of each `src/server/<p>/AGENTS.md`, before quoting any of the ratings:
 each says in as many words that the rating covers the evidence for the surface the server
 *implements*, which in every case is a subset of the specification.
 
@@ -586,6 +586,10 @@ majority (107 of the 158 `src/server/*/actions.rs` the script below walks, re-de
 reports one `NONE`: `src/server/http_common/actions.rs`, which is a shared response helper
 with no `impl Protocol` and no registry entry, so it declares no state correctly.
 
+**Status, 21 November 2026.** The script below now walks 288 server `actions.rs` files: 211
+Experimental, 64 Beta, 11 Stable, and two `NONE` — `src/server/http_common/actions.rs` and
+`src/server/dav_common/actions.rs`, both shared helpers with no registry entry.
+
 ## Incomplete
 
 **Incomplete** — hidden from the LLM entirely (`is_available_to_llm()` returns false). **None
@@ -594,7 +598,7 @@ The `nfc` *client* sat at `Incomplete` until September 2026, so the model could 
 all, while this section said none remained. The lesson is that `Incomplete` is invisible by
 construction: nothing surfaces it, no test fails, and the protocol simply never appears in a
 tool list. It is now a ratchet — `tests/no_protocol_is_hidden_from_the_model_test.rs` reads
-the source tree, so it holds at the six-protocol CI gate as well as at `--all-features`, and
+the source tree, so it holds on a build without the system libraries as well as at `--all-features`, and
 its allow-list is empty. Note it matches `.state(...)` specifically: every occurrence in
 `src/docs.rs` and the TUI is a `match` arm rendering the variant, and a bare substring search
 reports all of them.

@@ -243,6 +243,13 @@ features, so it runs none of their evidence. `registry-audit` compiles everythin
 only on a manual extended dispatch, so a green PR is not evidence that any of it passed. That
 is the general gap, not a property of lapin.
 
+**Status, 21 November 2026.** Protocols are no longer Cargo features, so the particulars
+above have moved on: `lapin` is a plain, non-optional entry in
+`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` and compiles in every native
+build. The general gap is the same in substance — the blocking `test` job *compiles* every
+protocol and *runs* only the `CI_PROTOCOL_TESTS` suites, so a green PR is still not evidence
+that any other protocol's real-client test passed.
+
 ## 10. `nfsserve`: a pre-auth DoS, and the guard on our side of the socket
 
 **`nfsserve` 0.10.2 has a pre-auth remote DoS, and the fix is a guard on our side of the

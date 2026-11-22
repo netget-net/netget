@@ -21,8 +21,9 @@ test when its expectation is genuinely wrong.
 **All tests live in `tests/`. Never add `#[cfg(test)] mod tests` to `src/`.** Tests reach
 internals via `use netget::` public APIs; make items public or refactor if needed.
 
-**This policy is currently satisfied — there are zero violations.** Verified September 2026:
-no `#[cfg(test)] mod tests` and no `mod tests` of any kind exists under `src/`.
+**This policy was satisfied in September 2026 — zero violations**: no `#[cfg(test)] mod tests`
+and no `mod tests` of any kind existed under `src/`. **It has one violation as of 21 November
+2026**, named below the commands.
 
 **The derivation command this section used to give is wrong, and produced five false
 positives** — it matched *doc comments quoting the policy*, in `bluetooth_ble/mod.rs`,
@@ -37,7 +38,10 @@ grep -rnE '^[[:space:]]*#\[cfg\(test\)\]' src/ --include='*.rs'
 grep -rnE '^[[:space:]]*(pub )?mod tests' src/ --include='*.rs'
 ```
 
-Both return nothing today. If either starts returning something, that is a real violation.
+Both returned nothing in September 2026, and a hit from either is a real violation. Re-run
+21 November 2026, the first returns one: `src/server/accept_bounded.rs` carries
+`#[cfg(test)] mod response_drain_tests`, which still has to move into `tests/`. The second does
+not see it, because it is anchored on the literal module name `tests`.
 
 ## The mod.rs footgun (CRITICAL)
 
@@ -185,18 +189,18 @@ do; a snapshot is only as good as the review of the screen it records.
 
 ## Whole-tree source ratchets
 
-Four tests scan **all** 136 server and 91 client protocols by reading source, so they hold at
-any feature set — including the 6-protocol CI gate, where a registry-walking test only ever
-sees what that build compiled. Each carries a baseline that **may only shrink**, and three of
-the four have reached zero (re-derived 16 September 2026 — the figures here read 6 clients, 20
-params and 18 examples for months after the work that removed them, so **read the baseline out
-of the test file**, not out of this table):
+These tests scan **every** server and client protocol by reading source, so they hold on any
+build — a registry-walking test only ever sees what that build compiled, which leaves out the
+system-library and platform-gated protocols. Each carries a baseline that **may only shrink**,
+and every numeric one has reached zero (re-derived 21 November 2026 — the figures here read 6
+clients, 20 params and 18 examples for months after the work that removed them, so **read the
+baseline out of the test file**, not out of this table):
 
 | Test | Catches | Baseline |
 |---|---|---|
 | `client_event_wiring_test` | a client that asks the model and cannot act on the answer — including `if let Err(..)` with no success arm, `Ok(ClientLlmResult { .., .. })` dropping actions, `Ok(_) =>`, and count-and-log | **empty** (all three lists) |
 | `event_emit_sites_test` | an `EventType` declared and never raised (the USB/BLE/imap defect) | **empty**, both trees |
-| `startup_param_drift_test` | a startup parameter declared and read by nothing — an advertised knob that does nothing when turned | **4 params** |
+| `startup_param_drift_test` | a startup parameter declared and read by nothing — an advertised knob that does nothing when turned | **empty** |
 | `executable_examples_test` | an action whose own `example` its own `execute_action` refuses — the shape the model copies | **empty** |
 | `event_action_declarations_test` | actions the model can never see, and advertised names the executor cannot run | — |
 | `well_known_port_declaration_test` | a server with no declared well-known port and no stated reason; a `PrivilegedPort(n)` or transport disagreeing with it | `NO_WELL_KNOWN_PORT` — finished answers, not a queue |
@@ -235,7 +239,8 @@ conservative rule**: the strict version of the startup-param scan flagged 57 cli
 of which many were read through `get_protocol_field` or a helper — a false positive trains
 people to edit the baseline instead of the code.
 
-The gate is deliberately not `--all-features`: that needs system libraries the runner does not
-install (`protoc`, `libpcap`, `dbus`, `libusb`, `pcsclite`). So **the CI feature set covers 6 of
-116 protocols** — a green PR says nothing about the other 110. Run the relevant tests yourself
-before claiming done.
+The blocking gate is deliberately not `--all-features`: that needs system libraries the runner
+does not install (`libpcap`, `dbus`, `libusb`, `pcsclite`). It compiles every protocol that
+needs none of them and **runs the suites of six** (`CI_PROTOCOL_TESTS` in
+`.github/workflows/ci.yml`) — a green PR says nothing about any other protocol's suite. Run the
+relevant tests yourself before claiming done.
