@@ -286,8 +286,9 @@ than stepping down one notch.
 ## Deriving facts
 
 ```bash
-# Protocols and their own maturity claims (at runtime: netget --mcp, then list_protocols)
-grep -c "register(Arc::new" src/protocol/server_registry.rs src/protocol/client_registry.rs
+# Every registered protocol (client_registry.rs likewise), and one protocol's own maturity claim.
+# Authoritative at runtime: netget --mcp, then list_protocols / get_protocol_docs.
+grep -n "register(Arc::new" src/protocol/server_registry.rs
 grep -rn "DevelopmentState::" src/server/<p>/actions.rs
 # Evidence behind every rating; --check exits 1 on a defective Beta
 python3 scripts/beta_evidence_table.py [--all | --check | --experimental-with-evidence]
