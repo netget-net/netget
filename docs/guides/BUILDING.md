@@ -46,6 +46,7 @@ cd netget
 ./target/release/netget
 ```
 
-Read [contributor instructions](../../AGENTS.md) for build isolation, current features,
-testing, and protocol implementation conventions. See the [documentation index](../README.md)
-for platform notes and component guides.
+Read [contributor instructions](../../AGENTS.md) for the rules and commands, and the
+[agent notes](../agents/README.md) for build isolation and disk
+([building-and-disk](../agents/building-and-disk.md)), testing and protocol implementation
+conventions. See the [documentation index](../README.md) for platform notes and component guides.
