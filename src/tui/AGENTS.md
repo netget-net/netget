@@ -214,6 +214,96 @@ the request detail lines and whole-sequence removal. Still
 unfiltered: a protocol's own `tracing::info!("{}", peer_text)`, which the headless fmt layer
 writes to stderr with ANSI on — route peer text through `Log` rather than `tracing` directly.
 
+## The operator's view, control by control
+
+**The interactive TUI is the full-screen ratatui dashboard (`src/tui/`)**, the only
+interactive UI — the rolling-terminal TUI that used to sit behind `--legacy-tui` was removed
+in September 2026, and the scheduled-task tick it owned lives in `src/cli/tasks.rs`.
+In brief:
+
+- **Left column is every instance, always visible.** A scrollable canvas of **cards**: each
+  server and client with its summary line (status glyph, id, protocol, address, live peers,
+  a 30-second sparkline, a **driver badge**), the requests parked for you, a facts line, its
+  **buttons as an aligned grid**, and its sections — `peers` (each peer with its own buttons
+  and its requests beneath), `rules` (each rule with delete / ↑ / ↓ beside it), `config`;
+  `send` and `connections` for a client. Under every peer and every client connection sits
+  the **conversation on it** — one row per message in, one per message out, oldest first,
+  each opening the full entry — with `[ send message ]` beneath, and `[ + <proto> client ]`
+  at the foot of a server's peers. Nothing is selected or drilled into: ↑/↓ walk every row,
+  ←/→ walk a row's buttons (and fold / unfold a section), Enter acts, letters act on the card
+  under the cursor. One `+ new server or client` row at the foot opens a picker listing
+  both kinds together. A server entry names the port it will start on — its **well-known
+  port** ("starts on well-known port 6379"), or why not ("well-known port 53 needs root;
+  starting on an OS-assigned port", "… is in use; …") — resolved by `protocol::default_port`
+  when the picker opens and again on Enter, and the create form's `port` field is pre-filled
+  with that number and says where it came from.
+- **Right column is one stream.** Machine events derived from snapshot diffs (instances
+  starting, peers connecting, every request with its answer, questions parked for you —
+  Enter opens the thing a line names), the `[LEVEL]` log lines, and the conversation (what
+  you typed, the model's reasoning and replies, command output) are one timeline, with the
+  input box at the bottom. Tab hops between the two columns and does nothing else.
+- **Manual first, model optional.** The **driver** (`driver.rs`) is one word for an
+  instance's wildcard rule: `MANUAL` (every unmatched event parks for you), `LLM` (no
+  wildcard; the instruction answers), `SILENT` (`*` → static, no actions), `RULES` (a custom
+  wildcard). `m`, or `[ driver: … ]` in the bar, cycles MANUAL → LLM → SILENT as a hot
+  handler-table swap that keeps every specific rule. The rules tab edits the table inline
+  (add / edit open the routing modal; delete / move apply headlessly through the same
+  `RoutingModel`). Instances created here default to `*` → manual.
+
+Everything applies through `cli::management`'s `ServerForm`/`ClientForm`/`update_*`, so
+validation and the hot-apply vs restart split are identical to the LLM and MCP paths. The forms
+submit only *changed* fields — re-sending an unchanged port or host reads as a change and forces
+a needless restart. A startup parameter's declared `default` (`ParameterDefinition::default`) is
+pre-filled as its value, marked `(default)`, and counts as unchanged on create as well as edit,
+so an untouched default is never submitted and the new instance's `startup_params` records only
+what the operator chose.
+
+**Every action is an `InstanceAction`** (`cards.rs`), executed by `actions::run` whether it
+came from a letter (`x` stop, `e` edit, `r` rules, `m` driver, `c` connect a client to a
+server, `n` send through a client, `w` wireshark, `d` docs, `a` new instance), from a button,
+from a click, or from Enter on a row (a peer unfolds its requests; a request opens its full
+request/response; a rule edits it; a config row opens the form; a verb opens the composer on
+its parameters; a parked request opens the answer modal). Esc returns to the chat box. No
+modal requires a chord: every button is a Tab stop, and the text editor's Tab leaves the text
+for `[ Accept ]` / `[ Cancel ]`.
+
+A server's live peer carries `[ message ]` and `[ disconnect ]` on its own row where the
+protocol registered a peer handle (`server/peer_support.rs`; `tcp` and `telnet` have);
+`[ disconnect ]` runs its `close_connection` through the same handle (half-close + marked
+closed at once, because a peer that never reads — our own client parked on a manual question
+— would otherwise stay "live" after you hung up). Without a handle the buttons stay, disabled,
+and say why. A peer whose request is parked is flagged on its own row, in the list badge
+(`⚠1`), in the overview's first line, in the feed and in the status bar — which is clickable
+and opens the oldest one. The card's waiting row and the answer modal both show the time left
+before the request fails closed on its own (the rule's `timeout_secs`).
+
+**Answering a parked request is the composer, not a JSON box.** The intercept modal offers three
+things: `[ Compose answer… ]` opens `ComposerModel::for_intercept` — pick one of the protocol's
+actions from a list, fill its parameters as fields (a `bool` parameter is a checkbox: Enter or
+Space flips it), Send resolves the intercept and closes both modals; `[ Answer with nothing ]`
+resolves with zero actions (acknowledge, say nothing — a real answer, distinct from a timeout);
+`[ Fail closed ]` refuses. Raw JSON is still one button away inside the composer, and for an
+intercept it accepts an array so a multi-action answer is possible; it is never the starting
+point.
+
+Stopping is immediate: only the bulk actions (stop all, quit) still confirm.
+
+`tests/dashboard_frame_test.rs` renders whole frames into ratatui's `TestBackend` — the way to
+see what a layout change does to a populated screen without a pty, and the place to assert on
+it. The pty snapshots in `tests/terminal_snapshot/` prove the real binary paints.
+
+**`[ wireshark ]`** (`w`, a button on every card, and a `[ View in Wireshark ]` button on the
+create/edit form so the capture can be running *before* the instance starts) opens a modal with a paste-ready
+`wireshark -k …` / `tshark -l …` line, plus the pieces separately: interface, BPF capture filter,
+display filter and a `-d` decode-as clause — and, when NetGet is writing the instance's own pcap
+(below), a `wireshark -r <file>` line first. `src/tui/wireshark.rs` is a
+pure table of NetGet protocol → transport + Wireshark dissector name, and every name in it was
+checked against `tshark -d` / `-Y`. Three traps it encodes: `isis` is an Ethernet-only BPF keyword
+and is rejected on loopback; `drda` (db2) is heuristic-only and not in the `tcp.port` decode-as
+table; `ipp` is reached through `http`. A protocol missing from the table is treated as plain TCP
+(correct for everything in the registry that is not UDP, raw or off-network), and the off-network
+families (USB, BLE, NFC, pty/pipe/stdio) get an explanation of where to look instead of a command.
+
 ## Tests
 
 - `tests/dashboard_frame_test.rs` — whole frames rendered into ratatui's `TestBackend`:

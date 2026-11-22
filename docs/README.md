@@ -22,7 +22,8 @@ Install first ([below](guides/INSTALL.md)); each of these then runs with no mode
 - [Build from source](guides/BUILDING.md) — system libraries and portable builds.
 - [macOS dependency notes](guides/SYSTEM_DEPENDENCIES_macOS.md).
 - [Android / Termux](guides/TERMUX_INSTALL.md).
-- [Contributor instructions](../AGENTS.md) — architecture, protocol conventions, builds and checks.
+- [Contributor instructions](../AGENTS.md) — the rules, the commands and a map; the reasoning,
+  measurements and incident history behind them are the [agent notes](agents/README.md).
 - [Tests](../tests/README.md), [fuzzing](../fuzz/README.md), and [browser build](../web/README.md).
 - [MCP implementation](../src/mcp_stdio/AGENTS.md), [dashboard](../src/tui/AGENTS.md), and [scripting](../src/scripting/AGENTS.md).
 - [External protocol example](../examples/external_protocol/README.md).

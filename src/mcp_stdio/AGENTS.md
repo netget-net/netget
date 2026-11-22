@@ -831,6 +831,45 @@ cancellation/EOF, and real TCP replies driven by Events and Channels.
 
 All logging goes to stderr (stdout is JSON-RPC). Status messages from protocol servers are drained to stderr with `[NETGET]` prefix.
 
+## Gaps that were fixed, and what is still not checked at creation
+
+**All six gaps this section used to list have been fixed, and it kept claiming them.**
+Re-verified against `src/mcp_stdio/` (September 2026) and `src/events/handler.rs` (October 2026):
+
+| Former gap | Status |
+|---|---|
+| No client tools | **Fixed** — `start_client`, `list_clients`, `client_status`, `stop_client` all exist in `tools.rs` |
+| `start_server` cannot pass `interface` / `mac_address` / `scheduled_tasks` / `initial_memory` / `feedback_instructions` | **Fixed** — all are tool params and are passed through |
+| `send_first` accepted as `_send_first` and ignored on every path | **Fixed** — `params.send_first` is passed and folded into `startup_params`, though only where the protocol declares it |
+| `get_protocol_docs` returns TUI docs describing an uninvokable API | **Fixed** — `docs.rs` is MCP-shaped and mentions neither `open_server` nor `base_stack` |
+| `stop_server`/`stop_all` skip `cleanup_server_tasks()` | **Fixed** — teardown moved inside `AppState::remove_server`, pinned by `tests/mcp_stop_cleanup_test.rs` |
+| Unknown action names in `event_handlers` accepted at startup | **Fixed** — `EventHandler::parse_event_handlers` runs `validate_static_action_names` on every static handler before anything is registered (`start_server`, `start_client`, `update_*`, `open_server`/`open_client`), and the error names the valid actions; pinned by `tests/static_handler_action_catalog_test.rs` |
+
+**Everything the dashboard's buttons do is a tool too** — `send_to_client`, `send_to_peer`,
+`disconnect_peer`, `list_intercepts`, `answer_intercept` (`[]` = answer with nothing) and
+`fail_intercept`. Each validates the action `type` against the target's own set before handing
+it to a running loop; `server_status` lists connection ids and which accept `send_to_peer`.
+There is no `dismiss_intercept` tool on purpose: dismissing *is* failing closed. Details in
+`src/mcp_stdio/AGENTS.md` ("Driving by hand").
+
+**What is not checked at creation, and what is by design:**
+
+- **A script handler's actions are only known when it runs**, so they cannot be validated up
+  front, and a static handler on an event id no compiled protocol declares has no catalogue to
+  check against and is accepted. Neither is silent at runtime: `executor.rs` logs an unknown
+  action at ERROR and records a failure.
+- **No state persists across process restarts**, which is by design.
+
+**The lesson is about this file, not about MCP.** A "current gaps" list is the part of any
+document that rots first, and rotting toward *understating* the code is the dangerous
+direction: it tells the next person a capability is missing, so they build around an absence
+that is not there. Re-derive such a list before trusting it, and prefer stating how to check
+over stating what is true.
+
+A long-running `netget --mcp` process keeps executing its original binary image after a
+rebuild. When behavior contradicts the source, confirm which build is actually running before
+concluding there's a bug.
+
 ## Limitations
 
 - **STDIO is single-session**: one client at a time (HTTP supports many)
