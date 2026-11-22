@@ -118,3 +118,52 @@ by content hash. Neither page ships a Content-Security-Policy yet: one would hav
 `'wasm-unsafe-eval'`, the inline theme script, esm.run, Hugging Face model downloads and
 blob workers, and a policy that is wrong breaks the demo silently, so it belongs with a
 headless-Chromium run of `web/test/page_composer.py`, not in a text edit.
+
+## The site does not deploy itself, and `docs/` is public too
+
+**The site does not deploy itself. Nothing watches this repository; a merge to master
+publishes nothing.** `site/` is the landing page and `./site/deploy.sh` is the only way it
+reaches netget.net — run it whenever you change anything under `site/`, or the live page
+stays at whatever the last person uploaded.
+
+```bash
+./site/deploy.sh        # needs AWS_PROFILE=smotana, which the script exports itself
+```
+
+It publishes `site/` to the `netget.net` S3 bucket and invalidates the CloudFront distribution,
+so a deploy is live within seconds. `css/`, `js/` and `demo/` go up under a content-hashed
+`v/<hash>/` prefix (immutable) and `index.html` (`no-cache`) is rewritten to point there, so a
+browser never pairs one deploy's JavaScript with another's `.wasm` — which fixed-URL week-long
+caching did, breaking the demo with `wasm.<export> is not a function`. `DRY_RUN=1` changes
+nothing; `STAGE_DIR=<dir>` keeps the staged copy to test. Details under "Deploying" above.
+
+Two things about it are load-bearing:
+
+- **`site/` is public and so is `docs/`, which the root `AGENTS.md` denied for months.** Only `site/` is
+  uploaded by `deploy.sh`, and a new file there is a new public URL — that half is right. But
+  the claim that `docs/` "used to be served … and is not any more" was **false when written and
+  is false now**: `gh api repos/netget-net/netget/pages` reports Pages still enabled,
+  `build_type: legacy`, source `master:/docs`, status `built`. Every push to master rebuilds it
+  and all 32 files under `docs/` are live at `https://smotanacom.github.io/netget/<name>.html`.
+  Verified by fetching three of them: 200 each.
+
+  Nothing leaked — the repository is **public** (`visibility: public`), so those files are
+  already readable on github.com, and a scan of `docs/` for credentials found only placeholders
+  (`<r2-secret-key>`, `YOUR_ORG_NAME`, `ACCOUNT_ID`, `minioadmin`, and AWS's own documentation
+  example key). The hazard is this sentence rather than the content: anyone reading it would
+  reasonably put something in `docs/` believing it goes nowhere.
+
+  **Why nobody noticed: the site root is a 404.** Only the individual pages resolve, so from the
+  front door it looks dead. There is no workflow file to remove — `build_type: legacy` means
+  GitHub's own builder, driven by a repository setting.
+- **`deploy.sh` excludes itself and every `*.md`.** `site/AGENTS.md` names the bucket,
+  distribution and OAC IDs; the first run of the script published it before the exclusion
+  existed. `--delete` skips excluded paths too, so removing such a file from the bucket is a
+  manual `aws s3 rm`.
+
+Hosting is S3 + CloudFront (private bucket, OAC, ACM cert, DNS at Porkbun) — the same shape as
+the maintainer's other static sites. It replaced GitHub Pages for the landing page — the
+stated reason was that Pages "cannot serve a private repository", which does not hold today
+since the repository is public, so treat that as history rather than as a constraint. Pages
+itself was never turned off; see the `docs/` note above. "Hosting" and "DNS" above have the resource IDs,
+the DNS records and how to change them.

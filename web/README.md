@@ -443,3 +443,86 @@ plus a peeked datagram and drops new arrivals at capacity. Its receive/peek/
 readiness state is serialized under one lock, and all receive variants honor a
 connected peer. The shim's native integration tests need neither a browser nor
 real sockets.
+
+## What the browser build asks of the rest of the tree
+
+netget.net runs NetGet itself in the page: the dashboard, every server protocol that compiles
+for `wasm32-unknown-unknown` (68 features, TCP and UDP; the list is
+`crates/netget-web/Cargo.toml`, the exclusions and the probe that derives them are under
+"Which protocols are in the browser build" above) and the LLM plumbing, built by
+`./web/build.sh`, page in `site/`. What matters for anyone touching the tree:
+
+- **Protocol code is compiled unchanged.** On wasm32 the names `tokio` and `crossterm` mean
+  the shim crates `crates/netget-tokio-wasm` and `crates/netget-crossterm-wasm`, bound at the
+  crate root with `extern crate … as` in `src/lib.rs`. The tokio shim re-exports real tokio's
+  `sync`/`io`/macros and supplies `spawn` (the JS event loop), `time` (`setTimeout`), and
+  `net` — a **virtual loopback**: `TcpListener::bind` claims a port in a table,
+  `TcpStream::connect` hands the listener an in-memory duplex, `UdpSocket::bind` claims a
+  port and `send_to` delivers a datagram to whoever is bound there. A protocol that only
+  uses `tokio::net`, `tokio::io`, `tokio::sync` and `tokio::time` needs no `#[cfg]` at all;
+  `process`/`fs`/`signal` compile and fail at runtime. What keeps a protocol out is a
+  *dependency* that wants real sockets (`mio`), a C library, or a device.
+- **Cargo forbids one dependency name resolving to different packages per target**, which is
+  why the shims are *not* `tokio = { package = … }` renames in a target table. Same-source
+  dependencies with different features per target are fine; that is how `syntect`,
+  `ratatui` and `tui-textarea` differ between the two `[target.'cfg(…)'.dependencies]`
+  tables.
+- **`std::time::Instant::now()` and `SystemTime::now()` panic on wasm32, and the compiler
+  cannot tell you.** Use `crate::utils::clock::{Instant, SystemTime, UNIX_EPOCH}` (std on
+  native; on wasm the tokio shim's `performance.now()` clock, offset ten years so
+  `Instant::now() - window` in the rate limiter cannot underflow on a fresh page). All of
+  `src/` is converted; keep new code on the alias. Because the shim's `Instant` is its own
+  type, a stray `std::time::Instant` in anything the browser build compiles is a compile
+  error there, which is the check. `std::process::id()` is the same kind of trap:
+  `clock::process_id()`. A **dependency** reading the clock is the case no alias covers, and
+  hyper was one: its HTTP/1 dispatcher refreshes a `Date` cache from `SystemTime::now()` on
+  every poll, so every hyper server killed the page on its first request. The root
+  `Cargo.toml` patches hyper with `vendor/hyper` — the exact locked crates.io source, changed
+  only in `src/common/date.rs` under `cfg(all(target_arch = "wasm32", target_os = "unknown"))`
+  to read `js_sys::Date::now()`; native builds compile upstream's code.
+  `vendor/hyper/README.md` has the diff and the upgrade steps, and
+  `tests/vendored_hyper_patch_test.rs` fails if Cargo.lock's hyper stops being that copy.
+- **The LLM backend is `LlmBackend::Bridge`** (`src/llm/bridge.rs`): every request the client
+  would have sent over HTTP is a `BridgeRequest` on a channel — full messages, tools, model,
+  and `actions`: every action the prompt offers, with parameters, schema and example — and
+  the page answers it with Chrome's built-in model (the Prompt API, constrained to the
+  offered actions), a WebLLM model, or the visitor ("You are the model" in the select, or a
+  model that needs a download click; a request waits for a model that is loading, at most
+  two minutes, rather than going to the visitor), who answers through `site/js/composer.js`: pick an offered action, edit fields prefilled from
+  its example, send (Raw JSON stays one tab away). The demo itself is Telnet only and starts
+  by itself (server, then client); `web/README.md` has the page's behaviour. Network events carry no native `tools`, so `actions`
+  is the only structured list they have; the Ollama/OpenAI wire never carries it. The
+  Ollama/OpenAI backends (`reqwest`, `ollama-rs`) are `#[cfg(not(target_arch = "wasm32"))]`;
+  the circuit breaker deliberately ignores the bridge, since a slow person is not an outage.
+  `tests/llm_bridge_test.rs` pins the mapping natively (including a real TCP server's event
+  offering its actions with examples); `web/test/smoke.mjs` drives the real bundle under Node
+  (dashboard paints, `start_server`, connect, model round-trip, bytes back, the
+  composer's default reply accepted, the HTTP-family clients — `http`, `jsonrpc`,
+  `elasticsearch`, `openapi`, `bitcoin`, `npm`, `pypi`, `maven`, `torrent-tracker`, `ollama`,
+  `http2` (h2c through hyper's HTTP/2 client), and `oauth2` and `openidconnect` (their crates'
+  HTTP hook handed the transport), each through `[ + <proto> client ]` or `ClientForm`
+  and a `[ send ]` against NetGet's own server of its protocol (bitcoin's JSON-RPC against
+  the `http` server), the response checked on the client — and Node's `node:http`/`node:http2` clients against the `http`, `openapi`,
+  `jsonrpc`, `rss` and `http2` servers over `NetGet.connect()`, `Date` headers checked) and
+  CI's `wasm-web` job runs both. In the browser those clients issue their requests through
+  `src/client/http_fetch` (`FetchClient`: reqwest natively, unchanged; hyper's HTTP/1.1 client —
+  HTTP/2 with prior knowledge for `http2` — over the virtual loopback on wasm32, `https://`
+  refused with the reason); no client is gated out of the browser build
+  for being reqwest-based any more, and `web/README.md` lists each with its smoke evidence.
+  `web/test/page_composer.py` drives the page in headless Chromium and is run by hand.
+- **The dashboard loop is generic** (`event_loop::run_loop` over any ratatui `Backend` and any
+  `Stream` of crossterm events); the web crate's backend emits ANSI into xterm.js and its
+  input translates DOM `KeyboardEvent`s. The scheduled-task ticker (`src/cli/tasks.rs`) is
+  compiled for wasm too; it uses `utils::clock`.
+- **Building on macOS needs `llvm-ar`** (`rustup component add llvm-tools`): the system `ar`
+  writes a broken archive for ring's wasm objects and the failure shows up only at link time
+  as `undefined symbol: ring_core_…`. `web/build.sh` handles it; if ring was already built
+  wrong, `cargo clean -p ring --target wasm32-unknown-unknown --release` once. ring is there
+  because `http` pulls rustls/rcgen, which now build with `default-features = false` and the
+  `ring` provider — the `aws-lc-rs` default is a C library that does not build for wasm.
+- **Publishing is the site's own `./site/deploy.sh`, and the bundle is not built by it.**
+  `./web/build.sh` writes `site/demo/pkg/` (gitignored, ~17 MB of wasm, 5.7 MB gzipped);
+  `deploy.sh` refuses to run without it and uploads the `.wasm` with
+  `Content-Type: application/wasm` so browsers can compile it while it streams. Build, run
+  the smoke test, then deploy. CI's `wasm-web` job builds and smoke-tests the bundle on PRs or
+  authorized manual runs but publishes nothing, like everything else in this repository.
